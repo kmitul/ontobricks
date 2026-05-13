@@ -70,8 +70,8 @@ DEFAULT_DAB_TARGET="dev-lakebase"
 # 3. DAB variable overrides
 DEFAULT_WAREHOUSE_ID="d2096aa075ad44a3"
 DEFAULT_REGISTRY_CATALOG="benoit_cayla"
-DEFAULT_REGISTRY_SCHEMA="ontobricks_030"
-DEFAULT_REGISTRY_VOLUME="registry"
+DEFAULT_REGISTRY_SCHEMA="ontobricks"
+DEFAULT_REGISTRY_VOLUME="ontobricksregistry"
 DEFAULT_LAKEBASE_PROJECT="ontobricks-app"
 DEFAULT_LAKEBASE_BRANCH="production"
 DEFAULT_LAKEBASE_DATABASE_RESOURCE_SEGMENT="db-8u4l-0na72ub5sp"
@@ -101,9 +101,10 @@ DEFAULT_APP_REGISTRY_VOLUME="OntoBricksRegistry"
 DEFAULT_APP_MLFLOW_TRACKING_URI="databricks"
 
 # ── 1. Apps ─────────────────────────────────────────────────────────
-# The FastAPI UI app and its MCP companion server. APP_NAME must
-# match `databricks.yml > resources.apps.ontobricks_dev_app.name`
-# (the deploy script verifies this on every run).
+# The FastAPI UI app and its MCP companion server.
+# APP_NAME / MCP_APP_NAME are passed to databricks.yml as
+# --var=app_name / --var=mcp_app_name, so this file is the single
+# source of truth for both the DAB resource name and the CLI lookups.
 export APP_NAME="${APP_NAME:-$DEFAULT_APP_NAME}"
 export MCP_APP_NAME="${MCP_APP_NAME:-$DEFAULT_MCP_APP_NAME}"
 

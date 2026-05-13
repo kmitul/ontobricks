@@ -31,7 +31,6 @@ from back.core.logging import get_logger
 from shared.config.constants import (
     DEFAULT_BASE_URI,
     DEFAULT_GRAPH_NAME,
-    DEFAULT_LADYBUG_PATH,
 )
 
 logger = get_logger(__name__)
@@ -806,7 +805,7 @@ class DomainSession:
 
         This is the **domain-level** path (shared across all versions).
         Use :attr:`uc_version_path` for version-scoped operations
-        (documents, LadybugDB archives).
+        (documents, graph store archives).
 
         Resolves catalog/schema/volume via :class:`RegistryCfg` so the injected
         app-bound volume path (``Settings.registry_volume_path``) matches
@@ -829,7 +828,7 @@ class DomainSession:
         """Full /Volumes/.../domains/<folder>/V<version> path, or '' if registry not set.
 
         This is the **version-scoped** path for per-version artifacts
-        (``V{N}.json``, ``documents/``, LadybugDB archives).
+        (``V{N}.json``, ``documents/``, graph store archives).
         """
         base = self.uc_domain_path
         if not base:
@@ -1092,11 +1091,6 @@ class DomainSession:
             "schema": schema,
             "table_name": table_name,
         }
-
-    @property
-    def ladybug(self) -> Dict[str, str]:
-        """LadybugDB settings (computed constant, no longer stored in session)."""
-        return {"db_path": DEFAULT_LADYBUG_PATH}
 
     @property
     def databricks(self) -> Dict[str, str]:

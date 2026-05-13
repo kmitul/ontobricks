@@ -79,6 +79,8 @@ done
 # variable to `databricks.yml > variables:`, also surface it in
 # `deploy.config.sh` and add a `--var=` line here.
 _dab_var_overrides=(
+    "--var=app_name=${APP_NAME}"
+    "--var=mcp_app_name=${MCP_APP_NAME}"
     "--var=warehouse_id=${WAREHOUSE_ID}"
     "--var=registry_catalog=${REGISTRY_CATALOG}"
     "--var=registry_schema=${REGISTRY_SCHEMA}"

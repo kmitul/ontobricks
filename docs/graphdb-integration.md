@@ -6,15 +6,14 @@ registration in the factory and global config, and a ready-to-use starter kit.
 
 ---
 
-OntoBricks ships with two **runtime** graph engines selectable under **Settings → Graph DB**
-(admin):
+OntoBricks currently ships with one **runtime** graph engine, selectable under **Settings → Graph DB**
+(admin). The list is intentionally kept short — the abstraction is what matters here.
 
 | Engine | Storage | Notes |
 |--------|---------|--------|
-| ``ladybug`` (default) | Embedded LadybugDB (``.lbug``) | Optional sync to the domain Unity Catalog Volume. |
-| ``lakebase`` | Flat triple tables on **Lakebase Postgres** | Uses the App-bound Postgres instance (``PGHOST`` / ``PGDATABASE``…). Configure JSON ``graph_engine_config`` with optional ``database`` (Postgres DB name on that instance) and ``schema`` (default ``ontobricks_graph``). SQL-only (no Cypher); reasoning uses the existing SQL translators. |
+| ``lakebase`` (default and only built-in) | Flat triple tables on **Lakebase Postgres** | Uses the App-bound Postgres instance (``PGHOST`` / ``PGDATABASE``…). Configure JSON ``graph_engine_config`` with optional ``database`` (Postgres DB name on that instance) and ``schema`` (default ``ontobricks_graph``), and ``mode`` (``app_managed`` or ``managed_synced``). SQL-only (no Cypher); reasoning uses the existing SQL translators. |
 
-``GraphDBFactory.create(engine=...)`` is the single decision point: only the selected engine is instantiated.
+``GraphDBFactory.create(engine=...)`` is the single decision point: only the selected engine is instantiated. The capability flags on ``GraphDBBackend`` (``supports_cypher``, ``is_cypher_backend``, ``query_dialect``) are kept as architectural seams so a future Cypher / Gremlin engine can be added without rewiring reasoning.
 
 ---
 
@@ -95,7 +94,8 @@ if your engine does not speak SQL:
 **Constructor parameter** — every engine receives `engine_config: Dict[str, Any]`
 (default `{}`) from the factory.  This is a free-form JSON dict set by the
 admin in **Settings > Graph DB > Engine Configuration**.  Each engine defines
-its own keys.  For LadybugDB, an empty `{}` is sufficient.
+its own keys.  For Lakebase, recognised keys include ``database``, ``schema``,
+and ``mode`` (``app_managed`` or ``managed_synced``).
 
 These abstract methods **must** be implemented:
 
@@ -130,7 +130,8 @@ src/back/core/graphdb/
 ├── __init__.py
 ├── GraphDBBackend.py
 ├── GraphDBFactory.py
-├── ladybugdb/          ← existing
+├── lakebase/           ← existing (Postgres flat-store reference impl)
+├── _starter_kit/       ← copy-paste template (ExampleStore.py)
 └── kuzu/               ← NEW
     ├── __init__.py
     └── KuzuStore.py
@@ -148,22 +149,21 @@ See [Section 5](#5-starter-kit) for details.
 Key decisions:
 
 1. **Query dialect**: If your engine speaks Cypher, set `supports_cypher = True`
-   and `query_dialect = "cypher"`.  Override the named query methods with native
-   Cypher implementations (see `LadybugFlatStore` for reference).  If SQL, the
-   inherited defaults work.
+   and `query_dialect = "cypher"`. Override the named query methods with native
+   Cypher implementations and ship a matching `SWRLCypherTranslator` (the SQL
+   translator stays the default for SQL engines).
 
-2. **Graph model**: If your engine uses typed node/relationship tables (like
-   LadybugDB's graph model), set `supports_graph_model = True` and implement
-   `get_graph_schema()`.  If it uses a flat triple table, leave it `False`.
+2. **Graph model**: If your engine uses typed node/relationship tables, set
+   `supports_graph_model = True` and implement `get_graph_schema()`. If it uses
+   a flat triple table (like the shipped `LakebaseFlatStore`), leave it `False`.
 
 3. **Reasoning translator**: Return the appropriate `SWRL*Translator` from
-   `get_query_translator()`.  For SQL engines, the default `SWRLSQLTranslator`
-   works.  For Cypher, return `SWRLFlatCypherTranslator` or
-   `SWRLCypherTranslator`.
+   `get_query_translator()`. For SQL engines, the default `SWRLSQLTranslator`
+   works.
 
 4. **Sync**: If your engine stores data as local files, implement
    `sync_to_remote()` and `sync_from_remote()` to archive/restore via
-   `VolumeFileService`.
+   `VolumeFileService`. Lakebase does not need this — the data lives in Postgres.
 
 ### Step 3 — Create the package `__init__.py`
 
@@ -182,12 +182,12 @@ Edit `src/back/core/graphdb/GraphDBFactory.py`:
 ```python
 def create(self, domain, settings=None, engine=None, engine_config=None):
     if engine is None:
-        engine = "ladybug"
+        engine = "lakebase"
     if engine_config is None:
         engine_config = {}
 
-    if engine == "ladybug":
-        return self._create_ladybug(domain, settings, engine_config=engine_config)
+    if engine == "lakebase":
+        return self._create_lakebase(domain, settings, engine_config=engine_config)
 
     if engine == "kuzu":                      # ← NEW
         return self._create_kuzu(domain, settings, engine_config=engine_config)
@@ -199,11 +199,10 @@ def _create_kuzu(self, domain, settings=None, *, engine_config=None):   # ← NE
     """Instantiate a KuzuDB store."""
     try:
         from back.core.graphdb.kuzu.KuzuStore import KuzuStore
-        db_path = DEFAULT_LADYBUG_PATH  # or a kuzu-specific path
         base_name = (domain.info or {}).get("name", DEFAULT_GRAPH_NAME)
         version = getattr(domain, 'current_version', '1') or '1'
         db_name = f"{base_name}_V{version}"
-        return KuzuStore(db_path=db_path, db_name=db_name, engine_config=engine_config)
+        return KuzuStore(db_name=db_name, engine_config=engine_config)
     except ImportError as e:
         logger.warning("KuzuDB requires kuzu: %s", e)
         return None
@@ -213,10 +212,10 @@ def _create_kuzu(self, domain, settings=None, *, engine_config=None):   # ← NE
 ```
 
 > **`engine_config`** is a free-form JSON dict set by the admin in
-> **Settings > Graph DB > Engine Configuration**.  The factory reads it
+> **Settings > Graph DB > Engine Configuration**. The factory reads it
 > from `GlobalConfigService` and passes it to every engine constructor.
 > Each engine defines its own keys (e.g. `host`, `port`, `credentials_path`).
-> For LadybugDB an empty `{}` is sufficient.
+> For Lakebase, recognised keys are `database`, `schema`, and `mode`.
 
 Then update the availability check at the bottom of the file:
 
@@ -233,7 +232,7 @@ except ImportError:
 Edit `src/back/objects/session/GlobalConfigService.py`:
 
 ```python
-ALLOWED_GRAPH_ENGINES = ("ladybug", "kuzu")  # ← add here
+ALLOWED_GRAPH_ENGINES = ("lakebase", "kuzu")  # ← add here
 ```
 
 That single change makes the engine selectable from the Settings UI and
@@ -246,7 +245,7 @@ Edit `src/front/templates/settings.html` — add an `<option>` to the
 
 ```html
 <select class="form-select form-select-sm" id="graphEngineSelect" style="max-width:20rem;">
-    <option value="ladybug">Internal (LadybugDB)</option>
+    <option value="lakebase">Lakebase Postgres</option>
     <option value="kuzu">KuzuDB</option>        <!-- NEW -->
 </select>
 ```
@@ -265,7 +264,7 @@ Update `docs/development.md` with the new dependency (name, link, license).
 ### Step 8 — Add tests
 
 Create `tests/test_kuzu_store.py` following the patterns in
-`tests/test_ladybug.py`.  At minimum, test:
+`tests/test_lakebase_flat_store.py`. At minimum, test:
 
 - Store instantiation (with and without the library installed)
 - `create_table` / `drop_table`
@@ -282,28 +281,24 @@ Create `tests/test_kuzu_store.py` following the patterns in
 
 ---
 
-## 4. Reference: LadybugDB Engine Structure
+## 4. Reference: Lakebase Engine Structure
 
-The built-in LadybugDB engine is the reference implementation:
+The built-in Lakebase Postgres engine is the reference implementation:
 
 ```
-graphdb/ladybugdb/
-├── __init__.py           ← re-exports, backward-compat wrappers
-├── LadybugBase.py        ← GraphDBBackend subclass (connection, sync, capabilities)
-├── LadybugFlatStore.py   ← Flat triple table (single node table, Cypher queries)
-├── LadybugGraphStore.py  ← Typed graph model (node/rel tables from ontology)
-├── GraphSchema.py        ← Schema model (node table defs, rel table defs)
-├── GraphSchemaBuilder.py ← Builds GraphSchema from ontology classes/properties
-├── GraphSyncService.py   ← Upload/download .lbug files to/from UC Volume
-└── models.py             ← NodeTableDef, RelTableDef dataclasses
+graphdb/lakebase/
+├── __init__.py           ← re-exports
+├── LakebaseBase.py       ← GraphDBBackend subclass (connection pool, capabilities)
+├── LakebaseFlatStore.py  ← Flat triple table (subject, predicate, object) on Postgres
+├── SyncedTableManager.py ← Lakeflow synced-table orchestration (managed_synced mode)
+└── models.py             ← Internal dataclasses
 ```
 
-**Two store variants** share a common base:
-
-- `LadybugFlatStore` — all triples in a single `Triple(id, subject, predicate, object)` node table.
-- `LadybugGraphStore` — OWL classes become node tables, object properties become relationship tables.  Falls back to flat when schema is unavailable.
-
-A simpler engine can use a single store class.
+The flat store keeps the contract simple: a single Postgres table per
+`(domain, version)` with a primary key on `(subject, predicate, object)` and
+two write modes (`app_managed` via `COPY FROM STDIN`, `managed_synced` via
+Lakeflow). A simpler engine can use a single store class and skip
+`SyncedTableManager`.
 
 ---
 
@@ -375,9 +370,9 @@ Use this checklist to track your progress:
 
 ## 7. FAQ
 
-**Q: Can I support both flat and graph models like LadybugDB?**
-Yes.  Create a base class extending `GraphDBBackend`, then two subclasses
-(flat and graph).  Register the graph variant in the factory and have it
+**Q: Can I support both flat and graph models?**
+Yes. Create a base class extending `GraphDBBackend`, then two subclasses
+(flat and graph). Register the graph variant in the factory and have it
 fall back to flat when the ontology is not available.
 
 **Q: What if my engine is remote (e.g. Neo4j Aura)?**
@@ -407,11 +402,8 @@ FastAPI process.
 
 `SQLWarehouse.iter_rows(query, batch_size=5000)` opens a cursor on the
 warehouse and yields dict rows in `fetchmany` batches. The build pipeline
-uses it for both the full rebuild (`SELECT subject, predicate, object FROM
-view`) and each side of the incremental `EXCEPT` diff. The diff size that
-gates the fall-back-to-full heuristic comes from
-`IncrementalBuildService.count_diff` — two server-side `SELECT COUNT(*)`
-queries, one int per side, no row materialization.
+uses it for the full rebuild (`SELECT subject, predicate, object FROM view`)
+without ever materializing the full triple set inside the FastAPI process.
 
 ### Write side (app → Lakebase Postgres)
 
@@ -424,8 +416,7 @@ queries, one int per side, no row materialization.
   (`conn.transaction()` is needed because the pool runs `autocommit=True`).
 - `bulk_delete_iter(table, triple_iter, batch_size=5000)` — symmetrical
   `COPY` into `_ob_del_stage` followed by `DELETE FROM {phy} USING
-  _ob_del_stage d WHERE …`. Replaces the per-row `DELETE` loop on the
-  incremental remove path.
+  _ob_del_stage d WHERE …`.
 
 `insert_triples` / `delete_triples` keep their public signatures and
 delegate to the bulk iterator paths once the payload crosses
@@ -437,9 +428,9 @@ delegate to the bulk iterator paths once the payload crosses
 `_stream_triples_out_of_store` call `bulk_insert_iter` /
 `bulk_delete_iter` when the store exposes them (Lakebase) and fall back to
 materializing the iterator into a list for backends without a streaming
-write path (e.g. LadybugDB). `_start_background_archive` is a no-op when
-the engine is Lakebase: Postgres is the system of record, there is no
-`.lbug` archive to push to the Volume.
+write path. `_start_background_archive` is a no-op for SQL-backed engines:
+the Delta view + Postgres tables are the system of record, no archive is
+pushed to the Volume.
 
 ---
 

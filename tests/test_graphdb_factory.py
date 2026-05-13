@@ -70,25 +70,18 @@ class TestGraphDBFactory:
         s2 = _get_factory_singleton()
         assert s1 is s2
 
-    def test_default_engine_is_ladybug(self):
+    def test_default_engine_is_lakebase(self):
         factory = GraphDBFactory()
         domain = MagicMock()
         domain.info = {"name": "Test"}
-        with patch.object(factory, "_create_ladybug", return_value=MagicMock()) as mock_create:
+        with patch.object(factory, "_create_lakebase", return_value=MagicMock()) as mock_create:
             factory.create(domain)
-            mock_create.assert_called_once()
-
-    def test_explicit_ladybug_engine(self):
-        factory = GraphDBFactory()
-        domain = MagicMock()
-        with patch.object(factory, "_create_ladybug", return_value=MagicMock()) as mock_create:
-            factory.create(domain, engine="ladybug")
             mock_create.assert_called_once()
 
     def test_engine_config_passed_through(self):
         factory = GraphDBFactory()
-        with patch.object(factory, "_create_ladybug", return_value=None) as mock:
-            factory.create(MagicMock(), engine="ladybug", engine_config={"key": "val"})
+        with patch.object(factory, "_create_lakebase", return_value=None) as mock:
+            factory.create(MagicMock(), engine="lakebase", engine_config={"key": "val"})
             _, kwargs = mock.call_args
             assert kwargs["engine_config"] == {"key": "val"}
 
@@ -108,7 +101,7 @@ class TestGraphDBFactory:
     def test_get_graphdb_convenience(self):
         with patch.object(GraphDBFactory, "create", return_value=MagicMock()) as mock_create:
             domain = MagicMock()
-            GraphDBFactory.get_graphdb(domain, engine="ladybug")
+            GraphDBFactory.get_graphdb(domain, engine="lakebase")
             mock_create.assert_called_once()
 
     def test_lakebase_explicit_schema_overrides_registry_volume_schema(self):
@@ -121,7 +114,6 @@ class TestGraphDBFactory:
             registry_catalog="",
             registry_schema="",
             registry_volume="",
-            registry_backend="volume",
             lakebase_schema="ontobricks_registry",
             lakebase_database="",
             registry_volume_path="",
@@ -135,8 +127,7 @@ class TestGraphDBFactory:
                 return_value=MagicMock(
                     catalog="team_cat",
                     schema="registry_uc_schema",
-                    volume="vol",
-                    backend="volume",
+                    volume="vol"
                 ),
             ),
             patch(
@@ -162,7 +153,6 @@ class TestGraphDBFactory:
             registry_catalog="",
             registry_schema="",
             registry_volume="",
-            registry_backend="volume",
             lakebase_schema="ontobricks_registry",
             lakebase_database="",
             registry_volume_path="",
@@ -176,8 +166,7 @@ class TestGraphDBFactory:
                 return_value=MagicMock(
                     catalog="team_cat",
                     schema="registry_uc_schema",
-                    volume="vol",
-                    backend="volume",
+                    volume="vol"
                 ),
             ),
             patch(
@@ -208,7 +197,6 @@ class TestGraphDBFactory:
             registry_catalog="",
             registry_schema="",
             registry_volume="",
-            registry_backend="volume",
             lakebase_schema="ontobricks_registry",
             lakebase_database="",
             registry_volume_path="",
@@ -223,7 +211,6 @@ class TestGraphDBFactory:
                     catalog="benoit_cayla",
                     schema="ontobricks",
                     volume="registry",
-                    backend="volume",
                     is_configured=True,
                 ),
             ),
@@ -252,7 +239,6 @@ class TestGraphDBFactory:
             registry_catalog="",
             registry_schema="",
             registry_volume="",
-            registry_backend="volume",
             lakebase_schema="ontobricks_registry",
             lakebase_database="",
             registry_volume_path="",
@@ -267,7 +253,6 @@ class TestGraphDBFactory:
                     catalog="",
                     schema="",  # no registry schema → fallback
                     volume="",
-                    backend="volume",
                     is_configured=False,
                 ),
             ),
@@ -296,7 +281,6 @@ class TestGraphDBFactory:
             registry_catalog="",
             registry_schema="",
             registry_volume="",
-            registry_backend="volume",
             lakebase_schema="ontobricks_registry",
             lakebase_database="",
             registry_volume_path="",

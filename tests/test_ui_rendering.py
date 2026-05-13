@@ -232,10 +232,6 @@ class TestSettingsPage:
         html = _html(client, "/settings")
         assert _find(_tags(html), id_="btnSaveAllSettings") is not None
 
-    def test_graph_db_local_files_wrap_present(self, client):
-        html = _html(client, "/settings")
-        assert _find(_tags(html), id_="ladybugLocalFilesWrap") is not None
-
     def test_graph_db_lakebase_health_block_present(self, client):
         html = _html(client, "/settings")
         assert _find(_tags(html), id_="lakebaseGraphHealthDl") is not None

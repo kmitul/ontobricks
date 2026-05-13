@@ -229,10 +229,6 @@ async def start_triplestore_sync(
                 "name": "graph",
                 "description": "Updating the knowledge graph",
             },
-            {
-                "name": "archive",
-                "description": "Backing up the graph to the registry",
-            },
         ],
     )
 
@@ -1033,34 +1029,6 @@ async def dt_existence(
     return await dt.get_or_fetch_dt_existence(settings)
 
 
-@router.post(
-    "/sync/reload-from-registry",
-    dependencies=[Depends(require(ROLE_BUILDER, scope="domain"))],
-)
-async def reload_graph_from_registry(
-    request: Request,
-    session_mgr: SessionManager = Depends(get_session_manager),
-    settings: Settings = Depends(get_settings),
-):
-    """Download the LadybugDB archive from the registry volume and extract it locally."""
-    from back.objects.domain import Domain
-
-    domain = get_domain(session_mgr)
-    uc = make_volume_file_service(domain, settings)
-    if not uc.is_configured():
-        raise ValidationError("Databricks credentials are not configured")
-    warning = Domain(domain).sync_ladybug_from_volume(uc)
-    if warning:
-        logger.warning("reload-from-registry failed: %s", warning)
-        raise InfrastructureError(
-            "Failed to reload graph from registry", detail=warning
-        )
-
-    logger.info("reload-from-registry succeeded for domain '%s'", domain.domain_folder)
-    return {"success": True, "message": "Graph reloaded from registry"}
-
-
-
 # ===========================================
 # Triple Store Insights
 # ===========================================
@@ -1571,7 +1539,7 @@ async def materialize_inferred(
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
-    """Materialise previously inferred triples to Delta and/or LadybugDB."""
+    """Materialise previously inferred triples to Delta and/or the active graph store."""
     from back.core.task_manager import get_task_manager
     from back.core.reasoning import InferredTriple, ReasoningResult, ReasoningService
 
@@ -2049,7 +2017,7 @@ async def dtwin_graphql_execute(
     """Execute a GraphQL query against the CURRENT session's domain.
 
     Session-aware counterpart of ``POST /graphql/{domain}`` used by the
-    Graph Chat agent.  Requires a configured graph backend (LadybugDB)
+    Graph Chat agent.  Requires a configured graph backend
     to resolve the query.
     """
     from back.core.graphql import build_schema_for_domain, DEFAULT_DEPTH, MAX_DEPTH
@@ -2084,7 +2052,7 @@ async def dtwin_graphql_execute(
     store = get_triplestore(domain, settings, backend="graph")
     if not store:
         raise InfrastructureError(
-            "Graph backend (LadybugDB) not configured or unreachable."
+            "Graph backend not configured or unreachable."
         )
 
     context = {

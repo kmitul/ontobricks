@@ -34,13 +34,13 @@ class TestGlobalConfigGraphEngine:
     def test_empty_defaults_contain_graph_engine(self):
         empty = GlobalConfigService._empty()
         assert "graph_engine" in empty
-        assert empty["graph_engine"] == "ladybug"
+        assert empty["graph_engine"] == "lakebase"
 
     def test_get_graph_engine_default(self):
         svc = GlobalConfigService()
         with patch.object(svc, "load", return_value=GlobalConfigService._empty()):
             engine = svc.get_graph_engine("h", "t", REGISTRY_CFG)
-        assert engine == "ladybug"
+        assert engine == "lakebase"
 
     def test_get_graph_engine_falls_back_on_unknown(self):
         svc = GlobalConfigService()
@@ -48,16 +48,7 @@ class TestGlobalConfigGraphEngine:
         data["graph_engine"] = "unknown_engine"
         with patch.object(svc, "load", return_value=data):
             engine = svc.get_graph_engine("h", "t", REGISTRY_CFG)
-        assert engine == "ladybug"
-
-    def test_set_graph_engine_valid(self):
-        svc = GlobalConfigService()
-        with patch.object(svc, "_save", return_value=(True, "ok")) as mock_save:
-            ok, msg = svc.set_graph_engine("h", "t", REGISTRY_CFG, "ladybug")
-        assert ok
-        mock_save.assert_called_once_with(
-            "h", "t", REGISTRY_CFG, {"graph_engine": "ladybug"}
-        )
+        assert engine == "lakebase"
 
     def test_set_graph_engine_lakebase_valid(self):
         svc = GlobalConfigService()
@@ -90,10 +81,10 @@ class TestGlobalConfigGraphEngine:
     def test_set_graph_engine_normalises_case(self):
         svc = GlobalConfigService()
         with patch.object(svc, "_save", return_value=(True, "ok")) as mock_save:
-            ok, _ = svc.set_graph_engine("h", "t", REGISTRY_CFG, "  LADYBUG  ")
+            ok, _ = svc.set_graph_engine("h", "t", REGISTRY_CFG, "  LAKEBASE  ")
         assert ok
         mock_save.assert_called_once_with(
-            "h", "t", REGISTRY_CFG, {"graph_engine": "ladybug"}
+            "h", "t", REGISTRY_CFG, {"graph_engine": "lakebase"}
         )
 
 
@@ -116,7 +107,7 @@ class TestGlobalConfigStaleWhileRevalidate:
     def _good_cfg(self) -> dict:
         return {
             "warehouse_id": "wh-prod",
-            "graph_engine": "ladybug",
+            "graph_engine": "lakebase",
             "default_base_uri": "https://example.com",
         }
 
@@ -288,13 +279,12 @@ class TestSettingsServiceGraphEngine:
             ),
             patch.object(_svc_module, "global_config_service") as gcs,
         ):
-            gcs.get_graph_engine.return_value = "ladybug"
-            gcs.ALLOWED_GRAPH_ENGINES = ("ladybug", "lakebase")
+            gcs.get_graph_engine.return_value = "lakebase"
+            gcs.ALLOWED_GRAPH_ENGINES = ("lakebase",)
             result = SettingsService.get_graph_engine_result(session_mgr, settings)
 
         assert result["success"]
-        assert result["graph_engine"] == "ladybug"
-        assert "ladybug" in result["allowed_engines"]
+        assert result["graph_engine"] == "lakebase"
         assert "lakebase" in result["allowed_engines"]
 
     def test_set_graph_engine_result_success(self):
@@ -311,13 +301,13 @@ class TestSettingsServiceGraphEngine:
             patch.object(_svc_module, "global_config_service") as gcs,
         ):
             gcs.set_graph_engine.return_value = (True, "ok")
-            gcs.get_graph_engine.return_value = "ladybug"
+            gcs.get_graph_engine.return_value = "lakebase"
             result = SettingsService.set_graph_engine_result(
-                "ladybug", "", "", session_mgr, settings
+                "lakebase", "", "", session_mgr, settings
             )
 
         assert result["success"]
-        assert result["graph_engine"] == "ladybug"
+        assert result["graph_engine"] == "lakebase"
 
     def test_set_graph_engine_result_validation_error(self):
         session_mgr, settings = _mock_context()
@@ -456,7 +446,6 @@ class TestSettingsServiceRegistryPayloadGraphEngine:
                 return_value=(MagicMock(), "h", "t", REGISTRY_CFG),
             ),
             patch.object(SettingsService, "is_registry_locked", return_value=False),
-            patch.object(SettingsService, "_available_backends", return_value={}),
             patch.object(SettingsService, "_lakebase_runtime_info", return_value={}),
             patch.object(_svc_module, "global_config_service") as gcs,
         ):
@@ -476,7 +465,6 @@ class TestSettingsServiceRegistryPayloadGraphEngine:
             "catalog": "",
             "schema": "",
             "volume": "",
-            "backend": "volume",
             "lakebase_schema": "ontobricks_registry",
             "lakebase_database": "",
         }
@@ -484,12 +472,11 @@ class TestSettingsServiceRegistryPayloadGraphEngine:
         with (
             patch.object(RegistryCfg, "from_session", return_value=rcfg),
             patch.object(SettingsService, "is_registry_locked", return_value=False),
-            patch.object(SettingsService, "_available_backends", return_value={}),
             patch.object(SettingsService, "_lakebase_runtime_info", return_value={}),
         ):
             payload = SettingsService.build_registry_get_payload(session_mgr, settings)
 
-        assert payload["graph_engine"] == "ladybug"
+        assert payload["graph_engine"] == "lakebase"
         assert payload["graph_engine_config"] == {}
 
 

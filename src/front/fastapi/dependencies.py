@@ -156,13 +156,13 @@ def triplestore_page_context(domain_session, settings=None) -> dict:
     """Build the triplestore-related template context shared by dtwin and domain pages.
 
     Returns dict with ``view_table``, ``graph_name``, ``triplestore_cache``, and
-    ``graph_engine`` (``ladybug`` | ``lakebase`` from global config).
+    ``graph_engine`` (currently always ``lakebase``).
     """
     from back.core.helpers import effective_view_table, effective_graph_name
     from back.core.triplestore.TripleStoreFactory import TripleStoreFactory
 
-    _raw = TripleStoreFactory._resolve_graph_engine(domain_session, settings) or "ladybug"
-    graph_engine = _raw if _raw in ("ladybug", "lakebase") else "ladybug"
+    _raw = TripleStoreFactory._resolve_graph_engine(domain_session, settings) or "lakebase"
+    graph_engine = _raw if _raw == "lakebase" else "lakebase"
 
     return {
         "view_table": effective_view_table(domain_session),

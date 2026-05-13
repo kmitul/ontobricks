@@ -2,7 +2,8 @@
 
 Supports:
 - ``"view"``  -- DeltaTripleStore (SQL against a Unity Catalog VIEW via warehouse)
-- ``"graph"`` -- delegates to :class:`GraphDBFactory` (embedded graph database)
+- ``"graph"`` -- delegates to :class:`GraphDBFactory` (currently Lakebase only,
+  pluggable via ``back/core/graphdb/<engine>/``)
 """
 
 from typing import Any, Dict, Optional, Tuple
@@ -20,7 +21,7 @@ logger = get_logger(__name__)
 class TripleStoreFactory:
     """Construct triple-store backend instances from domain session configuration."""
 
-    LADYBUG_AVAILABLE = False
+    GRAPHDB_AVAILABLE = False
 
     def create(
         self,
@@ -48,10 +49,8 @@ class TripleStoreFactory:
         if backend == "graph":
             from back.core.graphdb import get_graphdb
 
-            engine = self._resolve_graph_engine(domain, settings)
+            engine = self._resolve_graph_engine(domain, settings) or "lakebase"
             engine_config = self._resolve_graph_engine_config(domain, settings)
-            if engine is None:
-                engine = "ladybug"
             return get_graphdb(
                 domain, settings, engine=engine, engine_config=engine_config or {}
             )
@@ -87,10 +86,9 @@ class TripleStoreFactory:
         """Best-effort read of graph DB fields mirrored under ``domain.settings['registry']``.
 
         ``SettingsService`` copies the persisted engine choice here after a
-        successful admin save. When :meth:`GlobalConfigService.load` returns the
-        empty template (e.g. registry catalog/schema not yet wired into the
-        dict passed to ``load``), the mirror still reflects **Lakebase** so
-        graph queries must not silently fall back to LadybugDB.
+        successful admin save.  The mirror is checked as a fallback when
+        :meth:`GlobalConfigService.load` returns the empty template (e.g.
+        registry catalog/schema not yet wired into the dict passed to ``load``).
         """
         try:
             blob = getattr(domain, "settings", None)
@@ -115,27 +113,17 @@ class TripleStoreFactory:
     def _resolve_graph_engine(domain: Any, settings: Optional[Any]) -> Optional[str]:
         """Read the configured graph engine from ``GlobalConfigService``.
 
-        If global resolution yields ``ladybug`` (often the empty-template default)
-        but the domain registry mirror says ``lakebase``, prefer **lakebase** so
-        Postgres-backed graphs stay authoritative for search and expansion.
+        Falls back to the domain-level registry mirror when global resolution
+        is unavailable (e.g. registry not yet wired up).
         """
         gcs_val = TripleStoreFactory._read_global_config(
             domain,
             settings,
             lambda gcs, h, t, r: gcs.get_graph_engine(h, t, r),
         )
-        mirrored_eng, _ = TripleStoreFactory._registry_graph_engine_mirror(domain)
-
-        if mirrored_eng == "lakebase" and gcs_val != "lakebase":
-            logger.info(
-                "Graph engine: preferring domain.settings.registry mirror "
-                "'lakebase' (global_config resolved to %r)",
-                gcs_val,
-            )
-            return "lakebase"
-
         if gcs_val is not None:
             return gcs_val
+        mirrored_eng, _ = TripleStoreFactory._registry_graph_engine_mirror(domain)
         return mirrored_eng
 
     @staticmethod
@@ -149,18 +137,12 @@ class TripleStoreFactory:
             lambda gcs, h, t, r: gcs.get_graph_engine_config(h, t, r),
         )
         gcs_cfg: Dict[str, Any] = raw if isinstance(raw, dict) else {}
-        mirrored_eng, mirrored_cfg = TripleStoreFactory._registry_graph_engine_mirror(
-            domain
-        )
+        _, mirrored_cfg = TripleStoreFactory._registry_graph_engine_mirror(domain)
 
-        if mirrored_eng == "lakebase":
-            # Persisted global keys win on overlap; mirror fills gaps when load()
-            # returned the empty template or config read failed.
+        # Persisted global keys win on overlap; mirror fills gaps when load()
+        # returned the empty template or the config read failed.
+        if mirrored_cfg:
             return {**mirrored_cfg, **gcs_cfg}
-
-        if raw is None and mirrored_cfg:
-            return mirrored_cfg
-
         return gcs_cfg
 
     def _create_delta(self, domain: Any, settings: Optional[Any]) -> Optional[Any]:
@@ -224,8 +206,6 @@ def _get_factory_singleton() -> TripleStoreFactory:
 try:
     from back.core.graphdb.GraphDBFactory import GraphDBFactory
 
-    TripleStoreFactory.LADYBUG_AVAILABLE = (
-        GraphDBFactory.LADYBUG_AVAILABLE or GraphDBFactory.LAKEBASE_AVAILABLE
-    )
+    TripleStoreFactory.GRAPHDB_AVAILABLE = bool(GraphDBFactory.LAKEBASE_AVAILABLE)
 except ImportError:
     logger.debug("Graph DB backends not available (optional dependency)")

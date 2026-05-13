@@ -117,21 +117,14 @@ class TestEnsure:
 
         mgr = _make_manager(client)
         # Avoid pulling the live ``databricks-sdk`` module by stubbing the
-        # SDK-shape helpers directly.
+        # payload builder directly.
         captured: dict = {}
 
-        def _fake_spec(**kw):
-            captured["spec"] = kw
+        def _fake_payload(**kw):
+            captured["payload"] = kw
             return SimpleNamespace(**kw)
 
-        def _fake_synced(**kw):
-            captured["synced"] = kw
-            return SimpleNamespace(**kw)
-
-        with (
-            mock_method(mgr, "_build_spec", side_effect=_fake_spec),
-            mock_method(mgr, "_build_synced_table", side_effect=_fake_synced),
-        ):
+        with mock_method(mgr, "_build_synced_table_payload", side_effect=_fake_payload):
             mgr.ensure(
                 "cat.sch.tab",
                 source_table_full_name="cat.sch.view",
@@ -139,17 +132,16 @@ class TestEnsure:
                 sync_mode="snapshot",
             )
         client.database.create_synced_database_table.assert_called_once()
-        assert captured["spec"]["source_table_full_name"] == "cat.sch.view"
-        assert captured["spec"]["primary_key_columns"] == [
+        assert captured["payload"]["name"] == "cat.sch.tab"
+        assert captured["payload"]["source_table_full_name"] == "cat.sch.view"
+        assert captured["payload"]["primary_key_columns"] == [
             "subject",
             "predicate",
             "object",
         ]
-        assert captured["spec"]["sync_mode"] == "snapshot"
-        # ``_build_synced_table`` is invoked with ``name=...`` and ``spec=...``;
-        # the database / logical-db identifiers are wired in via the manager's
-        # constructor and asserted indirectly through the manager attributes.
-        assert captured["synced"]["name"] == "cat.sch.tab"
+        assert captured["payload"]["sync_mode"] == "snapshot"
+        # The database / logical-db identifiers are wired in via the
+        # manager's constructor and asserted through the manager attributes.
         assert mgr._instance == "proj-123"
         assert mgr._logical_db == "appdb"
 
@@ -166,9 +158,8 @@ class TestEnsure:
         )
 
         mgr = _make_manager(client)
-        with (
-            mock_method(mgr, "_build_spec", return_value=SimpleNamespace()),
-            mock_method(mgr, "_build_synced_table", return_value=SimpleNamespace()),
+        with mock_method(
+            mgr, "_build_synced_table_payload", return_value=SimpleNamespace()
         ):
             out = mgr.ensure(
                 "cat.sch.tab",

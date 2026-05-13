@@ -99,8 +99,8 @@ class Domain:
 
     Wraps a :class:`~back.objects.session.DomainSession.DomainSession` so API
     routes and services can perform saves, Unity Catalog registry operations,
-    LadybugDB sync, metadata loading, and template-oriented reads without
-    duplicating session mutation logic.
+    metadata loading, and template-oriented reads without duplicating session
+    mutation logic.
     """
 
     def __init__(
@@ -174,7 +174,6 @@ class Domain:
                 "schema": delta.get("schema", ""),
                 "table_name": delta.get("table_name", ""),
             },
-            "ladybug": dict(self._s.ladybug),
             "stats": self.get_domain_stats(),
         }
 
@@ -316,7 +315,6 @@ class Domain:
             "llm_endpoint": self._s.info.get("llm_endpoint", ""),
             "mcp_enabled": self._s.info.get("mcp_enabled", False),
             "delta": delta,
-            "ladybug": self._s.ladybug,
             "has_ontology": len(self._s.get_classes()) > 0,
             "has_mapping": len(self._s.get_entity_mappings()) > 0,
             "has_design": bool(self._s.design_layout.get("views")),
@@ -389,7 +387,7 @@ class Domain:
         }
 
     # -------------------------------------------------------------------
-    # Registry & LadybugDB sync
+    # Registry sync
     # -------------------------------------------------------------------
 
     def build_registry_service(self) -> RegistryService:
@@ -474,46 +472,6 @@ class Domain:
             entity_uri,
             bridge_domain=target_domain,
         )
-
-    def resolve_ladybug_db_name(self) -> str:
-        """Resolve the effective db_name for LadybugDB (domain name + version)."""
-        name = self._s.info.get("name", DEFAULT_GRAPH_NAME)
-        version = getattr(self._s, "current_version", "1") or "1"
-        return f"{name}_V{version}"
-
-    def sync_ladybug_to_volume(self, uc_service) -> str:
-        """Push the local LadybugDB graph to the registry Volume.
-
-        Returns an empty string on success, or a warning message on failure.
-        """
-        from back.core.graphdb.ladybugdb import sync_to_volume
-
-        uc_path = self._s.uc_version_path
-        if not uc_path:
-            return "Registry path not configured — graph not synced"
-        db_name = self.resolve_ladybug_db_name()
-        ok, msg = sync_to_volume(uc_service, uc_path, db_name)
-        if not ok:
-            logger.warning("LadybugDB sync-to-volume failed: %s", msg)
-            return msg
-        return ""
-
-    def sync_ladybug_from_volume(self, uc_service) -> str:
-        """Pull the LadybugDB graph from the registry Volume to local disk.
-
-        Returns an empty string on success, or a warning message on failure.
-        """
-        from back.core.graphdb.ladybugdb import sync_from_volume
-
-        uc_path = self._s.uc_version_path
-        if not uc_path:
-            return "Registry path not configured — graph not restored"
-        db_name = self.resolve_ladybug_db_name()
-        ok, msg = sync_from_volume(uc_service, uc_path, db_name)
-        if not ok:
-            logger.warning("LadybugDB sync-from-volume failed: %s", msg)
-            return msg
-        return ""
 
     @staticmethod
     def list_domains_result(svc: RegistryService) -> Dict[str, Any]:
@@ -787,14 +745,10 @@ class Domain:
             self._s.save()
             clear_version_status_cache()
             invalidate_registry_cache()
-            # Lazy graph load: skip the eager sync_ladybug_from_volume
-            # download here. The .lbug archive can be tens of MB and the
-            # SQL Warehouse Files API is the slow part of "Load Domain".
-            # LadybugBase._get_connection auto-restores from the registry
-            # on first DT/Build access via the auto_restore callback wired
-            # up by GraphDBFactory, and the explicit "Reload from registry"
-            # admin button (POST /sync/reload-from-registry) remains
-            # available for forced refreshes.
+            # Lazy graph load: skip eager registry sync here. The graph
+            # backend (Lakebase synced tables) is hydrated on demand on
+            # first DT/Build access. Future engines should follow the
+            # same lazy pattern via GraphDBFactory.
             ts_stats = self._s.triplestore.setdefault("stats", {})
             ts_stats.pop("status", None)
             ts_stats.pop("dt_existence", None)

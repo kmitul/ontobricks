@@ -137,26 +137,20 @@ function _applyReadiness(data) {
  * Mirrors _loadDtExistence() rendering without the separate fetch.
  */
 /**
- * Build page: labels and options depend on global Graph DB engine (Ladybug vs Lakebase).
+ * Build page: labels and options depend on global Graph DB engine.
+ * Currently only Lakebase is supported; the function keeps a generic
+ * shape so future engines can be added without touching call sites.
  */
 function _applyBuildGraphEngineUi(dtExist) {
     var dt = dtExist || {};
     var cfg = window.__TRIPLESTORE_CONFIG || {};
-    var eng = dt.graph_engine || cfg.graph_engine || 'ladybug';
+    var eng = dt.graph_engine || cfg.graph_engine || 'lakebase';
     cfg.graph_engine = eng;
     window.__TRIPLESTORE_CONFIG = cfg;
 
-    var fnLb = document.getElementById('graphEngineFootnoteLadybug');
+    // (footnote moved into card)
     var fnLk = document.getElementById('graphEngineFootnoteLakebase');
-    if (fnLb && fnLk) {
-        if (eng === 'lakebase') {
-            fnLb.classList.add('d-none');
-            fnLk.classList.remove('d-none');
-        } else {
-            fnLb.classList.remove('d-none');
-            fnLk.classList.add('d-none');
-        }
-    }
+    if (fnLk) fnLk.classList.remove('d-none');
 
     var title = document.getElementById('dtGraphBackendTitle');
     if (title) {
@@ -164,17 +158,10 @@ function _applyBuildGraphEngineUi(dtExist) {
     }
     var sub = document.getElementById('dtGraphStorageSubtitle');
     var primaryRow = document.getElementById('dtGraphPrimaryRow');
-    if (sub) {
-        if (eng === 'lakebase') {
-            sub.classList.add('d-none');
-        } else {
-            sub.classList.remove('d-none');
-            sub.textContent = 'Local graph database';
-        }
-    }
-    if (primaryRow) primaryRow.classList.toggle('d-none', eng === 'lakebase');
+    if (sub) sub.classList.add('d-none');
+    if (primaryRow) primaryRow.classList.add('d-none');
     var regRow = document.getElementById('dtRegistryArchiveRow');
-    if (regRow) regRow.classList.toggle('d-none', eng === 'lakebase');
+    if (regRow) regRow.classList.add('d-none');
     var lkDetails = document.getElementById('dtLakebaseDetails');
     if (lkDetails) lkDetails.classList.toggle('d-none', eng !== 'lakebase');
 
@@ -192,17 +179,38 @@ function _applyBuildGraphEngineUi(dtExist) {
         if (lkUcRow) lkUcRow.classList.toggle('d-none', !hasUc);
         if (lkUc) lkUc.textContent = dt.lakebase_synced_uc || '—';
 
-        // footnote placeholders
-        var fnDb  = document.getElementById('fnLkDatabase');
-        var fnSch = document.getElementById('fnLkSchema');
-        var fnTbl = document.getElementById('fnLkTable');
-        var fnUcW = document.getElementById('fnLkSyncedUcWrap');
-        var fnUc  = document.getElementById('fnLkSyncedUc');
-        if (fnDb)  fnDb.textContent  = dt.lakebase_database || '…';
-        if (fnSch) fnSch.textContent = dt.lakebase_schema   || '…';
-        if (fnTbl) fnTbl.textContent = dt.lakebase_table    || '…';
-        if (fnUcW) fnUcW.classList.toggle('d-none', !hasUc);
-        if (fnUc && hasUc) fnUc.textContent = dt.lakebase_synced_uc;
+        // existence badges for table and UC sync
+        var tblExistsEl = document.getElementById('dtLakebaseTableExists');
+        if (tblExistsEl) {
+            if (dt.lakebase_table_exists === true)
+                tblExistsEl.innerHTML = '<span class="badge bg-success bg-opacity-10 text-success border border-success" style="font-size:.65rem;"><i class="bi bi-check-circle-fill me-1"></i>Exists</span>';
+            else if (dt.lakebase_table_exists === false)
+                tblExistsEl.innerHTML = '<span class="badge bg-secondary bg-opacity-10 text-secondary border" style="font-size:.65rem;"><i class="bi bi-dash-circle me-1"></i>Not found</span>';
+            else
+                tblExistsEl.innerHTML = '';
+        }
+        var ucExistsEl = document.getElementById('dtLakebaseSyncedUcExists');
+        if (ucExistsEl && hasUc) {
+            ucExistsEl.innerHTML = '<span class="badge bg-info bg-opacity-10 text-info border border-info" style="font-size:.65rem;"><i class="bi bi-check-circle-fill me-1"></i>Registered</span>';
+        } else if (ucExistsEl) {
+            ucExistsEl.innerHTML = '';
+        }
+
+        // in-card build note (replaces footnote below the card)
+        var buildNote = document.getElementById('dtLakebaseBuildNote');
+        if (buildNote) {
+            var fn2Db  = document.getElementById('fnLkDatabase2');
+            var fn2Sch = document.getElementById('fnLkSchema2');
+            var fn2Tbl = document.getElementById('fnLkTable2');
+            var fn2Uc  = document.getElementById('fnLkSyncedUc2');
+            var fn2Sync = document.getElementById('fnLkSyncNote');
+            if (fn2Db)  fn2Db.textContent  = dt.lakebase_database || '…';
+            if (fn2Sch) fn2Sch.textContent = dt.lakebase_schema   || '…';
+            if (fn2Tbl) fn2Tbl.textContent = dt.lakebase_table    || '…';
+            if (fn2Sync) fn2Sync.classList.toggle('d-none', !hasUc);
+            if (fn2Uc && hasUc) fn2Uc.textContent = dt.lakebase_synced_uc;
+            buildNote.style.display = '';
+        }
     }
 }
 
@@ -328,7 +336,7 @@ async function initSyncSection() {
 
         const di = payload && (payload.domain_info || payload.project_info);
         if (di && di.success && di.info) {
-            const prevEng = cfg.graph_engine || 'ladybug';
+            const prevEng = cfg.graph_engine || 'lakebase';
             cfg = {
                 view_table: di.info.view_table || '',
                 graph_name: di.info.graph_name || '',
@@ -362,11 +370,6 @@ async function initSyncSection() {
         var targetLabel = document.getElementById('syncTargetLabel');
         if (targetLabel) {
             targetLabel.innerHTML = '<i class="bi bi-lightning-charge me-1"></i>Digital Twin';
-        }
-
-        var ladybugSyncInfo = document.getElementById('ladybugSyncInfo');
-        if (ladybugSyncInfo) {
-            ladybugSyncInfo.classList.remove('d-none');
         }
 
         if (typeof refreshNavbarIndicators === 'function') refreshNavbarIndicators();
@@ -954,17 +957,6 @@ function _getStepConfig(status) {
  * ``started_at`` and ``completed_at`` are therefore the same tick — show
  * an honest label instead of "0ms".
  */
-function _isArchiveBackgroundStep(step, task) {
-    return !!(
-        step &&
-        step.name === 'archive' &&
-        step.status === 'completed' &&
-        task &&
-        task.result &&
-        task.result.archive_background
-    );
-}
-
 /**
  * Render the right-hand time column. Running steps get a live timer so
  * users see the seconds tick during the slower poll cadence; finished
@@ -972,9 +964,6 @@ function _isArchiveBackgroundStep(step, task) {
  */
 function _renderStepTime(step, task) {
     if (step.status === 'completed' || step.status === 'failed' || step.status === 'skipped') {
-        if (_isArchiveBackgroundStep(step, task)) {
-            return '<span class="text-muted small" title="The registry file copy continues in the background">Continues after build</span>';
-        }
         const start = step.started_at;
         const end = step.completed_at || step.started_at;
         if (!start) return '<span class="text-muted">—</span>';
@@ -1100,10 +1089,6 @@ function _formatBuildLogAsText(task) {
         if (r.view_table)               lines.push('View table      : ' + r.view_table);
         if (r.graph_name)               lines.push('Graph name      : ' + r.graph_name);
         if (r.duration_seconds != null) lines.push('Duration (s)    : ' + r.duration_seconds);
-        if (r.archive_background) {
-            const archiveTask = r.archive_task_id ? `task ${r.archive_task_id}` : 'background task';
-            lines.push(`Registry archive: started in background (${archiveTask}; upload may still be running)`);
-        }
         lines.push('');
     }
 
@@ -1468,6 +1453,7 @@ async function _loadDtExistence() {
     try {
         var resp = await fetch('/dtwin/sync/dt-existence', { credentials: 'same-origin' });
         var data = await resp.json();
+        _applyBuildGraphEngineUi(data);
         _applyDtExistence(data);
     } catch (e) {
         console.warn('[Sync] Could not load DT existence flags', e);

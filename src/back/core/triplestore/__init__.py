@@ -6,14 +6,14 @@ from back.core.triplestore.TripleStoreFactory import TripleStoreFactory  # noqa:
 from back.core.triplestore.constants import RDF_TYPE, RDFS_LABEL  # noqa: F401
 
 get_triplestore = TripleStoreFactory.get_triplestore
-LADYBUG_AVAILABLE = TripleStoreFactory.LADYBUG_AVAILABLE
+GRAPHDB_AVAILABLE = TripleStoreFactory.GRAPHDB_AVAILABLE
 
 __all__ = [
     "TripleStoreBackend",
     "DeltaTripleStore",
     "TripleStoreFactory",
     "get_triplestore",
-    "LADYBUG_AVAILABLE",
+    "GRAPHDB_AVAILABLE",
     "RDF_TYPE",
     "RDFS_LABEL",
 ]

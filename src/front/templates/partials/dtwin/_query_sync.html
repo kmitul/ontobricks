@@ -160,7 +160,7 @@
                                         <div class="mb-1" id="dtGraphPrimaryRow">
                                             <code id="dtLocalPath" class="d-block text-break ob-code-tiny"></code>
                                         </div>
-                                        <!-- LadybugDB only: registry archive row (hidden until engine confirmed) -->
+                                        <!-- Registry archive row (kept hidden; reserved for future archive-capable engines) -->
                                         <div class="d-flex justify-content-between align-items-center d-none" id="dtRegistryArchiveRow">
                                             <span class="text-muted">Registry archive</span>
                                             <span class="d-flex align-items-center gap-1">
@@ -177,7 +177,7 @@
                                                 {% endif %}
                                             </span>
                                         </div>
-                                        <!-- Lakebase: connection + UC details (hidden for LadybugDB) -->
+                                        <!-- Lakebase: connection + UC details -->
                                         <div id="dtLakebaseDetails" class="d-none">
                                             <div class="d-flex justify-content-between align-items-center mb-1">
                                                 <span class="text-muted">Database</span>
@@ -190,10 +190,17 @@
                                             <div class="d-flex justify-content-between align-items-center mb-1">
                                                 <span class="text-muted">Table</span>
                                                 <code id="dtLakebaseTable" class="text-break ob-code-tiny text-muted"></code>
+                                                <span id="dtLakebaseTableExists" class="ms-1"></span>
                                             </div>
                                             <div class="d-flex justify-content-between align-items-center d-none" id="dtLakebaseSyncedUcRow">
                                                 <span class="text-muted">UC sync object</span>
                                                 <code id="dtLakebaseSyncedUc" class="text-break ob-code-tiny text-muted"></code>
+                                                <span id="dtLakebaseSyncedUcExists" class="ms-1"></span>
+                                            </div>
+                                            <div class="mt-2 small text-muted" id="dtLakebaseBuildNote" style="display:none;">
+                                                <i class="bi bi-info-circle me-1"></i>
+                                                Build writes graph triples to Lakebase
+                                                (<code id="fnLkDatabase2">…</code>.<code id="fnLkSchema2">…</code>.<code id="fnLkTable2">…</code>)<span id="fnLkSyncNote" class="d-none"> and registers a Lakeflow synced table as <code id="fnLkSyncedUc2"></code></span>.
                                             </div>
                                         </div>
                                     </div>
@@ -202,24 +209,6 @@
                         </div>
                     </div>
 
-                    <div id="ladybugSyncInfo" class="mt-2 small text-muted d-none">
-                        <span id="graphEngineFootnoteLadybug">
-                            <i class="bi bi-info-circle me-1"></i>
-                            Building creates a Triple-Store VIEW in Unity Catalog and populates the embedded Graph DB (LadybugDB).
-                            The graph file is synced to / from the registry volume on domain save / load.
-                        </span>
-                        <span id="graphEngineFootnoteLakebase" class="d-none">
-                            <i class="bi bi-info-circle me-1"></i>
-                            Building creates the Triple-Store VIEW and writes graph triples to
-                            <strong>Lakebase</strong> — database&nbsp;<code id="fnLkDatabase">…</code>,
-                            schema&nbsp;<code id="fnLkSchema">…</code>,
-                            table&nbsp;<code id="fnLkTable">…</code>.
-                            <span id="fnLkSyncedUcWrap" class="d-none">
-                                A Lakeflow-managed synced table will be registered in Unity Catalog
-                                as&nbsp;<code id="fnLkSyncedUc"></code>.
-                            </span>
-                        </span>
-                    </div>
                 </div>
             </div>
 

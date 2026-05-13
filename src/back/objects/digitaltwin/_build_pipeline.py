@@ -17,15 +17,12 @@ the refresh automatically.
 
 from __future__ import annotations
 
-import os
-import threading
 import time
 from typing import Any, Dict, Optional
 
 from back.core.errors import OntoBricksError
 from back.core.logging import get_logger
 from back.objects.digitaltwin.models import DomainSnapshot
-from shared.config.constants import DEFAULT_GRAPH_NAME
 
 logger = get_logger(__name__)
 
@@ -89,7 +86,6 @@ class _BuildPipeline:
         self.relationship_mappings: list = []
         self.spark_sql: str = ""
         self.triple_count: int = 0
-        self.archive_task_id: Optional[str] = None
         # Lakebase managed-synced mode flag, resolved once before _open_store.
         self._lakebase_engine_config: Dict[str, Any] = {}
         self._is_lakebase_synced: bool = False
@@ -122,7 +118,7 @@ class _BuildPipeline:
                 self.task_id,
                 exc,
             )
-            engine = "ladybug"
+            engine = "lakebase"
             cfg = {}
         self._lakebase_engine_config = cfg
         self._is_lakebase_synced = (
@@ -184,7 +180,6 @@ class _BuildPipeline:
 
             if not self.is_api:
                 self._populate_session_cache()
-                self._start_background_archive()
 
             self._complete_task()
 
@@ -695,11 +690,6 @@ class _BuildPipeline:
         return True
 
     def _populate_session_cache(self) -> None:
-        from back.core.graphdb import graph_volume_path
-        from back.core.helpers import (
-            effective_uc_version_path,
-            resolve_ladybug_local_path,
-        )
         from back.objects.digitaltwin.DigitalTwin import DigitalTwin
 
         try:
@@ -716,38 +706,30 @@ class _BuildPipeline:
             if build_stamp and final_count > 0:
                 status_cache["last_modified"] = build_stamp
 
-            db_name = self.graph_name or DEFAULT_GRAPH_NAME
-            uc_path = effective_uc_version_path(self.domain)
-
             try:
                 graph_engine = DigitalTwin.resolve_graph_engine(
                     self.domain, self.settings
                 )
             except Exception:  # noqa: BLE001
-                graph_engine = "ladybug"
+                graph_engine = "lakebase"
 
-            if graph_engine == "lakebase":
-                local_lbug_exists = final_count > 0
-                local_path = ""
-                registry_lbug_path = ""
-            else:
-                local_path = resolve_ladybug_local_path(self.domain, db_name)
-                registry_lbug_path = (
-                    graph_volume_path(uc_path, db_name) if uc_path else ""
-                )
-                local_lbug_exists = os.path.exists(local_path)
+            local_lbug_exists = final_count > 0
+            local_path = ""
+            registry_lbug_path = ""
 
             dt = DigitalTwin(self.domain)
-            prev_existence = dt.get_ts_cache("dt_existence") or {}
 
             existence_cache = {
                 "view_exists": True,
+                "view_table": self.view_table,
                 "graph_name": self.graph_name,
                 "graph_engine": graph_engine,
                 "local_lbug_exists": local_lbug_exists,
+                "lakebase_table_exists": local_lbug_exists,
                 "local_lbug_path": local_path,
-                "registry_lbug_exists": prev_existence.get("registry_lbug_exists"),
+                "registry_lbug_exists": None,
                 "registry_lbug_path": registry_lbug_path,
+                "registry_archive_applicable": False,
                 "last_built": self.domain.last_build,
                 "last_update": self.domain.last_update,
             }
@@ -762,98 +744,6 @@ class _BuildPipeline:
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("Could not populate DT session cache: %s", exc)
-
-    def _start_background_archive(self) -> None:
-        from back.core.helpers import make_volume_file_service
-        from back.objects.digitaltwin.DigitalTwin import DigitalTwin
-        from back.objects.domain import Domain
-
-        t_phase = time.time()
-        try:
-            graph_engine = DigitalTwin.resolve_graph_engine(self.domain, self.settings)
-        except Exception:  # noqa: BLE001
-            graph_engine = "ladybug"
-        if graph_engine == "lakebase":
-            self.tm.advance_step(self.task_id, "Skipping registry backup…")
-            self.tm.skip_step(
-                self.task_id,
-                "Lakebase graph engine — Postgres is the system of record, "
-                "no .lbug archive to push to the volume",
-            )
-            self._log_phase("archive", t_phase)
-            return
-
-        archive_task = self.tm.create_task(
-            name="Registry Graph Backup",
-            task_type="registry_archive",
-            steps=[
-                {
-                    "name": "archive",
-                    "description": "Compressing and uploading LadybugDB archive",
-                }
-            ],
-        )
-        self.archive_task_id = archive_task.id
-        archive_task_id = self.archive_task_id
-        domain_local = self.domain
-        settings_local = self.settings
-        tm_local = self.tm
-        parent_task_id = self.task_id
-
-        def _bg_archive() -> None:
-            tm_local.start_task(
-                archive_task_id,
-                "Compressing and uploading graph archive…",
-            )
-            try:
-                uc_svc = make_volume_file_service(domain_local, settings_local)
-                warn = Domain(domain_local).sync_ladybug_to_volume(uc_svc)
-                if warn:
-                    logger.warning("Background graph archive warning: %s", warn)
-                    tm_local.complete_task(
-                        archive_task_id,
-                        result={
-                            "warning": warn,
-                            "parent_task_id": parent_task_id,
-                        },
-                        message="Registry backup completed with warning",
-                    )
-                else:
-                    logger.info("Background graph archive finished successfully")
-                    tm_local.complete_task(
-                        archive_task_id,
-                        result={"parent_task_id": parent_task_id},
-                        message="Registry backup completed",
-                    )
-                    try:
-                        dt_obj = DigitalTwin(domain_local)
-                        ex = dt_obj.get_ts_cache("dt_existence")
-                        if ex:
-                            ex["registry_lbug_exists"] = True
-                            dt_obj.set_ts_cache("dt_existence", ex)
-                    except Exception:  # noqa: BLE001
-                        pass
-            except Exception as exc:  # noqa: BLE001
-                tm_local.fail_task(archive_task_id, str(exc))
-                logger.warning(
-                    "Background graph archive failed (non-fatal): %s", exc
-                )
-
-        self.tm.advance_step(
-            self.task_id,
-            "Backing up the graph to the registry in the background…",
-        )
-        threading.Thread(
-            target=_bg_archive,
-            name=f"ob-ladybug-archive-{self.task_id}",
-            daemon=True,
-        ).start()
-        self.tm.complete_current_step(
-            self.task_id,
-            "Build finished — registry backup continues in the background "
-            f"(task {archive_task_id})",
-        )
-        self._log_phase("archive", t_phase)
 
     def _complete_task(self) -> None:
         duration = time.time() - self.start_time
@@ -878,16 +768,8 @@ class _BuildPipeline:
         }
         if not self.is_api:
             result_data["phase_times"] = self.phase_times
-            if self.archive_task_id:
-                result_data["archive_background"] = True
-                result_data["archive_task_id"] = self.archive_task_id
-            else:
-                result_data["archive_skipped"] = True
 
         msg = f"Full rebuild: {self.triple_count} triples in {duration:.1f}s"
-        if not self.is_api and self.archive_task_id:
-            msg += " Registry backup continues in the background."
-
         self.tm.complete_task(self.task_id, result=result_data, message=msg)
 
     def _fail_unexpected(self, exc: Exception) -> None:

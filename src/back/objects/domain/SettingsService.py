@@ -1,13 +1,10 @@
-"""Databricks settings, registry, permissions, LadybugDB files, and schedule orchestration."""
+"""Databricks settings, registry, permissions, and schedule orchestration."""
 
 from __future__ import annotations
 
 import json
 import os
-import re
-import shutil
 import time
-from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from back.core.errors import (
@@ -37,17 +34,9 @@ from back.objects.session import SessionManager, get_domain, global_config_servi
 
 logger = get_logger(__name__)
 
-LADYBUG_BASE_DIR = "/tmp/ontobricks"
-
-# Postgres database identifier — letters, digits, '_' or '-', must
-# start with a letter or '_'. Conservatively narrower than the spec
-# (no quoted identifiers) so we never have to worry about quoting it
-# in dynamic SQL or in libpq conninfo strings.
-_SAFE_DBNAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_-]*$")
-
 
 class SettingsService:
-    """Configuration, registry, permissions, local LadybugDB files, and build schedules."""
+    """Configuration, registry, permissions, and build schedules."""
 
     @staticmethod
     def _get_scheduler():
@@ -372,14 +361,17 @@ class SettingsService:
     ) -> Dict[str, Any]:
         """Payload for GET /settings/registry.
 
-        Includes the registry triplet (catalog/schema/volume), the
-        active ``backend`` (``volume`` or ``lakebase``), the configured
-        ``lakebase_schema``, **graph_engine** / **graph_engine_config**
-        read from the registry global-config blob (same persistence as
-        Settings → Graph DB), and a read-only ``lakebase`` block that
-        surfaces the runtime-injected Postgres connection parameters
-        (``PGHOST``/``PGPORT``/``PGDATABASE``/``PGUSER``) plus
-        availability/health for the admin UI.
+        Includes the registry triplet (catalog/schema/volume) used for
+        binary artefacts, the configured ``lakebase_schema`` and
+        optional ``lakebase_database`` override, the **graph_engine** /
+        **graph_engine_config** read from the registry global-config
+        blob (same persistence as Settings → Graph DB), and a read-only
+        ``lakebase`` block that surfaces the runtime-injected Postgres
+        connection parameters (``PGHOST``/``PGPORT``/``PGDATABASE``/
+        ``PGUSER``) plus availability/health for the admin UI.
+
+        Lakebase is the sole registry backend: there is no
+        ``available_backends`` field anymore.
         """
         rcfg = RegistryCfg.from_session(session_mgr, settings)
         initialized = False
@@ -391,7 +383,7 @@ class SettingsService:
             except Exception:
                 logger.debug("Could not check registry marker")
 
-        graph_engine = "ladybug"
+        graph_engine = "lakebase"
         graph_engine_config: Dict[str, Any] = {}
         if rcfg.is_configured:
             try:
@@ -416,50 +408,9 @@ class SettingsService:
             **rcfg.as_dict(),
             "configured": initialized,
             "registry_locked": SettingsService.is_registry_locked(settings),
-            "available_backends": SettingsService._available_backends(),
             "lakebase": SettingsService._lakebase_runtime_info(rcfg),
             "graph_engine": graph_engine,
             "graph_engine_config": graph_engine_config,
-        }
-
-    @staticmethod
-    def _available_backends() -> Dict[str, Any]:
-        """Return which backends are usable in the current process.
-
-        ``volume`` is always available. ``lakebase`` requires the
-        optional :mod:`psycopg` extra and the four ``PG*`` environment
-        variables that the Databricks App resource binding injects at
-        runtime.
-        """
-        import os
-
-        try:
-            import psycopg  # noqa: F401  -- detect optional dep
-
-            has_psycopg = True
-        except ImportError:
-            has_psycopg = False
-
-        env_ready = all(
-            os.environ.get(k)
-            for k in ("PGHOST", "PGDATABASE", "PGUSER")
-        )
-        return {
-            "volume": {"available": True, "reason": ""},
-            "lakebase": {
-                "available": has_psycopg and env_ready,
-                "reason": (
-                    ""
-                    if has_psycopg and env_ready
-                    else (
-                        "psycopg extra not installed"
-                        if not has_psycopg
-                        else "Lakebase resource not bound (PGHOST/PGDATABASE/PGUSER missing)"
-                    )
-                ),
-                "psycopg_installed": has_psycopg,
-                "env_ready": env_ready,
-            },
         }
 
     @staticmethod
@@ -809,125 +760,6 @@ class SettingsService:
         return default_branch_path
 
     @staticmethod
-    def list_lakebase_databases_result(
-        session_mgr: SessionManager, settings: Settings
-    ) -> Dict[str, Any]:
-        """List Postgres databases on the bound Lakebase instance.
-
-        Used by the admin Registry Location modal so the admin can pick
-        a database different from the one auto-injected via the Apps
-        ``database`` resource binding (the bound ``PGDATABASE``). The
-        Lakebase JWT scope is per-instance, so the cached token can
-        connect to every database the SP is allowed on.
-
-        Returns a JSON-friendly payload::
-
-            {
-              "success": true,
-              "bound_database": "ontobricks_registry",  # PGDATABASE
-              "selected_database": "ontobricks_other",  # registry config override
-              "databases": [
-                {"name": "ontobricks_registry", "connectable": true,
-                 "is_bound": true, "is_selected": false},
-                {"name": "ontobricks_other",    "connectable": true,
-                 "is_bound": false, "is_selected": true},
-                ...
-              ]
-            }
-
-        ``connectable`` reflects ``has_database_privilege(current_user,
-        datname, 'CONNECT')`` so the UI can disable databases the SP
-        is not authorised on. Template / system databases are filtered
-        out. The query runs against the *bound* database so it works
-        even if the configured override has been revoked.
-        """
-        from back.core.databricks import get_lakebase_auth
-
-        auth = get_lakebase_auth()
-        if not auth.is_available:
-            return {
-                "success": False,
-                "message": "Lakebase resource not bound (PGHOST/PGUSER missing)",
-                "bound_database": "",
-                "selected_database": "",
-                "databases": [],
-            }
-
-        try:
-            cfg = RegistryCfg.from_session(session_mgr, settings)
-        except Exception as exc:  # noqa: BLE001
-            return {
-                "success": False,
-                "message": f"Could not resolve registry context: {exc}",
-                "bound_database": "",
-                "selected_database": "",
-                "databases": [],
-            }
-
-        try:
-            import psycopg  # noqa: F401  -- ensure extra is installed
-        except ImportError:
-            return {
-                "success": False,
-                "message": "psycopg not installed",
-                "bound_database": "",
-                "selected_database": cfg.lakebase_database,
-                "databases": [],
-            }
-
-        bound_db = auth.database
-        selected_db = cfg.lakebase_database or ""
-
-        # Connect to the *bound* database to enumerate. The bound DB
-        # is the one we know the SP is authorised on.
-        try:
-            import psycopg
-
-            with psycopg.connect(
-                autocommit=True,
-                **auth.kwargs(application_name="ontobricks-registry"),
-            ) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        """
-                        SELECT datname,
-                               has_database_privilege(
-                                   current_user, datname, 'CONNECT'
-                               )
-                        FROM pg_database
-                        WHERE datistemplate = false
-                          AND datname NOT IN ('postgres', 'rdsadmin')
-                        ORDER BY datname
-                        """
-                    )
-                    rows = cur.fetchall()
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("Lakebase list-databases failed")
-            return {
-                "success": False,
-                "message": f"Could not list databases: {exc}",
-                "bound_database": bound_db,
-                "selected_database": selected_db,
-                "databases": [],
-            }
-
-        databases = [
-            {
-                "name": name,
-                "connectable": bool(connectable),
-                "is_bound": name == bound_db,
-                "is_selected": name == selected_db,
-            }
-            for (name, connectable) in rows
-        ]
-        return {
-            "success": True,
-            "bound_database": bound_db,
-            "selected_database": selected_db,
-            "databases": databases,
-        }
-
-    @staticmethod
     def lakebase_stats_result(
         session_mgr: SessionManager, settings: Settings
     ) -> Dict[str, Any]:
@@ -965,7 +797,6 @@ class SettingsService:
                 catalog=cfg.catalog,
                 schema=cfg.schema,
                 volume=cfg.volume,
-                backend="lakebase",
                 lakebase_schema=cfg.lakebase_schema,
                 lakebase_database=cfg.lakebase_database,
             )
@@ -1038,130 +869,6 @@ class SettingsService:
         return payload
 
     @staticmethod
-    def apply_registry_save(
-        data: Dict[str, Any], session_mgr: SessionManager
-    ) -> Dict[str, Any]:
-        """Persist registry triplet, backend choice, and lakebase schema.
-
-        Expected payload (all optional, partial updates allowed):
-
-        - ``catalog`` / ``schema`` / ``volume``: Unity Catalog triplet.
-        - ``backend``: ``"volume"`` or ``"lakebase"``.
-        - ``lakebase_schema``: Postgres schema for registry tables.
-        - ``lakebase_database``: optional Postgres database override.
-          Empty string clears the override (falls back to the bound
-          ``PGDATABASE``); the key must be present in the payload to
-          opt into the change so a partial save never wipes it out.
-        """
-        domain = get_domain(session_mgr)
-        reg = domain.settings.setdefault("registry", {})
-        if data.get("catalog"):
-            reg["catalog"] = data["catalog"]
-        if data.get("schema"):
-            reg["schema"] = data["schema"]
-        if data.get("volume"):
-            reg["volume"] = data["volume"]
-        if "backend" in data:
-            backend = (data.get("backend") or "volume").lower()
-            if backend not in ("volume", "lakebase"):
-                raise ValidationError(
-                    f"Unknown registry backend '{backend}' — expected volume or lakebase"
-                )
-            reg["backend"] = backend
-        if data.get("lakebase_schema"):
-            reg["lakebase_schema"] = data["lakebase_schema"]
-        if "lakebase_database" in data:
-            override = (data.get("lakebase_database") or "").strip()
-            if override:
-                if not _SAFE_DBNAME_RE.match(override):
-                    raise ValidationError(
-                        f"Invalid Lakebase database name {override!r}. "
-                        f"Use letters, digits, '_' or '-' (start with a letter or '_')."
-                    )
-                reg["lakebase_database"] = override
-            else:
-                reg.pop("lakebase_database", None)
-        domain.save()
-        return {"success": True, "message": "Registry configuration saved"}
-
-    @staticmethod
-    def migrate_to_lakebase_result(
-        session_mgr: SessionManager, settings: Settings
-    ) -> Dict[str, Any]:
-        """Copy Volume registry data into Lakebase tables.
-
-        Builds a :class:`VolumeRegistryStore` from the active session
-        configuration and a :class:`LakebaseRegistryStore` using the
-        injected ``PG*`` env vars and the configured Lakebase schema.
-        Binary artefacts (``documents/``, ``*.lbug.tar.gz``) are not
-        moved — they always live on the Volume.
-        """
-        try:
-            domain = get_domain(session_mgr)
-            host, token = get_databricks_host_and_token(domain, settings)
-            cfg = RegistryCfg.from_domain(domain, settings)
-            if not cfg.catalog or not cfg.schema:
-                raise ValidationError(
-                    "Registry catalog and schema must be configured first"
-                )
-
-            from back.objects.registry.store import (
-                RegistryFactory,
-                migrate_volume_to_lakebase,
-                summarize_migration,
-            )
-
-            volume_cfg = RegistryCfg(
-                catalog=cfg.catalog,
-                schema=cfg.schema,
-                volume=cfg.volume,
-                backend="volume",
-                lakebase_schema=cfg.lakebase_schema,
-                lakebase_database=cfg.lakebase_database,
-            )
-            lakebase_cfg = RegistryCfg(
-                catalog=cfg.catalog,
-                schema=cfg.schema,
-                volume=cfg.volume,
-                backend="lakebase",
-                lakebase_schema=cfg.lakebase_schema,
-                lakebase_database=cfg.lakebase_database,
-            )
-
-            src_store = RegistryFactory.volume(
-                registry_cfg=volume_cfg, host=host, token=token
-            )
-            try:
-                dst_store = RegistryFactory.lakebase(
-                    registry_cfg=lakebase_cfg,
-                    schema=cfg.lakebase_schema,
-                    database=cfg.lakebase_database,
-                )
-            except ImportError as exc:
-                raise InfrastructureError(
-                    "Lakebase backend not installed",
-                    detail=str(exc),
-                ) from exc
-
-            report = migrate_volume_to_lakebase(src_store, dst_store)
-            ok, summary = summarize_migration(report)
-            return {
-                "success": ok,
-                "message": (
-                    "Migration complete — " if ok else "Migration completed with errors — "
-                )
-                + summary,
-                "report": report.as_dict(),
-            }
-        except OntoBricksError:
-            raise
-        except Exception as e:
-            logger.exception("Migrate to Lakebase failed: %s", e)
-            raise InfrastructureError(
-                "Migrate to Lakebase failed", detail=str(e)
-            ) from e
-
-    @staticmethod
     def initialize_registry_result(
         session_mgr: SessionManager, settings: Settings
     ) -> Dict[str, Any]:
@@ -1215,7 +922,7 @@ class SettingsService:
                         token,
                         registry_cfg,
                         {
-                            "graph_engine": "ladybug",
+                            "graph_engine": "lakebase",
                             "graph_engine_config": (
                                 blob["graph_engine_config"]
                                 if isinstance(blob.get("graph_engine_config"), dict)
@@ -1450,17 +1157,6 @@ class SettingsService:
             raise InfrastructureError("Failed to save default base URI", detail=msg)
         return {"success": True, "base_uri": base_uri}
 
-    @staticmethod
-    def get_cloud_fetch_result(
-        session_mgr: SessionManager,
-        settings: Settings,
-    ) -> Dict[str, Any]:
-        _, host, token, registry_cfg = SettingsService._resolve_context(
-            session_mgr, settings
-        )
-        enabled = global_config_service.get_use_cloud_fetch(host, token, registry_cfg)
-        return {"success": True, "use_cloud_fetch": bool(enabled)}
-
     # Recommended upload size & format for the top-bar logo.
     # The navbar renders the image at 24×24 CSS pixels; keeping the source
     # at 64×64 (≈2.7×) gives crisp rendering on retina displays without
@@ -1567,25 +1263,6 @@ class SettingsService:
             "logo_url": SettingsService.NAVBAR_LOGO_DEFAULT_PATH,
             "is_custom": False,
         }
-
-    @staticmethod
-    def save_cloud_fetch_result(
-        enabled: bool,
-        email: str,
-        user_token: str,
-        session_mgr: SessionManager,
-        settings: Settings,
-    ) -> Dict[str, Any]:
-        SettingsService.require_admin_error(email, user_token, session_mgr, settings)
-        _, host, token, registry_cfg = SettingsService._resolve_context(
-            session_mgr, settings
-        )
-        ok, msg = global_config_service.set_use_cloud_fetch(
-            host, token, registry_cfg, bool(enabled)
-        )
-        if not ok:
-            raise InfrastructureError("Failed to save CloudFetch setting", detail=msg)
-        return {"success": True, "use_cloud_fetch": bool(enabled)}
 
     @staticmethod
     def get_registry_cache_ttl_result(
@@ -2564,79 +2241,6 @@ class SettingsService:
                 return f"{nbytes:.1f} {unit}" if unit != "B" else f"{nbytes} B"
             nbytes /= 1024  # type: ignore[assignment]
         return f"{nbytes:.1f} PB"
-
-    @staticmethod
-    def list_ladybugdb_files() -> Dict[str, Any]:
-        """List files under the LadybugDB local directory."""
-        if not os.path.isdir(LADYBUG_BASE_DIR):
-            return {"success": True, "files": [], "base_dir": LADYBUG_BASE_DIR}
-
-        items: List[Dict[str, Any]] = []
-        try:
-            for entry in sorted(os.scandir(LADYBUG_BASE_DIR), key=lambda e: e.name):
-                if not entry.name.endswith(".lbug"):
-                    continue
-                try:
-                    stat = entry.stat(follow_symlinks=False)
-                except OSError:
-                    continue
-
-                if entry.is_dir(follow_symlinks=False):
-                    total_size = 0
-                    for dirpath, _dirnames, filenames in os.walk(entry.path):
-                        for fname in filenames:
-                            try:
-                                total_size += os.path.getsize(
-                                    os.path.join(dirpath, fname)
-                                )
-                            except OSError:
-                                pass
-                    size = total_size
-                else:
-                    size = stat.st_size
-
-                mtime_dt = datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc)
-                items.append(
-                    {
-                        "name": entry.name,
-                        "is_dir": entry.is_dir(follow_symlinks=False),
-                        "size_bytes": size,
-                        "size_display": SettingsService.human_size(size),
-                        "modified_iso": mtime_dt.isoformat(),
-                        "modified_display": mtime_dt.strftime("%Y-%m-%d %H:%M:%S UTC"),
-                    }
-                )
-        except OSError as exc:
-            logger.warning("Failed to list LadybugDB directory: %s", exc)
-            raise InfrastructureError(
-                "Failed to list LadybugDB files", detail=str(exc)
-            ) from exc
-
-        return {"success": True, "files": items, "base_dir": LADYBUG_BASE_DIR}
-
-    @staticmethod
-    def delete_ladybugdb_file(filename: str) -> Dict[str, Any]:
-        """Delete a file or directory under LadybugDB base dir (basename only)."""
-        safe_name = os.path.basename(filename)
-        if not safe_name or safe_name in (".", ".."):
-            raise ValidationError("Invalid filename")
-
-        target = os.path.join(LADYBUG_BASE_DIR, safe_name)
-        if not os.path.exists(target):
-            raise NotFoundError(f"Not found: {safe_name}")
-
-        try:
-            if os.path.isdir(target):
-                shutil.rmtree(target)
-            else:
-                os.remove(target)
-            logger.info("Deleted LadybugDB file: %s", target)
-            return {"success": True, "message": f"Deleted {safe_name}"}
-        except OSError as exc:
-            logger.warning("Failed to delete LadybugDB file %s: %s", target, exc)
-            raise InfrastructureError(
-                "Failed to delete LadybugDB file", detail=str(exc)
-            ) from exc
 
     @staticmethod
     def list_schedules_result(

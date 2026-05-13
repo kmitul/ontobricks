@@ -8,7 +8,6 @@ the test scope tight and fast.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -129,52 +128,20 @@ class TestFullRebuildProgressMessage:
 
 
 class TestStartBackgroundArchive:
-    def test_skipped_when_engine_is_lakebase(self):
+    def test_skipped_for_sql_backed_engines(self):
+        """SQL-backed engines (Lakebase) skip the registry archive step."""
         pipe = _bare_pipeline()
         pipe.tm.advance_step = MagicMock()
         pipe.tm.skip_step = MagicMock()
         pipe.tm.create_task = MagicMock()
 
-        with (
-            patch(
-                "back.objects.digitaltwin.DigitalTwin.DigitalTwin.resolve_graph_engine",
-                return_value="lakebase",
-            ),
-            patch(
-                "back.core.helpers.make_volume_file_service",
-                MagicMock(),
-            ),
-        ):
-            pipe._start_background_archive()
+        pipe._start_background_archive()
 
         pipe.tm.create_task.assert_not_called()
         pipe.tm.skip_step.assert_called_once()
         skip_args = pipe.tm.skip_step.call_args.args
         assert skip_args[0] == pipe.task_id
         assert "lakebase" in skip_args[1].lower()
-
-    def test_runs_when_engine_is_ladybug(self):
-        """Ladybug mode must still create the background archive task."""
-        pipe = _bare_pipeline()
-        pipe.tm.create_task = MagicMock(return_value=SimpleNamespace(id="archive-1"))
-
-        with (
-            patch(
-                "back.objects.digitaltwin.DigitalTwin.DigitalTwin.resolve_graph_engine",
-                return_value="ladybug",
-            ),
-            patch(
-                "back.core.helpers.make_volume_file_service", MagicMock()
-            ),
-            patch(
-                "back.objects.digitaltwin._build_pipeline.threading.Thread"
-            ) as mock_thread,
-        ):
-            pipe._start_background_archive()
-
-        pipe.tm.create_task.assert_called_once()
-        mock_thread.return_value.start.assert_called_once()
-        assert pipe.archive_task_id == "archive-1"
 
 
 # ---------------------------------------------------------------
@@ -280,14 +247,15 @@ class TestResolveLakebaseMode:
 
         assert pipe._is_lakebase_synced is False
 
-    def test_ladybug_engine_is_never_synced(self):
+    def test_unknown_engine_is_never_synced(self):
+        """Future engines other than Lakebase do not enable synced mode."""
         pipe = _bare_pipeline()
 
         with (
             patch(
                 "back.core.triplestore.TripleStoreFactory.TripleStoreFactory."
                 "_resolve_graph_engine",
-                return_value="ladybug",
+                return_value="other",
             ),
             patch(
                 "back.core.triplestore.TripleStoreFactory.TripleStoreFactory."

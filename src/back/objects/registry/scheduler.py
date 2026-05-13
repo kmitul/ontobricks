@@ -563,11 +563,18 @@ class BuildScheduler:
 
     @staticmethod
     def _store_for(host: str, token: str, registry_cfg: Dict[str, str]):
+        """Build the Lakebase :class:`RegistryStore` for *registry_cfg*.
+
+        ``host``/``token`` are accepted for signature compatibility with
+        the rest of the scheduler plumbing; Lakebase uses its own
+        PG*/JWT credentials so they are ignored.
+        """
         from back.objects.registry import RegistryCfg
         from back.objects.registry.store import RegistryFactory
 
+        del host, token
         cfg = RegistryCfg.from_dict(registry_cfg)
-        return RegistryFactory.from_cfg(cfg, host=host, token=token)
+        return RegistryFactory.from_cfg(cfg)
 
     def _load_schedules(
         self, host: str, token: str, registry_cfg: Dict[str, str]
@@ -708,14 +715,12 @@ class BuildScheduler:
     def _resolve_creds(settings):
         """Resolve host/token/registry from env-level settings (for startup).
 
-        The returned ``cfg`` carries ``backend``, ``lakebase_schema`` and
+        The returned ``cfg`` carries ``lakebase_schema`` and
         ``lakebase_database`` from *Settings* so that schedule-related
         store calls made *before* the global config has been loaded
         (e.g. on app boot, when restoring jobs) target the right
-        backend instead of silently defaulting to Volume. This matters
-        for Databricks Apps deployments that bind a Lakebase database
-        and want their schedules persisted there from the very first
-        APScheduler tick.
+        Lakebase database and schema from the very first APScheduler
+        tick.
         """
         from back.core.databricks import is_databricks_app
         from back.objects.registry.RegistryService import RegistryCfg
@@ -730,16 +735,6 @@ class BuildScheduler:
 
             host, token = get_databricks_host_and_token(_Stub(), settings)
 
-        # ``"auto"`` (the new default) → Lakebase when the runtime has
-        # injected PG* env vars and psycopg is importable, otherwise
-        # Volume. Centralised in ``resolve_default_backend`` so the
-        # scheduler subprocess and the FastAPI request path agree on
-        # which backend to use.
-        from back.objects.registry import resolve_default_backend
-
-        backend = resolve_default_backend(
-            getattr(settings, "registry_backend", None)
-        )
         lakebase_schema = (
             getattr(settings, "lakebase_schema", "ontobricks_registry")
             or "ontobricks_registry"
@@ -750,7 +745,6 @@ class BuildScheduler:
         if vol_path:
             parsed = RegistryCfg.from_volume_path(
                 vol_path,
-                backend=backend,
                 lakebase_schema=lakebase_schema,
                 lakebase_database=lakebase_database,
             )
@@ -761,7 +755,6 @@ class BuildScheduler:
             catalog=settings.registry_catalog,
             schema=settings.registry_schema,
             volume=settings.registry_volume or "OntoBricksRegistry",
-            backend=backend,
             lakebase_schema=lakebase_schema,
             lakebase_database=lakebase_database,
         )
@@ -1176,8 +1169,8 @@ def _persist_domain_metadata(
 ):
     """Stamp last_build and write the domain doc via the active store.
 
-    ``svc`` is the :class:`RegistryService` that owns the right
-    :class:`RegistryStore` for the current backend (Volume or Lakebase).
+    ``svc`` is the :class:`RegistryService` that owns the
+    :class:`RegistryStore` (always Lakebase).
     ``version`` is the numeric version string (e.g. ``"1"``).
     """
     domain.last_build = build_ts
@@ -1257,7 +1250,7 @@ def _run_scheduled_build(
                     "name": "view",
                     "description": "Creating Triple-Store VIEW in Unity Catalog",
                 },
-                {"name": "graph", "description": "Populating LadybugDB graph"},
+                {"name": "graph", "description": "Populating Lakebase graph"},
             ],
         )
         tm.start_task(task.id, f"Starting scheduled build for {domain_name}...")

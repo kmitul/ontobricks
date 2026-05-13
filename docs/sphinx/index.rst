@@ -6,7 +6,7 @@ OntoBricks Documentation
 OntoBricks is a web-based application that turns Databricks tables into a
 knowledge graph. Design ontologies using OWL or import industry standards
 (FIBO, CDISC, IOF), map them to tables via R2RML, materialize triples into a
-Delta or LadybugDB triple store, query them through a typed GraphQL API, and
+Delta-backed triple store mirrored on Lakebase Postgres, query them through a typed GraphQL API, and
 explore your knowledge graph visually.
 
 **Topic guides** (Markdown in ``docs/``, included here via MyST) are the

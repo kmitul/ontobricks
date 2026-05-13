@@ -21,7 +21,6 @@ dependencies = [
     "requests>=2.33.0",
     "strawberry-graphql[fastapi]>=0.312.3",
     "mlflow>=3.11.1",
-    "real_ladybug>=0.1.0",
     "apscheduler>=3.10,<4",
     "owlrl>=7.0.0",
     "pyshacl>=0.26.0",
@@ -30,8 +29,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # Install with: ``uv sync --extra lakebase`` or ``pip install .[lakebase]``.
-# Only required when ``REGISTRY_BACKEND=lakebase``. Volume-only deployments
-# work without these.
+# Required since v0.4.0 — the registry runs on Lakebase (Postgres).
 lakebase = [
     "psycopg[binary]>=3.2.0",
     "psycopg-pool>=3.2.0",

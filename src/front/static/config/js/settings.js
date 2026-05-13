@@ -13,7 +13,7 @@ document.addEventListener('DOMContentLoaded', function () {
     loadCurrentConfig();
     loadBaseUri();
     loadCurrentDefaultEmoji();
-    loadCloudFetch();
+
     loadRegistryCacheTtl();
     loadNavbarLogo();
 
@@ -182,18 +182,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    async function loadCloudFetch() {
-        try {
-            const resp = await fetch('/settings/get-cloud-fetch', { credentials: 'same-origin' });
-            const result = await resp.json();
-            const toggle = document.getElementById('cloudFetchEnabled');
-            if (toggle && result.success && typeof result.use_cloud_fetch === 'boolean') {
-                toggle.checked = result.use_cloud_fetch;
-            }
-        } catch (error) {
-            console.log('Using default CloudFetch setting');
-        }
-    }
 
     // =====================================================================
     //  GLOBAL TAB – Default Emoji Picker (uses shared EmojiPicker module)
@@ -365,21 +353,17 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // =====================================================================
-    //  LADYBUGDB TAB – Graph Engine selector
+    //  GRAPH DB TAB – Graph Engine selector
     // =====================================================================
 
-    /** Show Lakebase picker vs Ladybug local-files section from graph engine select. */
+    /** Show Lakebase picker section from graph engine select. */
     function applyGraphDbEnginePanels() {
         const sel = document.getElementById('graphEngineSelect');
         const lakePanel = document.getElementById('lakebaseGraphPanel');
-        const ladybugFilesWrap = document.getElementById('ladybugLocalFilesWrap');
         if (!sel) return;
         const eng = sel.value;
         if (lakePanel) {
             lakePanel.style.display = eng === 'lakebase' ? 'block' : 'none';
-        }
-        if (ladybugFilesWrap) {
-            ladybugFilesWrap.style.display = eng === 'ladybug' ? '' : 'none';
         }
     }
 
@@ -815,8 +799,6 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
-    let ladybugFilesLoaded = false;
-
     function setGraphDbTabLoading(loading) {
         const banner  = document.getElementById('graphDbTabLoadingBanner');
         const content = document.getElementById('graphDbTabContent');
@@ -845,12 +827,12 @@ document.addEventListener('DOMContentLoaded', function () {
             const rawEng = engData.graph_engine;
             if (engData.success && rawEng && typeof rawEng === 'string') {
                 const allowed = Array.isArray(engData.allowed_engines) ? engData.allowed_engines : [];
-                if (allowed.length === 0 && (rawEng === 'ladybug' || rawEng === 'lakebase')) {
+                if (allowed.length === 0 && rawEng === 'lakebase') {
                     sel.value = rawEng;
                 } else if (allowed.indexOf(rawEng) >= 0) {
                     sel.value = rawEng;
                 } else {
-                    sel.value = 'ladybug';
+                    sel.value = 'lakebase';
                 }
             }
             applyLakebaseFormFromConfigTextarea();
@@ -877,8 +859,6 @@ document.addEventListener('DOMContentLoaded', function () {
             applyLakebaseFormFromConfigTextarea();
             await loadLakebaseProjects();
             await loadLakebaseGraphHealth();
-        } else if (this.value === 'ladybug' && !ladybugFilesLoaded) {
-            loadLadybugFiles();
         }
     });
 
@@ -991,7 +971,6 @@ document.addEventListener('DOMContentLoaded', function () {
             }
             ta.value = JSON.stringify(cfgJson.graph_engine_config || parsed, null, 2);
             applyGraphDbEnginePanels();
-            if (sel.value === 'ladybug' && !ladybugFilesLoaded) loadLadybugFiles();
             if (sel.value === 'lakebase') loadLakebaseGraphHealth();
         } catch (e) {
             errors.push('Graph DB: ' + e.message);
@@ -999,115 +978,17 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // =====================================================================
-    //  LADYBUGDB TAB – Local files
+    //  GRAPH DB TAB – tab activation
     // =====================================================================
 
-    document.getElementById('tab-ladybugdb')?.addEventListener('shown.bs.tab', async () => {
+    document.getElementById('tab-graphdb')?.addEventListener('shown.bs.tab', async () => {
         setGraphDbTabLoading(true);
         try {
             await refreshGraphDbTabFromServer();
-            const sel = document.getElementById('graphEngineSelect');
-            if (sel && sel.value === 'ladybug' && !ladybugFilesLoaded) {
-                await loadLadybugFiles();
-            }
         } finally {
             setGraphDbTabLoading(false);
         }
     });
-
-    document.getElementById('btnRefreshLadybugFiles')?.addEventListener('click', () => loadLadybugFiles());
-
-    async function loadLadybugFiles() {
-        const container = document.getElementById('ladybugFilesContainer');
-        if (!container) return;
-
-        container.innerHTML = '<div class="text-center text-muted small py-4">' +
-            '<span class="spinner-border spinner-border-sm me-1"></span> Loading files...</div>';
-
-        try {
-            const resp = await fetch('/settings/ladybugdb/files', { credentials: 'same-origin' });
-            const data = await resp.json();
-
-            if (!data.success) {
-                container.innerHTML = '<div class="text-muted small py-3">' +
-                    '<i class="bi bi-exclamation-triangle text-warning me-1"></i> ' +
-                    escapeHtmlSettings(data.message || 'Could not list files') + '</div>';
-                return;
-            }
-
-            if (!data.files || data.files.length === 0) {
-                container.innerHTML = '<div class="text-muted small py-3 text-center">' +
-                    '<i class="bi bi-folder"></i> No files in <code>' +
-                    escapeHtmlSettings(data.base_dir) + '</code></div>';
-                ladybugFilesLoaded = true;
-                return;
-            }
-
-            let html = '<div class="table-responsive">' +
-                '<table class="table table-sm table-hover align-middle mb-0">' +
-                '<thead><tr>' +
-                    '<th class="ps-3">Name</th>' +
-                    '<th class="text-end" style="width:7rem;">Size</th>' +
-                    '<th class="text-end" style="width:13rem;">Last Modified</th>' +
-                    '<th class="text-end pe-3" style="width:3rem;"></th>' +
-                '</tr></thead><tbody>';
-
-            data.files.forEach(f => {
-                const icon = f.is_dir
-                    ? '<i class="bi bi-folder-fill text-warning me-1"></i>'
-                    : '<i class="bi bi-file-earmark me-1 text-secondary"></i>';
-                const deleteBtn = '<button type="button" class="btn btn-sm btn-outline-danger border-0 ladybug-delete-btn" ' +
-                    'data-name="' + escapeHtmlSettings(f.name) + '" title="Delete ' + escapeHtmlSettings(f.name) + '">' +
-                    '<i class="bi bi-trash"></i></button>';
-                html += '<tr>' +
-                    '<td class="ps-3 font-monospace">' + icon + escapeHtmlSettings(f.name) + '</td>' +
-                    '<td class="text-end text-muted small">' + escapeHtmlSettings(f.size_display) + '</td>' +
-                    '<td class="text-end text-muted small">' + escapeHtmlSettings(f.modified_display) + '</td>' +
-                    '<td class="text-end pe-3">' + deleteBtn + '</td>' +
-                '</tr>';
-            });
-
-            html += '</tbody></table></div>';
-            container.innerHTML = html;
-            ladybugFilesLoaded = true;
-
-            container.querySelectorAll('.ladybug-delete-btn').forEach(btn => {
-                btn.addEventListener('click', () => deleteLadybugFile(btn.dataset.name));
-            });
-        } catch (e) {
-            console.error('Error loading Graph DB files:', e);
-            container.innerHTML = '<div class="text-danger small py-3">' +
-                '<i class="bi bi-x-circle me-1"></i> Error loading files: ' +
-                escapeHtmlSettings(e.message) + '</div>';
-        }
-    }
-
-    async function deleteLadybugFile(name) {
-        const confirmed = await showConfirmDialog({
-            title: 'Delete Graph File',
-            message: 'Delete "' + name + '" from local storage? This cannot be undone.',
-            confirmText: 'Delete',
-            confirmClass: 'btn-danger',
-            icon: 'trash'
-        });
-        if (!confirmed) return;
-
-        try {
-            const resp = await fetch('/settings/ladybugdb/files/' + encodeURIComponent(name), {
-                method: 'DELETE',
-                credentials: 'same-origin'
-            });
-            const data = await resp.json();
-            if (data.success) {
-                showNotification(data.message, 'success', 2000);
-                await loadLadybugFiles();
-            } else {
-                showNotification('Error: ' + data.message, 'error');
-            }
-        } catch (e) {
-            showNotification('Error deleting file: ' + e.message, 'error');
-        }
-    }
 
     // =====================================================================
     //  GLOBAL SAVE BUTTON – warehouse, global prefs, CloudFetch, Graph DB
@@ -1169,22 +1050,7 @@ document.addEventListener('DOMContentLoaded', function () {
             }
         }
 
-        // 4. Save CloudFetch toggle
-        const cloudFetchToggle = document.getElementById('cloudFetchEnabled');
-        if (cloudFetchToggle) {
-            try {
-                const resp = await fetch('/settings/save-cloud-fetch', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    credentials: 'same-origin',
-                    body: JSON.stringify({ use_cloud_fetch: !!cloudFetchToggle.checked })
-                });
-                const r = await resp.json();
-                if (!r.success) errors.push('CloudFetch: ' + r.message);
-            } catch (e) { errors.push('CloudFetch: ' + e.message); }
-        }
-
-        // 5. Graph DB engine + JSON config (same tab; top Save only)
+        // 4. Graph DB engine + JSON config (same tab; top Save only)
         await saveGraphDbSettings(errors);
 
         btn.disabled = false;

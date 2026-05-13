@@ -89,8 +89,8 @@ class TripleStoreBackend(ABC):
     # ------------------------------------------------------------------
     # Named query methods with default SQL implementations.
     #
-    # SQL-based backends (Delta) inherit these defaults.
-    # Non-SQL backends (LadybugDB) override with native queries.
+    # SQL-based backends (Delta, Lakebase Postgres) inherit these defaults.
+    # Future non-SQL engines (Cypher, Gremlin) override with native queries.
     # ------------------------------------------------------------------
 
     @staticmethod
@@ -300,8 +300,8 @@ class TripleStoreBackend(ABC):
         *seed_where* is a SQL WHERE clause (including the ``WHERE`` keyword)
         applied to the seed subquery.  Used by SQL-based backends.
 
-        *search* and *entity_type* are structured parameters for backends
-        (e.g. LadybugDB/Cypher) that cannot use raw SQL fragments.
+        *search* and *entity_type* are structured parameters for future
+        non-SQL backends (Cypher, Gremlin) that cannot use raw SQL fragments.
 
         Returns rows with ``entity`` and ``min_lvl`` columns.
         """
@@ -421,7 +421,7 @@ class TripleStoreBackend(ABC):
 
     # ------------------------------------------------------------------
     # Reasoning methods — default SQL implementations.
-    # Non-SQL backends (LadybugDB) override with native queries.
+    # Future non-SQL engines (Cypher, Gremlin) override with native queries.
     # ------------------------------------------------------------------
 
     def transitive_closure(
@@ -539,8 +539,9 @@ class TripleStoreBackend(ABC):
           and whose **object** starts with *cohort_uri_prefix*.
 
         Default implementation issues a single SQL ``DELETE`` covering
-        both cases.  Cypher backends override with a ``MATCH ... DELETE``
-        pair.  Returns the number of rows deleted (best-effort).
+        both cases.  Future Cypher backends would override with a
+        ``MATCH ... DELETE`` pair.  Returns the number of rows deleted
+        (best-effort).
         """
         if not cohort_uri_prefix:
             return 0
