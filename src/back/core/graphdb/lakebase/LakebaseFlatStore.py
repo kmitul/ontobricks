@@ -171,7 +171,13 @@ class LakebaseFlatStore(LakebaseBase):
         with self._cursor() as cur:
             _companion_ddl.ensure_companion(cur, self._schema, companion)
 
-    def ensure_synced_union_view(self, name: str) -> None:
+    def ensure_synced_union_view(
+        self,
+        name: str,
+        *,
+        wait_s: int = 30,
+        poll_interval_s: float = 2.0,
+    ) -> None:
         """Create the union view once the ``_sync`` table exists (after Lakeflow snapshot).
 
         The ``_sync`` table is placed by Lakebase in the Postgres schema that
@@ -180,6 +186,11 @@ class LakebaseFlatStore(LakebaseBase):
         (e.g. registry schema ``ontobricks`` vs graph schema ``ontobricks_graph``),
         the ``_sync`` reference is schema-qualified so the DDL is independent of
         the active ``search_path``.
+
+        After the Lakeflow pipeline reaches ONLINE there can be a short lag before
+        the Postgres ``_sync`` table becomes visible.  This method polls for the
+        table's existence up to *wait_s* seconds before giving up so that transient
+        propagation delays do not fail the entire DT build.
         """
         if not self.is_synced:
             return
@@ -192,8 +203,49 @@ class LakebaseFlatStore(LakebaseBase):
             if sync_pg_schema != self._schema
             else synced_bare
         )
+
+        # Poll until the _sync table is visible in Postgres (propagation lag after ONLINE).
+        import time as _time
+
+        deadline = _time.time() + max(1, int(wait_s))
+        attempt = 0
+        while True:
+            attempt += 1
+            with self._cursor() as cur:
+                exists = self._sync_table_exists(cur, sync_pg_schema, synced_bare)
+            if exists:
+                break
+            remaining = deadline - _time.time()
+            if remaining <= 0:
+                logger.warning(
+                    "ensure_synced_union_view: _sync table %r not found in schema %r "
+                    "after %ds — proceeding anyway (CREATE VIEW will fail if still missing)",
+                    synced_bare,
+                    sync_pg_schema,
+                    wait_s,
+                )
+                break
+            logger.info(
+                "ensure_synced_union_view: _sync table %r not yet visible (attempt %d) "
+                "— retrying in %.1fs",
+                synced_bare,
+                attempt,
+                poll_interval_s,
+            )
+            _time.sleep(min(poll_interval_s, remaining))
+
         with self._cursor() as cur:
             _companion_ddl.ensure_union_view(cur, view, synced, companion)
+
+    @staticmethod
+    def _sync_table_exists(cur: Any, schema: str, table: str) -> bool:
+        """Return True if *schema.table* is visible to the current Postgres session."""
+        cur.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_schema = %s AND table_name = %s LIMIT 1",
+            (schema, table),
+        )
+        return cur.fetchone() is not None
 
     def ensure_synced_layout(self, name: str) -> None:
         """Create the writable companion and the union view if they do not exist.
