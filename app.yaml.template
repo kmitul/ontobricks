@@ -82,12 +82,14 @@ env:
   # to run normally on the Unity Catalog Volume backend.
   #
   # LAKEBASE_SCHEMA must always be set explicitly (it is NOT injected
-  # by the Apps platform).  LAKEBASE_DATABASE and LAKEBASE_BRANCH are
+  # by the Apps platform).  LAKEBASE_PROJECT, LAKEBASE_DATABASE and LAKEBASE_BRANCH are
   # only resolved at runtime when PGHOST/PGDATABASE are absent (local
   # dev without a bound database resource); in production the platform-
   # injected PG* vars take precedence and these are informational only.
   - name: LAKEBASE_SCHEMA
     value: "${APP_LAKEBASE_SCHEMA}"
+  - name: LAKEBASE_PROJECT
+    value: "${APP_LAKEBASE_PROJECT}"
   - name: LAKEBASE_DATABASE
     value: "${APP_LAKEBASE_DATABASE}"
   - name: LAKEBASE_BRANCH

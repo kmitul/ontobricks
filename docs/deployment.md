@@ -105,7 +105,7 @@ PGDATABASE=ontobricks_registry
 PGUSER=you@example.com   # your Databricks email locally; SP id in Apps
 LAKEBASE_SCHEMA=ontobricks_registry
 # Optional — pin the Lakebase project id to skip the endpoint walk
-# DATABASE_INSTANCE_NAME=ontobricks-app
+# LAKEBASE_PROJECT=ontobricks-app
 
 # Optional
 DATABRICKS_CATALOG=main

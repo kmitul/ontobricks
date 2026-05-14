@@ -142,7 +142,7 @@ DATABRICKS_APP_PORT=8000
 > JWT minted by `LakebaseAuth` via `POST /api/2.0/postgres/credentials`
 > using your `DATABRICKS_TOKEN`. The helper auto-discovers the Lakebase
 > project / branch / endpoint from `PGHOST` — pin it explicitly with
-> `DATABASE_INSTANCE_NAME=<project-id>` if you want to skip the
+> `LAKEBASE_PROJECT=<project-id>` if you want to skip the
 > discovery round-trip.
 
 ## Running the Application
@@ -483,7 +483,7 @@ OntoBricks uses environment variables for configuration, making it easy to deplo
 | `PGPORT` | Postgres port. | `5432` |
 | `PGDATABASE` | Postgres database name (the `datname`, e.g. `ontobricks_registry` or `databricks_postgres`). | *(auto-injected)* |
 | `PGUSER` | Postgres role — for local dev, your Databricks email; in Apps, the SP client id. | *(auto-injected)* |
-| `DATABASE_INSTANCE_NAME` | Optional override that pins the Lakebase **project id** (`projects/<this>/...`) so `LakebaseAuth` skips the endpoint walk. | *(auto-discovered from `PGHOST`)* |
+| `LAKEBASE_PROJECT` | Optional override that pins the Lakebase **project id** (`projects/<this>/...`) so `LakebaseAuth` skips the endpoint walk. | *(auto-discovered from `PGHOST`)* |
 
 The Postgres password is **never** set via env var — `LakebaseAuth`
 mints a short-lived JWT via `POST /api/2.0/postgres/credentials` using

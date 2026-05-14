@@ -204,6 +204,9 @@ export APP_LAKEBASE_SCHEMA="${APP_LAKEBASE_SCHEMA:-$LAKEBASE_REGISTRY_SCHEMA}"
 # overridden at runtime by PGDATABASE when the database resource is bound).
 export APP_LAKEBASE_DATABASE="${APP_LAKEBASE_DATABASE:-$LAKEBASE_REGISTRY_SCHEMA}"
 
+# Lakebase project (autoscaling instance name) — informational in deployed app.
+export APP_LAKEBASE_PROJECT="${APP_LAKEBASE_PROJECT:-$LAKEBASE_PROJECT}"
+
 # Lakebase branch deployed to (used by LakebaseAuth host-resolution
 # fallback when PGHOST is not injected — e.g. local dev without binding).
 export APP_LAKEBASE_BRANCH="${APP_LAKEBASE_BRANCH:-$LAKEBASE_BRANCH}"

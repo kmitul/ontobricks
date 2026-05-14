@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     # In production the Apps runtime resolves the branch implicitly via
     # the ``database`` resource binding (PGHOST already encodes the
     # branch endpoint). In local dev, set this together with
-    # ``DATABASE_INSTANCE_NAME`` so ``LakebaseAuth`` can resolve the
+    # ``LAKEBASE_PROJECT`` so ``LakebaseAuth`` can resolve the
     # endpoint hostname without requiring the raw URL.
     lakebase_branch: str = "main"
 
@@ -94,7 +94,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
         env_file=".env",
         # ``PGHOST``/``PGPORT``/``PGDATABASE``/``PGUSER`` and
-        # ``DATABASE_INSTANCE_NAME`` are consumed directly via
+        # ``LAKEBASE_PROJECT`` are consumed directly via
         # ``os.environ`` by :class:`back.core.databricks.LakebaseAuth`
         # — they don't need to be Pydantic fields. ``ignore`` keeps
         # the .env file tolerant of extra Lakebase-related entries.

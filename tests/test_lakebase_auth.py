@@ -49,7 +49,7 @@ def autoscaling_pg_env(monkeypatch):
     monkeypatch.setenv("PGPORT", "5432")
     monkeypatch.setenv("PGDATABASE", "fake_pg_database_for_unit_tests")
     monkeypatch.setenv("PGUSER", _FAKE_PGUSER)  # pragma: allowlist secret  # ggignore
-    monkeypatch.delenv("DATABASE_INSTANCE_NAME", raising=False)
+    monkeypatch.delenv("LAKEBASE_PROJECT", raising=False)
     monkeypatch.delenv("PGAPPNAME", raising=False)
 
 

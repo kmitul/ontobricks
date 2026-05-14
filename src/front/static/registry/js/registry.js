@@ -78,6 +78,18 @@ document.addEventListener('DOMContentLoaded', function () {
             const el = document.getElementById(id);
             if (el) el.textContent = val || '—';
         };
+        set('lbRegistryProject', lb.project);
+        const projectHint = document.getElementById('lbRegistryProjectHint');
+        if (projectHint) {
+            if (lb.project) {
+                projectHint.style.display = '';
+                projectHint.innerHTML = lb.host
+                    ? '<i class="bi bi-link-45deg me-1"></i>from app resource binding'
+                    : '<i class="bi bi-link-45deg me-1"></i>from LAKEBASE_PROJECT';
+            } else {
+                projectHint.style.display = 'none';
+            }
+        }
         set('lbRegistryBranch', lb.branch);
         const branchHint = document.getElementById('lbRegistryBranchHint');
         if (branchHint) {

@@ -68,7 +68,7 @@ class LakebaseAuth:
 
     1. ``PGHOST`` — auto-injected by Databricks Apps at runtime; or
        set directly in ``.env`` if you already know the endpoint URL.
-    2. ``DATABASE_INSTANCE_NAME`` + ``LAKEBASE_BRANCH`` — resolved via
+    2. ``LAKEBASE_PROJECT`` + ``LAKEBASE_BRANCH`` — resolved via
        the Postgres API (``/api/2.0/postgres/projects/<name>/branches``
        → endpoints). Use these in local ``.env`` to select a branch
        without looking up the endpoint hostname manually.
@@ -109,7 +109,7 @@ class LakebaseAuth:
         if not host:
             raise ValidationError(
                 "Cannot determine Lakebase host: set PGHOST (or both "
-                "DATABASE_INSTANCE_NAME and LAKEBASE_BRANCH) in .env, "
+                "LAKEBASE_PROJECT and LAKEBASE_BRANCH) in .env, "
                 "or bind a Lakebase 'database' resource to the Databricks App."
             )
         return host
@@ -143,13 +143,13 @@ class LakebaseAuth:
         Accepts either:
         - ``PGHOST`` + ``PGUSER`` (auto-injected by Databricks Apps, or set
           directly in ``.env`` with the raw endpoint URL), or
-        - ``DATABASE_INSTANCE_NAME`` + ``LAKEBASE_BRANCH`` + ``PGUSER``
+        - ``LAKEBASE_PROJECT`` + ``LAKEBASE_BRANCH`` + ``PGUSER``
           (local dev with branch-based host resolution).
         """
         has_user = bool(os.environ.get("PGUSER"))
         has_host = bool(os.environ.get("PGHOST"))
         has_branch_coords = bool(
-            os.environ.get("DATABASE_INSTANCE_NAME")
+            os.environ.get("LAKEBASE_PROJECT")
             and os.environ.get("LAKEBASE_BRANCH")
         )
         return has_user and (has_host or has_branch_coords)
@@ -209,7 +209,7 @@ class LakebaseAuth:
     def _resolve_host_from_project_branch(self) -> Optional[str]:
         """Resolve the Lakebase endpoint hostname from project + branch name.
 
-        Reads ``DATABASE_INSTANCE_NAME`` (project) and ``LAKEBASE_BRANCH``
+        Reads ``LAKEBASE_PROJECT`` (project) and ``LAKEBASE_BRANCH``
         (branch) from the environment, then walks
         ``GET /api/2.0/postgres/projects/<project>/branches`` →
         ``GET /api/2.0/postgres/<branch_path>/endpoints`` to find the
@@ -221,7 +221,7 @@ class LakebaseAuth:
         any configuration gap or API error — the caller falls back to a
         descriptive ``ValidationError``.
         """
-        project = os.environ.get("DATABASE_INSTANCE_NAME", "").strip()
+        project = os.environ.get("LAKEBASE_PROJECT", "").strip()
         branch_name = os.environ.get("LAKEBASE_BRANCH", "").strip()
         if not project or not branch_name:
             return None

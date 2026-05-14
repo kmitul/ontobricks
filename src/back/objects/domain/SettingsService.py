@@ -432,7 +432,7 @@ class SettingsService:
         Accepts two binding styles:
         - Apps runtime: ``PGHOST``/``PGPORT``/``PGDATABASE``/``PGUSER``
           auto-injected by the platform.
-        - Local dev: ``DATABASE_INSTANCE_NAME`` + ``LAKEBASE_BRANCH``
+        - Local dev: ``LAKEBASE_PROJECT`` + ``LAKEBASE_BRANCH``
           + ``LAKEBASE_DATABASE`` + ``PGUSER`` — endpoint resolved via
           the Postgres API by :class:`LakebaseAuth`.
 
@@ -455,6 +455,7 @@ class SettingsService:
 
         if not auth.is_available:
             return {
+                "project": "",
                 "host": "",
                 "port": "",
                 "branch": "",
@@ -472,6 +473,7 @@ class SettingsService:
         host = os.environ.get("PGHOST", "")
         bound_db = os.environ.get("PGDATABASE", "") or os.environ.get("LAKEBASE_DATABASE", "")
         branch = os.environ.get("LAKEBASE_BRANCH", "")
+        project = os.environ.get("LAKEBASE_PROJECT", "")
         effective_db = override_db or bound_db
 
         # Single probe: returns ``{initialized, populated}``. ``populated``
@@ -486,6 +488,7 @@ class SettingsService:
         #     already holds data from a previous migration.
         status = SettingsService._lakebase_schema_status(rcfg)
         return {
+            "project": project,
             "host": host,
             "port": os.environ.get("PGPORT", "5432"),
             "branch": branch,
@@ -1206,7 +1209,7 @@ class SettingsService:
             "success": False,
             "reason": "",
             "message": "",
-            "host": os.environ.get("PGHOST", "") or os.environ.get("DATABASE_INSTANCE_NAME", "")
+            "host": os.environ.get("PGHOST", "") or os.environ.get("LAKEBASE_PROJECT", "")
                     + ("/" + os.environ.get("LAKEBASE_BRANCH", "") if os.environ.get("LAKEBASE_BRANCH") else ""),
             "port": port,
             "bound_database": bound_db or "",
@@ -1219,7 +1222,7 @@ class SettingsService:
         if not auth.is_available:
             out["reason"] = "no_binding"
             out["message"] = (
-                "Lakebase not available — set DATABASE_INSTANCE_NAME + LAKEBASE_BRANCH + PGUSER "
+                "Lakebase not available — set LAKEBASE_PROJECT + LAKEBASE_BRANCH + PGUSER "
                 "in .env (local), or bind a Databricks App postgres resource (deployed)."
             )
             return out
@@ -1488,7 +1491,7 @@ class SettingsService:
 
             auth = get_lakebase_auth()
             if not auth.is_available:
-                out["message"] = "Lakebase resource not bound (DATABASE_INSTANCE_NAME/LAKEBASE_BRANCH/PGUSER missing)"
+                out["message"] = "Lakebase resource not bound (LAKEBASE_PROJECT/LAKEBASE_BRANCH/PGUSER missing)"
                 return out
             psycopg, _ = _require_psycopg()
             kwargs = auth.kwargs(application_name="ontobricks-schema-list")
