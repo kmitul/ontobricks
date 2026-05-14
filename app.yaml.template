@@ -80,8 +80,18 @@ env:
   # Without that resource binding the env vars stay unset and the
   # admin UI keeps the Lakebase backend disabled — the app continues
   # to run normally on the Unity Catalog Volume backend.
+  #
+  # LAKEBASE_SCHEMA must always be set explicitly (it is NOT injected
+  # by the Apps platform).  LAKEBASE_DATABASE and LAKEBASE_BRANCH are
+  # only resolved at runtime when PGHOST/PGDATABASE are absent (local
+  # dev without a bound database resource); in production the platform-
+  # injected PG* vars take precedence and these are informational only.
   - name: LAKEBASE_SCHEMA
     value: "${APP_LAKEBASE_SCHEMA}"
+  - name: LAKEBASE_DATABASE
+    value: "${APP_LAKEBASE_DATABASE}"
+  - name: LAKEBASE_BRANCH
+    value: "${APP_LAKEBASE_BRANCH}"
   # MLflow — ensure traces are persisted to the workspace tracking server.
   - name: MLFLOW_TRACKING_URI
     value: "${APP_MLFLOW_TRACKING_URI}"

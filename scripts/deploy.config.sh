@@ -200,5 +200,13 @@ export APP_REGISTRY_VOLUME="${APP_REGISTRY_VOLUME:-$DEFAULT_APP_REGISTRY_VOLUME}
 # `bootstrap-lakebase-perms.sh`).
 export APP_LAKEBASE_SCHEMA="${APP_LAKEBASE_SCHEMA:-$LAKEBASE_REGISTRY_SCHEMA}"
 
+# Lakebase Postgres database (same value as the schema by convention;
+# overridden at runtime by PGDATABASE when the database resource is bound).
+export APP_LAKEBASE_DATABASE="${APP_LAKEBASE_DATABASE:-$LAKEBASE_REGISTRY_SCHEMA}"
+
+# Lakebase branch deployed to (used by LakebaseAuth host-resolution
+# fallback when PGHOST is not injected — e.g. local dev without binding).
+export APP_LAKEBASE_BRANCH="${APP_LAKEBASE_BRANCH:-$LAKEBASE_BRANCH}"
+
 # MLflow tracking URI (`databricks` = workspace tracking server).
 export APP_MLFLOW_TRACKING_URI="${APP_MLFLOW_TRACKING_URI:-$DEFAULT_APP_MLFLOW_TRACKING_URI}"
