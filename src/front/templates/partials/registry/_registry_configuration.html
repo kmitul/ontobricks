@@ -8,11 +8,34 @@
 
     <div class="d-flex align-items-center gap-3 mb-3">
         <div class="flex-grow-1">
-            <label class="form-label fw-semibold small mb-1" id="registryLocationLabelText">Registry Location</label>
-            <div class="d-flex align-items-center gap-2 flex-wrap">
-                <span id="registryLocationLabel" class="font-monospace bg-light px-3 py-2 rounded border">
-                    <i class="bi bi-hourglass-split text-muted"></i> <span class="text-muted">Loading...</span>
-                </span>
+            <label class="form-label fw-semibold small mb-2" id="registryLocationLabelText">Registry Catalog &amp; Volume</label>
+
+            <div class="row g-2 small mb-1">
+                <div class="col-12">
+                    <div class="d-flex align-items-start gap-2 bg-light border rounded px-3 py-2">
+                        <i class="bi bi-diagram-3 text-primary mt-1 flex-shrink-0"></i>
+                        <div class="flex-grow-1">
+                            <div class="fw-semibold" id="registrySchemaLabel">
+                                <span class="text-muted"><i class="bi bi-hourglass-split me-1"></i>Loading…</span>
+                            </div>
+                            <div class="text-muted" style="font-size:0.78rem;">Unity Catalog schema — triples views &amp; registry tables</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-12">
+                    <div class="d-flex align-items-start gap-2 bg-light border rounded px-3 py-2">
+                        <i class="bi bi-archive text-secondary mt-1 flex-shrink-0"></i>
+                        <div class="flex-grow-1">
+                            <div class="fw-semibold font-monospace" id="registryVolumeLabel">
+                                <span class="text-muted">—</span>
+                            </div>
+                            <div class="text-muted" style="font-size:0.78rem;">Unity Catalog Volume — binary domain document uploads</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex align-items-center gap-2 mt-2">
                 <button type="button" class="btn btn-sm btn-outline-success" id="btnInitRegistry" style="display:none;" title="Create volume and /domains folder">
                     <i class="bi bi-plus-circle me-1"></i> Initialize
                 </button>

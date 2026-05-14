@@ -23,7 +23,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // =====================================================================
 
     async function loadRegistryConfig() {
-        const label = document.getElementById('registryLocationLabel');
+        const label = document.getElementById('registrySchemaLabel');
 
         try {
             const resp = await fetch('/settings/registry', { credentials: 'same-origin' });
@@ -240,30 +240,25 @@ document.addEventListener('DOMContentLoaded', function () {
     });
 
     function updateRegistryLabel() {
-        const label = document.getElementById('registryLocationLabel');
-        const initBtn = document.getElementById('btnInitRegistry');
-        // ``registryLocationLabel`` only exists on the Settings → Registry
-        // tab. ``registry.js`` is also loaded on the Registry/Browse page,
-        // where the element is absent. Bail out cleanly so the rest of
-        // ``loadRegistryConfig`` (and the domain list refresh it triggers)
-        // keeps running instead of crashing on ``label.innerHTML = …``.
-        if (!label) return;
+        const schemaLabel = document.getElementById('registrySchemaLabel');
+        const volumeLabel = document.getElementById('registryVolumeLabel');
+        const initBtn     = document.getElementById('btnInitRegistry');
+        // These elements only exist on the Settings → Registry tab.
+        if (!schemaLabel && !volumeLabel) return;
 
         if (registryCfg.catalog && registryCfg.schema) {
-            const volPath = registryCfg.catalog + '.' + registryCfg.schema + '.' + (registryCfg.volume || 'OntoBricksRegistry');
             const lb = registryCfg.lakebase || {};
-            const effectiveDb = lb.effective_database || lb.database || 'lakebase';
-            const dbLabel = lb.bound
-                ? effectiveDb + '.' + (registryCfg.lakebase_schema || lb.schema || 'ontobricks_registry')
-                : (registryCfg.lakebase_schema || 'ontobricks_registry') + ' (Lakebase resource not bound)';
-            const overrideTag = (lb.database_override && lb.database_override !== lb.database)
-                ? ' <span class="badge bg-info-subtle text-info-emphasis ms-1" title="Database override active">override</span>'
-                : '';
-            label.innerHTML = '<i class="bi bi-database text-primary me-1"></i> <strong>' + escapeHtml(dbLabel) + '</strong>' + overrideTag
-                + ' <span class="text-muted small ms-2">binaries: ' + escapeHtml(volPath) + '</span>';
+            // Schema line: catalog.schema
+            const schemaPath = escapeHtml(registryCfg.catalog + '.' + registryCfg.schema);
+            if (schemaLabel) schemaLabel.innerHTML = '<span class="font-monospace">' + schemaPath + '</span>';
+            // Volume line: volume name only
+            const volName = registryCfg.volume || 'OntoBricksRegistry';
+            if (volumeLabel) volumeLabel.innerHTML = '<span class="font-monospace">' + escapeHtml(volName) + '</span>';
             if (initBtn) initBtn.style.display = registryCfg.configured ? 'none' : '';
         } else {
-            label.innerHTML = '<i class="bi bi-exclamation-triangle text-warning me-1"></i> <span class="text-muted">Not configured</span>';
+            const empty = '<span class="text-muted">—</span>';
+            if (schemaLabel) schemaLabel.innerHTML = '<i class="bi bi-exclamation-triangle text-warning me-1"></i><span class="text-muted">Not configured</span>';
+            if (volumeLabel) volumeLabel.innerHTML = empty;
             if (initBtn) initBtn.style.display = 'none';
         }
     }
