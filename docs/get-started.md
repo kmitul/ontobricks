@@ -7,9 +7,25 @@ By the end of this guide you will have OntoBricks running locally and connected 
 Before you begin, ensure you have:
 
 - **Python 3.10+** installed on your system
-- **Databricks workspace** access
-- **Personal Access Token** from Databricks
-- **SQL Warehouse ID** from Databricks
+- **Databricks workspace** access (Databricks Apps must be enabled)
+- **Personal Access Token** from Databricks (local dev) or service-principal auth (Databricks Apps)
+- **SQL Warehouse** in the workspace (you will need its ID for local dev)
+- **Databricks Lakebase Autoscaling** project + branch + Postgres database — used for
+  the domain registry (domains, versions, permissions, schedules, global config)
+  and for the Graph DB triple store. Required since **v0.4.0**.
+  Provisioned Lakebase instances are **not** supported.
+- **Unity Catalog Volume** — reserved for binary artefacts (`documents/`
+  uploads — domain-scoped attachments imported by the ontology designer).
+  The same catalog/schema that hosts the volume is also used by
+  OntoBricks for the Delta triplestore VIEWs (`triplestore_<domain>_v<n>`).
+- **`psql`** (libpq client) on `PATH` for the Lakebase permission
+  bootstrap scripts. On macOS: `brew install libpq && brew link --force libpq`.
+
+> **Lakebase note.** OntoBricks targets **Lakebase Autoscaling** exclusively.
+> Create a project + branch from the Databricks workspace UI (Compute → Postgres
+> → New project) or via `databricks api post /api/2.0/postgres/projects …`,
+> then create at least one Postgres database in it. Note the `db-…`
+> resource id from `databricks postgres list-databases "projects/<id>/branches/<branch>" -o json` — you'll need it for the deployment bundle.
 
 ## Installation
 
@@ -45,9 +61,17 @@ python -m venv .venv
 source .venv/bin/activate  # On macOS/Linux
 # .venv\Scripts\activate   # On Windows
 
-# Install dependencies
-pip install -e .
+# Install dependencies (Lakebase Postgres driver is mandatory since v0.4.0)
+uv sync --extra lakebase
+# Or with pip:
+pip install -e ".[lakebase]"
 ```
+
+> **Why `--extra lakebase`?** Since v0.4.0 the domain registry lives in
+> Lakebase Postgres, so `psycopg[binary]` and `psycopg-pool` are required
+> at runtime. They are declared as optional in `pyproject.toml`
+> (`[project.optional-dependencies] lakebase`) so volume-only forks can
+> opt out, but every standard deployment must install them.
 
 ## Configuration
 
@@ -87,12 +111,39 @@ DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
 DATABRICKS_TOKEN=dapi1234567890abcdef
 DATABRICKS_SQL_WAREHOUSE_ID=abc123def456
 
-# Optional Configuration
+# Unity Catalog (Optional — defaults the table picker)
 DATABRICKS_CATALOG=main
 DATABRICKS_SCHEMA=default
+
+# Registry Volume — required if you want the binary-artefact volume
+# to be available in local dev. The volume must already exist in UC.
+REGISTRY_CATALOG=<your-catalog>
+REGISTRY_SCHEMA=<your-schema>
+REGISTRY_VOLUME=OntoBricksRegistry
+
+# Lakebase (Required since v0.4.0 for the domain registry)
+# When deployed as a Databricks App with a `database` resource bound,
+# Databricks auto-injects PG* — leave these unset in that case.
+# For local dev, point them at your Lakebase Autoscaling endpoint:
+PGHOST=ep-<id>.database.<region>.cloud.databricks.com
+PGPORT=5432
+PGDATABASE=ontobricks_registry
+PGUSER=you@example.com
+# Postgres password is minted at runtime via `LakebaseAuth.password()`,
+# do NOT set PGPASSWORD here.
+LAKEBASE_SCHEMA=ontobricks_registry
+
+# Optional Configuration
 SECRET_KEY=your-secret-key-here
 DATABRICKS_APP_PORT=8000
 ```
+
+> **Lakebase auth in local dev.** The Postgres password is a short-lived
+> JWT minted by `LakebaseAuth` via `POST /api/2.0/postgres/credentials`
+> using your `DATABRICKS_TOKEN`. The helper auto-discovers the Lakebase
+> project / branch / endpoint from `PGHOST` — pin it explicitly with
+> `DATABASE_INSTANCE_NAME=<project-id>` if you want to skip the
+> discovery round-trip.
 
 ## Running the Application
 
@@ -139,7 +190,16 @@ When running as a Databricks App, OntoBricks enforces role-based access control:
 
 To manage permissions, you must:
 1. Have **CAN_MANAGE** set on the app in the Databricks UI (Compute → Apps → ontobricks → Permissions)
-2. The app's service principal must have **CAN_MANAGE** on itself (see [Deployment Guide](deployment.md#permission-management-setup))
+2. The app's service principal must have **CAN_MANAGE** on itself — `make deploy` runs `scripts/bootstrap-app-permissions.sh` automatically; otherwise run `make bootstrap-perms`. See the [Deployment Guide](deployment.md#4-permission-management).
+3. The app's service principal must have **USAGE + DML** on the Lakebase
+   registry / graph / sync schemas — `scripts/deploy.sh` runs
+   `scripts/bootstrap-lakebase-perms.sh` automatically on the
+   `dev-lakebase` target; otherwise run `make bootstrap-lakebase`. See
+   the [Deployment Guide §2 Step 5b](deployment.md#step-5b--lakebase-schema-grants-target-dev-lakebase-only).
+4. The app's service principal must have **Unity Catalog** privileges
+   on the registry catalog/schema/volume **and** on every source table
+   referenced by an R2RML mapping. See the [Deployment Guide §3](deployment.md#3-unity-catalog-permissions-for-the-service-principal)
+   for the exact grants.
 
 In local development mode, there are no restrictions — all users have full admin access.
 
@@ -152,6 +212,12 @@ In local development mode, there are no restrictions — all users have full adm
 3. Select a **SQL Warehouse** from the dropdown
 4. Click **Test Connection** to verify
 5. You should see "Connection successful"
+6. Open **Settings → Registry**. On a fresh Lakebase database the
+   registry tables don't exist yet — click **Initialize**. This runs
+   the schema migration in `LAKEBASE_SCHEMA` (default
+   `ontobricks_registry`) and creates the registry Volume if missing.
+   Then run `make bootstrap-lakebase` once to grant the app SP
+   USAGE/DML on the freshly-created schema.
 
 ### 2. Design an Ontology (Visual Designer)
 
@@ -407,6 +473,21 @@ OntoBricks uses environment variables for configuration, making it easy to deplo
 | `REGISTRY_VOLUME` | Volume name for domain storage (local dev fallback) | `OntoBricksRegistry` |
 | `DATABRICKS_TRIPLESTORE_TABLE` | Default triple store table (catalog.schema.table) | *(none)* |
 | `DATABRICKS_SQL_WAREHOUSE_ID_DEFAULT` | Fallback SQL Warehouse ID for MCP/API calls | *(none)* |
+
+#### Lakebase (Required since v0.4.0)
+
+| Variable | Description | Default / Source |
+|----------|-------------|------------------|
+| `LAKEBASE_SCHEMA` | Postgres schema used by the registry inside `PGDATABASE`. Mirror the bundle's `lakebase_registry_schema`. | `ontobricks_registry` |
+| `PGHOST` | Lakebase Autoscaling endpoint (`ep-<id>.database.<region>.cloud.databricks.com`). | *(auto-injected by the `database` Apps resource binding)* |
+| `PGPORT` | Postgres port. | `5432` |
+| `PGDATABASE` | Postgres database name (the `datname`, e.g. `ontobricks_registry` or `databricks_postgres`). | *(auto-injected)* |
+| `PGUSER` | Postgres role — for local dev, your Databricks email; in Apps, the SP client id. | *(auto-injected)* |
+| `DATABASE_INSTANCE_NAME` | Optional override that pins the Lakebase **project id** (`projects/<this>/...`) so `LakebaseAuth` skips the endpoint walk. | *(auto-discovered from `PGHOST`)* |
+
+The Postgres password is **never** set via env var — `LakebaseAuth`
+mints a short-lived JWT via `POST /api/2.0/postgres/credentials` using
+the workspace token (locally) or the SP token (in Apps).
 
 #### MLflow / Agent Tracing
 

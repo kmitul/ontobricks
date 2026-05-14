@@ -131,11 +131,9 @@ class TestGetDetailedValidation:
         dt = {
             "view_exists": None,
             "local_lbug_exists": False,
-            "registry_lbug_exists": None,
             "view_table": "c.s.t",
             "graph_name": "g",
             "local_lbug_path": "",
-            "registry_lbug_path": "",
             "last_update": None,
             "last_built": None,
             "snapshot_table": "",

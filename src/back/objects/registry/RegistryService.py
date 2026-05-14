@@ -8,11 +8,12 @@ construction, domain CRUD, version management) behind a single
 The registry is **Lakebase-only**: JSON-shaped registry data (domains,
 versions, permissions, schedules, global config) lives in the Postgres
 schema named by ``lakebase_schema``. The Unity Catalog Volume triplet
-(``catalog``/``schema``/``volume``) is kept around solely for binary
-artefacts — ``documents/`` and ``*.lbug.tar.gz`` archives. The
-historical JSON-on-Volume backend was removed in v0.4.0; existing
-deployments must run ``scripts/migrate-registry-to-lakebase.sh`` once
-to copy their data into Lakebase.
+(``catalog``/``schema``/``volume``) is kept around solely for
+domain-scoped binary artefacts — the ``documents/`` uploads imported by
+the ontology designer. The historical JSON-on-Volume backend was
+removed in v0.4.0; existing deployments must run
+``scripts/migrate-registry-to-lakebase.sh`` once to copy their data
+into Lakebase.
 
 New registries store domain folders under ``/domains/``.  For backward
 compatibility, if the new folder does not exist but the legacy
@@ -77,8 +78,9 @@ class RegistryCfg:
     no token re-mint is required.
 
     The ``catalog``/``schema``/``volume`` triplet locates the Unity
-    Catalog Volume where binary artefacts (``documents/``,
-    ``*.lbug.tar.gz``) live; it is not used for registry rows.
+    Catalog Volume where domain-scoped binary artefacts (the
+    ``documents/`` uploads imported by the ontology designer) live; it
+    is not used for registry rows.
     """
 
     catalog: str
@@ -278,9 +280,9 @@ class RegistryService:
 
     JSON-shaped data (domains, versions, permissions, schedules,
     global config) is routed through the Lakebase
-    :class:`RegistryStore`. Binary artifacts (``documents/`` and
-    ``*.lbug.tar.gz``) stay on the Unity Catalog Volume and are
-    managed via :attr:`uc`.
+    :class:`RegistryStore`. Domain-scoped binary artefacts (the
+    ``documents/`` uploads imported by the ontology designer) stay on
+    the Unity Catalog Volume and are managed via :attr:`uc`.
     """
 
     def __init__(
@@ -362,10 +364,11 @@ class RegistryService:
 
     # -- path builders (Unity Catalog Volume side) -------------------
     #
-    # Binary artefacts (``documents/`` and ``*.lbug.tar.gz``) live on
-    # the Unity Catalog Volume regardless of where the JSON registry
-    # rows live (now always Lakebase). The path builders below produce
-    # those Volume paths and are intentionally store-agnostic — they
+    # Domain-scoped binary artefacts (the ``documents/`` uploads
+    # imported by the ontology designer) live on the Unity Catalog
+    # Volume regardless of where the JSON registry rows live (now
+    # always Lakebase). The path builders below produce those Volume
+    # paths and are intentionally store-agnostic — they
     # talk to :class:`VolumeFileService` directly via :attr:`uc`.
 
     def volume_root(self) -> str:
@@ -433,7 +436,7 @@ class RegistryService:
         """Bring the registry up to a usable state (idempotent).
 
         *client* is a ``DatabricksClient`` used to ensure the UC Volume
-        for binary artefacts (``documents/``, ``*.lbug.tar.gz``)
+        for domain-scoped binary artefacts (the ``documents/`` uploads)
         exists. Registry rows live in Lakebase Postgres.
 
         Callers should construct this service with
@@ -656,8 +659,8 @@ class RegistryService:
     def delete_domain(self, folder: str) -> List[str]:
         """Delete a domain (rows + binary directory) and return any errors."""
         errors: List[str] = list(self._store.delete_domain(folder))
-        # Always wipe the binary directory: documents/ + *.lbug.tar.gz
-        # live on the Unity Catalog Volume.
+        # Always wipe the binary directory (documents/ uploads live on
+        # the Unity Catalog Volume).
         try:
             errors.extend(self.recursive_delete(self.domain_path(folder)))
         except Exception as exc:  # noqa: BLE001
@@ -749,9 +752,9 @@ class RegistryService:
         ok, msg = self._store.delete_version(folder, version)
         if not ok:
             return False, msg
-        # Also remove the binary version dir on the Volume (documents/,
-        # *.lbug.tar.gz). Errors are non-fatal — the JSON side is the
-        # source of truth.
+        # Also remove the binary version dir on the Volume (documents/
+        # uploads). Errors are non-fatal — the JSON side is the source
+        # of truth.
         try:
             errors = self.recursive_delete(self.version_path(folder, version))
             if errors:
@@ -923,16 +926,13 @@ class RegistryService:
             domains/{folder}/v1.json
             domains/{folder}/v2.json
             domains/{folder}/documents/
-            domains/{folder}/ontobricks_*.lbug.tar.gz
 
         Versioned layout (new)::
 
             domains/{folder}/V1/V1.json
             domains/{folder}/V1/documents/
-            domains/{folder}/V1/ontobricks_*.lbug.tar.gz
             domains/{folder}/V2/V2.json
             domains/{folder}/V2/documents/
-            domains/{folder}/V2/ontobricks_*.lbug.tar.gz
 
         Returns ``(ok, message)``.
         """
@@ -943,15 +943,12 @@ class RegistryService:
             return False, f"Cannot list {base}: {msg}"
 
         flat_versions: List[str] = []
-        lbug_files: List[Dict[str, str]] = []
         has_documents = False
 
         for item in items:
             name = item["name"]
             if name.startswith("v") and name.endswith(".json"):
                 flat_versions.append(name[1:-5])  # "v1.json" -> "1"
-            elif name.endswith(".lbug.tar.gz"):
-                lbug_files.append({"name": name, "path": item["path"]})
             elif name == "documents" and item.get("is_directory"):
                 has_documents = True
 
@@ -979,28 +976,6 @@ class RegistryService:
             d_ok, d_msg = self._uc.delete_file(old_file)
             if not d_ok:
                 errors.append(f"Delete old v{ver}.json: {d_msg}")
-
-        for lbug in lbug_files:
-            name = lbug["name"]
-            matched_version: Optional[str] = None
-            for ver in flat_versions:
-                if f"_V{ver}" in name:
-                    matched_version = ver
-                    break
-            target_version = matched_version or latest_version
-            old_path = f"{base}/{name}"
-            new_path = f"{self.version_path(folder, target_version)}/{name}"
-            r_ok, content, r_msg = self._uc.read_binary_file(old_path)
-            if not r_ok:
-                errors.append(f"Read {name}: {r_msg}")
-                continue
-            w_ok, w_msg = self._uc.write_binary_file(new_path, content)
-            if not w_ok:
-                errors.append(f"Write {name}: {w_msg}")
-                continue
-            d_ok, d_msg = self._uc.delete_file(old_path)
-            if not d_ok:
-                errors.append(f"Delete old {name}: {d_msg}")
 
         if has_documents:
             src_docs = f"{base}/documents"

@@ -13,7 +13,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from back.core.errors import InfrastructureError, ValidationError
+from back.core.errors import (
+    InfrastructureError,
+    OperationCancelledError,
+    ValidationError,
+)
 from back.core.graphdb.lakebase.SyncedTableManager import SyncedTableManager
 from databricks.sdk.service.pipelines import StartUpdateCause
 
@@ -280,6 +284,56 @@ class TestRefreshAndWait:
         mgr = _make_manager(client)
         with pytest.raises(InfrastructureError, match="FAILED"):
             mgr.wait_for_completion("cat.sch.tab", timeout_s=10)
+
+    def test_wait_for_completion_aborts_when_cancel_check_returns_true(self):
+        """Cancel signal between polls must surface as OperationCancelledError."""
+        client = MagicMock()
+        client.database.get_synced_database_table.return_value = _synced(
+            state="PROVISIONING"
+        )
+        mgr = _make_manager(client)
+        with pytest.raises(OperationCancelledError, match="Cancelled"):
+            mgr.wait_for_completion(
+                "cat.sch.tab",
+                timeout_s=60,
+                cancel_check=lambda: True,
+            )
+
+    def test_wait_for_completion_with_update_id_aborts_on_cancel(self):
+        """Cancellation while polling a tracked pipeline update must abort."""
+        client = MagicMock()
+        client.database.get_synced_database_table.return_value = _synced(
+            state="ONLINE_NO_PENDING_UPDATE"
+        )
+        # get_update keeps reporting RUNNING — the cancel check is the only escape.
+        running = SimpleNamespace(
+            update=SimpleNamespace(state=SimpleNamespace(name="RUNNING"))
+        )
+        client.pipelines.get_update.return_value = running
+        mgr = _make_manager(client)
+        with pytest.raises(OperationCancelledError):
+            mgr.wait_for_completion(
+                "cat.sch.tab",
+                timeout_s=60,
+                pipeline_update_id="upd-1",
+                cancel_check=lambda: True,
+            )
+
+    def test_wait_for_completion_swallows_cancel_check_exceptions(self):
+        """A broken cancel_check must not poison the wait loop."""
+        client = MagicMock()
+        client.database.get_synced_database_table.return_value = _synced(
+            state="ONLINE"
+        )
+        mgr = _make_manager(client)
+
+        def bad_check():
+            raise RuntimeError("downstream blew up")
+
+        state = mgr.wait_for_completion(
+            "cat.sch.tab", timeout_s=60, cancel_check=bad_check
+        )
+        assert state == "ONLINE"
 
     def test_wait_for_completion_raises_on_timeout(self, monkeypatch):
         from itertools import chain, repeat

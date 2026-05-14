@@ -372,13 +372,7 @@ class HomeService:
             "lakebase_table": dt_existence.get("lakebase_table", ""),
             "lakebase_synced_uc": dt_existence.get("lakebase_synced_uc", ""),
             "lakebase_sync_mode": dt_existence.get("lakebase_sync_mode", "app_managed"),
-            "registry_lbug_exists": dt_existence.get("registry_lbug_exists"),
-            "registry_lbug_path": dt_existence.get("registry_lbug_path", ""),
-            "registry_check_error": dt_existence.get("registry_check_error"),
             "graph_engine": dt_existence.get("graph_engine", "lakebase"),
-            "registry_archive_applicable": dt_existence.get(
-                "registry_archive_applicable", False
-            ),
             "last_built": last_build,
             "last_update": last_update,
             "has_data": ts_st.get("has_data", False),

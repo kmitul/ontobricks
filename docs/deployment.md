@@ -52,8 +52,13 @@ Deployment uses **Databricks Asset Bundles (DAB)** — a declarative, repeatable
 - Python 3.10 or higher
 - `uv` package manager (recommended) or `pip`
 - Git
-- Access to a Databricks workspace
-- Databricks CLI installed and authenticated
+- Access to a Databricks workspace (Databricks Apps must be enabled)
+- Databricks CLI installed (`>= 0.250.0`) and authenticated
+- **Lakebase Autoscaling** project + branch + Postgres database (the
+  registry backend since v0.4.0). Provisioned Lakebase instances are
+  **not** supported — see `LakebaseAuth` for the reasoning.
+- `psql` (libpq client) on `PATH` for `scripts/bootstrap-lakebase-perms.sh`
+  (`brew install libpq && brew link --force libpq` on macOS).
 
 ### Installation
 
@@ -66,9 +71,10 @@ cd OntoBricks
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Create virtual environment and install dependencies
+# `--extra lakebase` is required since v0.4.0 — the registry runs on Lakebase Postgres.
 uv venv
 source .venv/bin/activate
-uv sync
+uv sync --extra lakebase
 ```
 
 ### Environment Variables
@@ -87,6 +93,20 @@ DATABRICKS_HOST=https://your-workspace.cloud.databricks.com
 DATABRICKS_TOKEN=your-personal-access-token
 DATABRICKS_SQL_WAREHOUSE_ID=your-warehouse-id
 
+# Registry / triplestore — UC namespace (volume must already exist)
+REGISTRY_CATALOG=<your-catalog>
+REGISTRY_SCHEMA=<your-schema>
+REGISTRY_VOLUME=OntoBricksRegistry
+
+# Lakebase (required since v0.4.0 — points at your Autoscaling endpoint)
+PGHOST=ep-<id>.database.<region>.cloud.databricks.com
+PGPORT=5432
+PGDATABASE=ontobricks_registry
+PGUSER=you@example.com   # your Databricks email locally; SP id in Apps
+LAKEBASE_SCHEMA=ontobricks_registry
+# Optional — pin the Lakebase project id to skip the endpoint walk
+# DATABASE_INSTANCE_NAME=ontobricks-app
+
 # Optional
 DATABRICKS_CATALOG=main
 DATABRICKS_SCHEMA=default
@@ -94,6 +114,10 @@ DATABRICKS_SCHEMA=default
 # MLflow — persist agent traces to your workspace (recommended)
 MLFLOW_TRACKING_URI=databricks
 ```
+
+> `PGPASSWORD` is intentionally **not** in this list. `LakebaseAuth`
+> mints a short-lived JWT via `POST /api/2.0/postgres/credentials`
+> on every connection.
 
 ### Run Locally
 
@@ -128,7 +152,10 @@ Deployment uses **Databricks Asset Bundles** to deploy both the main app and the
 | SQL Warehouse | A running SQL Warehouse in the workspace |
 | Apps feature | Databricks Apps must be enabled on the workspace |
 | Unity Catalog | A catalog, schema, and volume for the project registry |
+| **Lakebase Autoscaling** | A Lakebase Autoscaling **project + branch + Postgres database** (the registry backend since v0.4.0). Resolve the `db-…` resource id via `databricks postgres list-databases "projects/<project>/branches/<branch>" -o json` and put it in `scripts/deploy.config.sh > DEFAULT_LAKEBASE_DATABASE_RESOURCE_SEGMENT`. Provisioned tier is **not** supported. |
+| `psql` on PATH | Required by `scripts/bootstrap-lakebase-perms.sh` (`brew install libpq && brew link --force libpq` on macOS). |
 | UC grants for the app SP | The app runs as a service principal. See [§3 Unity Catalog Permissions for the Service Principal](#3-unity-catalog-permissions-for-the-service-principal) for the exact grants required on the registry catalog/schema, the registry volume, and your source tables. |
+| Lakebase grants for the app SP | `CAN_USE` on the Lakebase instance + `USAGE/DML` on the registry / graph / sync schemas. Bootstrap with `scripts/bootstrap-lakebase-perms.sh` (`make bootstrap-lakebase`) — `scripts/deploy.sh` runs it automatically on the `dev-lakebase` target. |
 
 ### Step 1 — Authenticate
 
@@ -139,48 +166,70 @@ databricks auth login --host https://<workspace>.cloud.databricks.com
 databricks current-user me
 ```
 
-### Step 2 — Customize `app.yaml` (workspace-specific values)
+### Step 2 — Customize `scripts/deploy.config.sh` (single source of truth)
 
-Edit the workspace-specific values in `app.yaml` (main app) and `src/mcp-server/app.yaml` (MCP server):
+**Important.** `app.yaml` is **generated** at deploy time from
+`app.yaml.template` + `scripts/deploy.config.sh` by
+`scripts/_render-app-yaml.py` (called from `scripts/deploy.sh`). The
+generated file is `.gitignored`. **Do not edit `app.yaml` by hand** —
+edit `scripts/deploy.config.sh` instead.
 
-| Variable | File | Description | How to find it |
-|----------|------|-------------|----------------|
-| `DATABRICKS_SQL_WAREHOUSE_ID_DEFAULT` | `app.yaml` | Fallback SQL Warehouse ID | **SQL Warehouses** > select warehouse > **Connection details** |
-| `DATABRICKS_TRIPLESTORE_TABLE` | `app.yaml` | Default triple store table | Choose or create a `catalog.schema.table` for triple storage |
-| `ONTOBRICKS_URL` | `src/mcp-server/app.yaml` | Main app URL | Set after first deploy — `databricks apps get <main-app-name>` (must match `resources.apps.ontobricks_dev_app.name` in your `databricks.yml`; this guide uses the placeholder **`ontobricks-XXX`**) |
+Edit the workspace-specific defaults in `scripts/deploy.config.sh`:
 
-> **Note** — the deployed app name no longer needs an explicit `ONTOBRICKS_APP_NAME` env var. The runtime auto-detects it from the Databricks-Apps-injected `DATABRICKS_APP_NAME` (your bundle’s main app `name`, written as **`ontobricks-XXX`** in this guide, or e.g. `ontobricks` in another deployment). Set `ONTOBRICKS_APP_NAME` only as an explicit override (e.g. in `.env` for local development).
+| Variable | Maps to | Description |
+|----------|---------|-------------|
+| `DEFAULT_APP_NAME` | `databricks.yml > var.app_name` and `DATABRICKS_APP_NAME` at runtime | Deployed name of the FastAPI app (e.g. `ontobricks-030`). |
+| `DEFAULT_MCP_APP_NAME` | `databricks.yml > var.mcp_app_name` | Deployed name of the MCP companion (must start with `mcp-`). |
+| `DEFAULT_DAB_TARGET` | `databricks bundle deploy -t <target>` | `dev-lakebase` (default) or `dev` (volume-only fallback). |
+| `DEFAULT_WAREHOUSE_ID` | `app.yaml > DATABRICKS_SQL_WAREHOUSE_ID_DEFAULT` + the `sql-warehouse` bundle resource | **SQL Warehouses** → your warehouse → **Connection details**. |
+| `DEFAULT_REGISTRY_CATALOG` / `_SCHEMA` / `_VOLUME` | Bundle `volume` resource (`uc_securable: <cat>.<schema>.<volume>`) | UC namespace that hosts the binary-artefact volume + the triplestore VIEW. |
+| `DEFAULT_LAKEBASE_PROJECT` | `databricks.yml > var.lakebase_project` | Autoscaling **project id** (final segment of `projects/<id>`). |
+| `DEFAULT_LAKEBASE_BRANCH` | `databricks.yml > var.lakebase_branch` | Branch id (e.g. `production`). |
+| `DEFAULT_LAKEBASE_DATABASE_RESOURCE_SEGMENT` | `databricks.yml > var.lakebase_database_resource_segment` | **`db-…` resource id** from the Postgres API `name` field — **not** `datname` / `status.postgres_database`. Resolve with `databricks postgres list-databases "projects/<project>/branches/<branch>" -o json`. |
+| `DEFAULT_LAKEBASE_REGISTRY_SCHEMA` | `databricks.yml > var.lakebase_registry_schema` + `LAKEBASE_SCHEMA` at runtime | Postgres schema for the registry (e.g. `ontobricks_registry`). |
+| `DEFAULT_APP_TRIPLESTORE_TABLE` | `app.yaml > DATABRICKS_TRIPLESTORE_TABLE` | Fully-qualified `catalog.schema.table` fallback for MCP/session-less paths. |
+| `DEFAULT_APP_MLFLOW_TRACKING_URI` | `app.yaml > MLFLOW_TRACKING_URI` | `databricks` (persists traces to the workspace) or empty for local-only. |
 
-The `REGISTRY_CATALOG`, `REGISTRY_SCHEMA`, and `REGISTRY_VOLUME` static variables are **only needed for local development**. In a deployed app the `volume` resource binding injects the registry path automatically.
+Each `DEFAULT_*` is consumed via `export FOO="${FOO:-$DEFAULT_FOO}"`,
+so you can override any value for a single run without editing the
+file:
 
-### Step 3 — Customize `databricks.yml` (bundle variables)
-
-Update the default variable values to match your workspace:
-
-```yaml
-variables:
-  warehouse_id:
-    default: "<your-warehouse-id>"
-  registry_catalog:
-    default: "<your-catalog>"
-  registry_schema:
-    default: "<your-schema>"
-  registry_volume:
-    default: "registry"   # volume name segment; full UC path is catalog.schema.volume
+```bash
+WAREHOUSE_ID=abc123def456 make deploy
+LAKEBASE_PROJECT=other-project LAKEBASE_BRANCH=staging make deploy
 ```
 
-**Lakebase (only if you use target `dev-lakebase`)** — the bundle also defines:
+`scripts/_render-app-yaml.py` substitutes `${APP_*}` placeholders in
+`app.yaml.template` into the generated `app.yaml`.
+
+### Step 3 — `databricks.yml` (bundle variables)
+
+`databricks.yml` declares the bundle resources and the `variables:`
+contract, but the **values** come from `scripts/deploy.config.sh` —
+`scripts/deploy.sh` passes each as `--var=key=value` so the YAML
+defaults are only used by `databricks bundle validate` outside the
+deploy script. The variables are:
 
 | Variable | Purpose |
 |----------|---------|
-| `lakebase_project` | Autoscaling **project id** (segment after `projects/`). |
-| `lakebase_branch` | Branch id (e.g. `production`). |
-| `lakebase_database_resource_segment` | **Must** be the `db-…` suffix from the Postgres API `name` field — **not** the Postgres `datname` / `status.postgres_database` string. Resolve it with `databricks postgres list-databases "projects/<project>/branches/<branch>" -o json` (see comments in `databricks.yml` for `jq` / `python3` one-liners). |
-| `lakebase_registry_schema` | OntoBricks registry **schema** inside Postgres; mirror the same value as `LAKEBASE_SCHEMA` in `app.yaml` and `src/mcp-server/app.yaml`. |
+| `app_name` / `mcp_app_name` | Deployed app names (final URL segments). |
+| `warehouse_id` | SQL Warehouse ID for the `sql-warehouse` resource. |
+| `registry_catalog` / `registry_schema` / `registry_volume` | UC triple for the `uc_securable` volume resource. |
+| `lakebase_project` / `lakebase_branch` | Lakebase Autoscaling project + branch (path segments). |
+| `lakebase_database_resource_segment` | **`db-…` resource id** for the Apps `postgres.database` path (see Step 2). |
+| `lakebase_registry_schema` | Postgres schema mirrored into `LAKEBASE_SCHEMA` in `app.yaml`. |
 
-Do **not** set `lakebase_database_resource_segment` to the schema name `ontobricks_registry` unless you intentionally bind a dedicated Postgres database whose **resource** id is that string (rare). This repository’s Lakebase binding targets a dedicated Postgres database whose `datname` is `ontobricks_registry`, with registry tables in the schema `ontobricks_registry`. Older single-DB layouts used `databricks_postgres` as `datname` with the same schema name inside it — use `list-databases` to see which `db-…` row matches your bind.
+> **Do not** set `lakebase_database_resource_segment` to the schema
+> name `ontobricks_registry` unless you intentionally bind a dedicated
+> Postgres database whose **resource** id is that string (rare). The
+> default `dev-lakebase` setup binds a dedicated Postgres database
+> whose `datname` is `ontobricks_registry`, with registry tables in
+> the schema `ontobricks_registry`. Older single-DB layouts used
+> `databricks_postgres` as `datname` with the same schema name inside
+> it — use `list-databases` to see which `db-…` row matches your bind.
 
-Update the `permissions` section to grant `CAN_MANAGE` to the deploying user:
+Update the `permissions` section in `databricks.yml` to grant `CAN_MANAGE`
+to the deploying user:
 
 ```yaml
 permissions:
@@ -189,6 +238,23 @@ permissions:
   - level: CAN_USE
     group_name: users
 ```
+
+> **MCP `ONTOBRICKS_URL`.** `src/mcp-server/app.yaml` still holds the
+> main app URL the MCP companion calls back into (`ONTOBRICKS_URL`).
+> This is the only `app.yaml` you edit by hand. Update it after the
+> first deploy with `databricks apps get <main-app> -o json | python3
+> -c "import sys,json; print(json.load(sys.stdin)['url'])"`.
+
+> **Note** — the deployed app name no longer needs an explicit
+> `ONTOBRICKS_APP_NAME` env var. The runtime auto-detects it from the
+> Databricks-Apps-injected `DATABRICKS_APP_NAME`. Set
+> `ONTOBRICKS_APP_NAME` only as an explicit override (e.g. in `.env`
+> for local development).
+
+The `REGISTRY_CATALOG`, `REGISTRY_SCHEMA`, and `REGISTRY_VOLUME`
+static variables in `app.yaml` are **only used for local development /
+MCP fallback**. In a deployed app the `volume` resource binding
+injects `REGISTRY_VOLUME_PATH` automatically.
 
 ### Step 4 — Validate the bundle
 
@@ -229,22 +295,59 @@ Or run `scripts/deploy.sh --bind -t dev-lakebase` to bind the **main** app only 
 
 ### Step 5b — Lakebase schema grants (target `dev-lakebase` only)
 
-Databricks does **not** auto-grant the app service principal `USAGE` on your registry schema. After the app can reach Lakebase, run **`scripts/bootstrap-lakebase-perms.sh`** as a human user that owns the schema (or has `GRANT OPTION`).
+Databricks does **not** auto-grant the app service principal anything
+on Lakebase Postgres objects, even when the `postgres` resource
+binding is wired correctly. `scripts/deploy.sh` calls
+`scripts/bootstrap-lakebase-perms.sh` automatically on the
+`dev-lakebase` target (you can re-run it manually any time — it is
+idempotent).
 
-Script defaults use Postgres database **`ontobricks_registry`** (dedicated `datname` matching the bundle bind) and schema **`ontobricks_registry`**:
+OntoBricks uses **up to three Postgres schemas** that each need a
+GRANT bootstrap. `scripts/deploy.sh` walks through them automatically:
+
+| Schema | When to bootstrap | Variable in `scripts/deploy.config.sh` |
+|--------|-------------------|----------------------------------------|
+| Registry (`ontobricks_registry`) | After **Settings → Registry → Initialize** has created the schema | `LAKEBASE_BOOTSTRAP_SCHEMA` (tracks `LAKEBASE_REGISTRY_SCHEMA`) |
+| Graph DB (`ontobricks_graph`) | After the **first Digital Twin Build** has created the schema | `LAKEBASE_GRAPH_SCHEMA` |
+| Sync (e.g. `ontobricks`) | After the **first Lakeflow snapshot** has created the schema — only when `graph_engine_config.sync_mode = managed_synced` | `LAKEBASE_SYNC_SCHEMA` (leave empty to skip) |
+
+The script grants:
+
+1. `CAN_USE` on the Lakebase database instance (control-plane).
+2. `USAGE + CREATE` on the Postgres schema.
+3. `SELECT / INSERT / UPDATE / DELETE` on every existing table.
+4. `USAGE / SELECT / UPDATE` on every existing sequence (bigserial PKs).
+5. The same set via `ALTER DEFAULT PRIVILEGES` so future tables inherit.
+
+Manual invocation:
 
 ```bash
+# Registry schema
 scripts/bootstrap-lakebase-perms.sh \
   -i "<lakebase_project>" \
+  -b "<lakebase_branch>" \
   -d ontobricks_registry \
   -s ontobricks_registry \
   -a ontobricks-XXX \
   -a mcp-ontobricks
+
+# Graph schema (same instance, run after first Build)
+scripts/bootstrap-lakebase-perms.sh \
+  -i "<lakebase_project>" -b "<lakebase_branch>" \
+  -d ontobricks_registry -s ontobricks_graph \
+  -a ontobricks-XXX -a mcp-ontobricks
 ```
 
-If your Lakebase instance still uses the shared default database **`databricks_postgres`** with the registry schema **`ontobricks_registry`** inside it, pass **`-d databricks_postgres`**.
+If the Graph DB lives on a **different** Lakebase project/branch/database
+than the registry, set `LAKEBASE_GRAPH_PROJECT` / `LAKEBASE_GRAPH_BRANCH` /
+`LAKEBASE_GRAPH_DATABASE` in `scripts/deploy.config.sh` so the second and
+third grants target the correct instance.
 
-Defaults inside the script are aligned with `databricks.yml` (`ontobricks-app`, `ontobricks_registry` database, both apps); override **`-i` / `-d` / `-s` / `-a`** when your workspace differs. The script is idempotent.
+If your Lakebase instance still uses the shared default database
+**`databricks_postgres`** (older single-DB layouts) with the registry
+schema **`ontobricks_registry`** inside it, pass **`-d databricks_postgres`**
+and set `LAKEBASE_BOOTSTRAP_DATABASE=databricks_postgres` in
+`scripts/deploy.config.sh`.
 
 ### Step 6 — Start the apps
 
@@ -305,76 +408,85 @@ scripts/deploy.sh --bind             # bind main app resource key → existing a
 
 ### `app.yaml` Configuration — Full Reference
 
-The `app.yaml` file controls the Databricks App runtime. Here is every variable explained:
+> **Generated file — do not edit `app.yaml` directly.** It is rendered
+> at deploy time from `app.yaml.template` + `scripts/deploy.config.sh`
+> by `scripts/_render-app-yaml.py`. Edit the config, then run
+> `make deploy` (or `make render-app-yaml` to only re-render).
+
+The rendered `app.yaml` controls the Databricks App runtime. Here is
+every variable explained:
 
 ```yaml
-# Command to start the app — uv resolves dependencies from pyproject.toml
+# Command to start the app — uv resolves dependencies from pyproject.toml.
+# `--extra lakebase` installs psycopg[binary] + psycopg-pool so the
+# Lakebase backend works on every target (Volume-only deploys carry a
+# ~10MB unused wheel but the Lakebase code paths stay gated by
+# LakebaseAuth.is_available).
 command:
   - "uv"
   - "run"
+  - "--extra"
+  - "lakebase"
   - "python"
   - "run.py"
 
 env:
   # ── SQL Warehouse ──────────────────────────────────────────────
-  # Injected from the sql-warehouse resource binding (configured in the Apps UI)
+  # Injected from the sql-warehouse resource binding (databricks.yml).
   - name: DATABRICKS_SQL_WAREHOUSE_ID
     valueFrom: sql-warehouse
 
-  # Static fallback warehouse ID for MCP / session-less API calls
-  # (when no resource binding is available)
+  # Static fallback warehouse ID for MCP / session-less API calls.
   - name: DATABRICKS_SQL_WAREHOUSE_ID_DEFAULT
-    value: "<your-warehouse-id>"
+    value: "${APP_SQL_WAREHOUSE_FALLBACK}"
 
   # ── Unity Catalog defaults ─────────────────────────────────────
   - name: DATABRICKS_CATALOG
-    value: "main"
+    value: "${APP_DATABRICKS_CATALOG}"
   - name: DATABRICKS_SCHEMA
-    value: "default"
+    value: "${APP_DATABRICKS_SCHEMA}"
 
-  # ── Triple store fallback ──────────────────────────────────────
-  # Fully-qualified Delta triple store table used when no project session
-  # is active (e.g. MCP API calls). Format: catalog.schema.table
+  # ── Triple store fallback (Delta) ──────────────────────────────
   - name: DATABRICKS_TRIPLESTORE_TABLE
-    value: "<catalog>.<schema>.<table>"
+    value: "${APP_TRIPLESTORE_TABLE}"
 
   # ── Project Registry ───────────────────────────────────────────
-  # Injected from the volume resource binding.
-  # The Databricks Apps runtime sets this to /Volumes/<catalog>/<schema>/<volume>.
-  # When present, it overrides the three static REGISTRY_* variables below.
+  # Injected from the volume resource binding (uc_securable in
+  # databricks.yml). The path looks like /Volumes/<cat>/<schema>/<vol>.
   - name: REGISTRY_VOLUME_PATH
     valueFrom: volume
-
-  # Static fallbacks — used for local development and MCP when no
-  # volume resource is bound.
+  # Static fallbacks — used by MCP when no volume resource is bound.
   - name: REGISTRY_CATALOG
-    value: "<your-catalog>"
+    value: "${APP_REGISTRY_CATALOG}"
   - name: REGISTRY_SCHEMA
-    value: "<your-schema>"
+    value: "${APP_REGISTRY_SCHEMA}"
   - name: REGISTRY_VOLUME
-    value: "OntoBricksRegistry"
+    value: "${APP_REGISTRY_VOLUME}"
 
-  # ── Permission Management ──────────────────────────────────────
-  # The deployed app name is auto-detected from the Databricks-Apps-
-  # injected DATABRICKS_APP_NAME env var (matches the resource name in
-  # databricks.yml automatically). Set ONTOBRICKS_APP_NAME only as an
-  # explicit override (e.g. in .env for local development).
+  # ── Lakebase ───────────────────────────────────────────────────
+  # On dev-lakebase the DAB binds a `database` resource. The Apps
+  # runtime then auto-injects PGHOST / PGPORT / PGDATABASE / PGUSER /
+  # PGAPPNAME / PGSSLMODE — no explicit valueFrom mapping needed.
+  # The Postgres password is minted at runtime by LakebaseAuth via
+  # POST /api/2.0/postgres/credentials.
+  - name: LAKEBASE_SCHEMA
+    value: "${APP_LAKEBASE_SCHEMA}"
 
   # ── MLflow ─────────────────────────────────────────────────────
-  # Persist agent traces to the workspace tracking server
   - name: MLFLOW_TRACKING_URI
-    value: "databricks"
+    value: "${APP_MLFLOW_TRACKING_URI}"
 
 # ── Resources ──────────────────────────────────────────────────
-# Configure these resources in the Databricks Apps UI after deployment.
-# Once bound, the corresponding Settings UI controls are locked (read-only).
+# Declared here for local validation, but the BOUND resources at
+# runtime come from databricks.yml (which uses uc_securable for the
+# volume so the bundle owns the UC ACL).
 resources:
   - name: sql-warehouse
     description: "SQL Warehouse for executing queries and metadata operations"
     sql_warehouse:
       permission: CAN_USE
   - name: volume
-    description: "Unity Catalog Volume for the OntoBricks project registry"
+    description: "Unity Catalog Volume for the OntoBricks domain registry"
     volume:
       permission: CAN_READ_WRITE
 ```
@@ -621,41 +733,38 @@ databricks sql query "CREATE VOLUME IF NOT EXISTS main.ontobricks.OntoBricksRegi
 
 ### 5.3 — Update configuration files
 
-**`databricks.yml`** — update the variable defaults:
+**`scripts/deploy.config.sh`** — this is the single source of truth.
+Update the `DEFAULT_*` literals (or override via env) for the new
+workspace:
 
-```yaml
-variables:
-  warehouse_id:
-    default: "<new-warehouse-id>"
-  registry_catalog:
-    default: "<new-catalog>"
-  registry_schema:
-    default: "<new-schema>"
-  registry_volume:
-    default: "registry"
-  # If you use dev-lakebase — set Lakebase project/branch and the db-… segment from list-databases
-  lakebase_project:
-    default: "<lakebase-project-id>"
-  lakebase_branch:
-    default: "production"
-  lakebase_database_resource_segment:
-    default: "<db-… from databricks postgres list-databases … -o json>"
-  lakebase_registry_schema:
-    default: "ontobricks_registry"
+```bash
+DEFAULT_APP_NAME="ontobricks-XXX"             # your main app name
+DEFAULT_MCP_APP_NAME="mcp-ontobricks"
+DEFAULT_DAB_TARGET="dev-lakebase"
+
+DEFAULT_WAREHOUSE_ID="<new-warehouse-id>"
+DEFAULT_REGISTRY_CATALOG="<new-catalog>"
+DEFAULT_REGISTRY_SCHEMA="<new-schema>"
+DEFAULT_REGISTRY_VOLUME="registry"
+
+DEFAULT_LAKEBASE_PROJECT="<lakebase-project-id>"
+DEFAULT_LAKEBASE_BRANCH="production"
+DEFAULT_LAKEBASE_DATABASE_RESOURCE_SEGMENT="<db-… from list-databases>"
+DEFAULT_LAKEBASE_REGISTRY_SCHEMA="ontobricks_registry"
+
+DEFAULT_APP_TRIPLESTORE_TABLE="<catalog>.<schema>.<triplestore_table>"
 ```
 
-Update the `permissions` section with the deploying user's email.
+`scripts/deploy.sh` will pass every `DEFAULT_*` value to
+`databricks bundle deploy` as a `--var=` override and render
+`app.yaml` from the template.
 
-**`app.yaml`** — update workspace-specific values:
+**`databricks.yml`** — only the structural bits change here.
+Update the `permissions:` section with the deploying user's email
+(the `variables:` defaults are overridden by `deploy.config.sh`).
 
-```yaml
-- name: DATABRICKS_SQL_WAREHOUSE_ID_DEFAULT
-  value: "<new-warehouse-id>"
-- name: DATABRICKS_TRIPLESTORE_TABLE
-  value: "<catalog>.<schema>.<triplestore_table>"
-```
-
-**`src/mcp-server/app.yaml`** — update the main app URL (after first deploy):
+**`src/mcp-server/app.yaml`** — update the main app URL after the
+first deploy:
 
 ```yaml
 - name: ONTOBRICKS_URL
@@ -707,18 +816,29 @@ databricks bundle run mcp_ontobricks_app -t dev-lakebase
 ```
 [ ] 1.  databricks auth login --host https://<new-workspace>
 [ ] 2.  Verify: databricks current-user me
-[ ] 3.  Create Unity Catalog resources (schema, volume)
-[ ] 4.  Update databricks.yml variables (warehouse_id, registry_*, and if using dev-lakebase: lakebase_*)
-[ ] 5.  Update databricks.yml permissions (your email)
-[ ] 6.  Update app.yaml (DATABRICKS_SQL_WAREHOUSE_ID_DEFAULT, DATABRICKS_TRIPLESTORE_TABLE, LAKEBASE_SCHEMA)
-[ ] 7.  databricks bundle validate -t dev-lakebase
-[ ] 8.  scripts/deploy.sh -t dev-lakebase   # or: databricks bundle deploy -t dev-lakebase
-[ ] 9.  Bind sql-warehouse and volume resources in the Apps UI (both apps: ontobricks-XXX, mcp-ontobricks)
-[ ] 10. If dev-lakebase: scripts/bootstrap-lakebase-perms.sh (see §2 Step 5b)
-[ ] 11. Grant UC privileges to each app's service principal (see §3):
-        registry USE CATALOG/USE SCHEMA/CREATE TABLE/CREATE VIEW +
+[ ] 3.  Create Unity Catalog resources (catalog, schema, volume)
+[ ] 4.  Create a Lakebase Autoscaling project + branch + Postgres database
+        Resolve the db-… resource id with:
+          databricks postgres list-databases \
+            "projects/<project>/branches/<branch>" -o json
+[ ] 5.  Edit scripts/deploy.config.sh:
+        - DEFAULT_APP_NAME / DEFAULT_MCP_APP_NAME
+        - DEFAULT_WAREHOUSE_ID
+        - DEFAULT_REGISTRY_CATALOG / _SCHEMA / _VOLUME
+        - DEFAULT_LAKEBASE_PROJECT / _BRANCH / _DATABASE_RESOURCE_SEGMENT / _REGISTRY_SCHEMA
+        - DEFAULT_APP_TRIPLESTORE_TABLE
+[ ] 6.  Update databricks.yml permissions (your email with CAN_MANAGE)
+[ ] 7.  make bundle-validate
+[ ] 8.  make deploy                # scripts/deploy.sh -t dev-lakebase
+[ ] 9.  Bind sql-warehouse, volume, postgres resources in the Apps UI
+        if the bundle bind didn't take (both apps: APP_NAME, MCP_APP_NAME)
+[ ] 10. Grant UC privileges to each app's service principal (see §3):
+        registry USE CATALOG / USE SCHEMA / CREATE TABLE / CREATE VIEW +
         volume READ/WRITE + source-table SELECT
-[ ] 12. Initialize registry (Settings > Registry > Initialize)
+[ ] 11. Open app → Settings → Registry → Initialize
+[ ] 12. Re-run make deploy (or scripts/bootstrap-lakebase-perms.sh) so the
+        registry / graph / sync schema GRANTs apply against the just-
+        created schemas
 [ ] 13. Verify both apps are RUNNING
 [ ] 14. Update ONTOBRICKS_URL in src/mcp-server/app.yaml with the main app URL
 [ ] 15. databricks bundle deploy -t dev-lakebase && databricks bundle run mcp_ontobricks_app -t dev-lakebase
@@ -1024,35 +1144,43 @@ Use this checklist when deploying OntoBricks from scratch on any workspace:
         [ ] A catalog you can use (e.g., main or your personal catalog)
         [ ] A schema within that catalog (e.g., ontobricks)
         [ ] A Volume for the project registry (e.g., OntoBricksRegistry)
-[ ] 4.  Update databricks.yml:
-        [ ] Variable defaults (warehouse_id, registry_*, and if dev-lakebase: lakebase_*)
-        [ ] Permissions (your email with CAN_MANAGE)
-[ ] 5.  Update app.yaml:
-        [ ] DATABRICKS_SQL_WAREHOUSE_ID_DEFAULT
-        [ ] DATABRICKS_TRIPLESTORE_TABLE
-        [ ] LAKEBASE_SCHEMA (must match lakebase_registry_schema when using Lakebase)
-        [ ] (local dev only) REGISTRY_CATALOG / REGISTRY_SCHEMA / REGISTRY_VOLUME
-[ ] 6.  Validate: databricks bundle validate -t dev-lakebase
-[ ] 7.  Deploy: scripts/deploy.sh -t dev-lakebase   (or databricks bundle deploy -t dev-lakebase)
-[ ] 8.  Bind sql-warehouse resource in the Apps UI (main + MCP apps)
-[ ] 9.  Bind volume resource to the registry UC Volume (both apps)
-[ ] 10. If dev-lakebase: run scripts/bootstrap-lakebase-perms.sh (see §2 Step 5b)
-[ ] 11. Grant Unity Catalog privileges to the app service principal (see §3):
+[ ] 4.  Lakebase Autoscaling project + branch + Postgres database created
+        (required since v0.4.0 — Provisioned tier is not supported).
+        Resolve the db-… resource id:
+          databricks postgres list-databases \
+            "projects/<project>/branches/<branch>" -o json
+[ ] 5.  psql available (brew install libpq && brew link --force libpq)
+[ ] 6.  Edit scripts/deploy.config.sh:
+        [ ] DEFAULT_APP_NAME / DEFAULT_MCP_APP_NAME
+        [ ] DEFAULT_WAREHOUSE_ID
+        [ ] DEFAULT_REGISTRY_CATALOG / _SCHEMA / _VOLUME
+        [ ] DEFAULT_LAKEBASE_PROJECT / _BRANCH / _DATABASE_RESOURCE_SEGMENT
+        [ ] DEFAULT_LAKEBASE_REGISTRY_SCHEMA (mirrored as LAKEBASE_SCHEMA in app.yaml)
+        [ ] DEFAULT_APP_TRIPLESTORE_TABLE
+[ ] 7.  Update databricks.yml permissions (your email with CAN_MANAGE)
+[ ] 8.  Validate:  make bundle-validate
+[ ] 9.  Deploy:    make deploy                  # runs scripts/deploy.sh -t dev-lakebase
+[ ] 10. Verify bundle bound sql-warehouse / volume / postgres on both apps
+        (UI: Compute > Apps > <app> > Resources). Re-bind manually if not.
+[ ] 11. Grant Unity Catalog privileges to each app service principal (see §3):
         [ ] Registry catalog: USE CATALOG
         [ ] Registry schema : USE SCHEMA + CREATE TABLE + CREATE VIEW
         [ ] Registry volume : READ VOLUME + WRITE VOLUME
         [ ] Each source catalog/schema referenced in R2RML mappings:
             USE CATALOG + USE SCHEMA + SELECT (per table or schema-wide)
-[ ] 12. make bootstrap-perms   (or scripts/bootstrap-app-permissions.sh ontobricks-XXX mcp-ontobricks)
-[ ] 13. Verify main app is RUNNING:
-          databricks apps get ontobricks-XXX
-[ ] 14. Initialize registry if the volume is empty:
-          Open app → Settings → Registry → Initialize
-[ ] 15. (If using MCP) Update ONTOBRICKS_URL in src/mcp-server/app.yaml:
-          databricks apps get ontobricks-XXX -o json | python3 -c "import sys,json; print(json.load(sys.stdin)['url'])"
-[ ] 16. (If using MCP) Redeploy and start MCP:
+[ ] 12. App self-permissions:
+        make bootstrap-perms
+        (already invoked by `make deploy`, but safe to re-run anytime.)
+[ ] 13. Open app URL → Settings → Registry → Initialize (creates the Postgres schema)
+[ ] 14. Re-run Lakebase GRANT bootstrap so the now-existing schemas pick up USAGE/DML:
+        make bootstrap-lakebase
+        (also runs as part of `make deploy`; idempotent.)
+[ ] 15. Verify main app is RUNNING:
+          databricks apps get <main-app>
+[ ] 16. (If using MCP) Update ONTOBRICKS_URL in src/mcp-server/app.yaml:
+          databricks apps get <main-app> -o json | python3 -c "import sys,json; print(json.load(sys.stdin)['url'])"
+[ ] 17. (If using MCP) Redeploy and start MCP:
           databricks bundle deploy -t dev-lakebase && databricks bundle run mcp_ontobricks_app -t dev-lakebase
-[ ] 17. (If using MCP) Bind MCP resources (same warehouse + volume)
 [ ] 18. (If using MCP) Verify in Databricks Playground
 ```
 

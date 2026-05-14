@@ -36,9 +36,10 @@ class Settings(BaseSettings):
         return self.databricks_sql_warehouse_id
 
     # Domain Registry (single Volume for all domains) — used solely for
-    # binary artifacts (documents/, *.lbug.tar.gz). Structured registry
-    # data (domains, versions, permissions, schedules, global config)
-    # lives in Lakebase as of v0.4.0.
+    # domain-scoped binary artefacts (the documents/ uploads imported
+    # by the ontology designer). Structured registry data (domains,
+    # versions, permissions, schedules, global config) lives in
+    # Lakebase as of v0.4.0.
     registry_volume_path: str = ""
     registry_catalog: str = ""
     registry_schema: str = ""

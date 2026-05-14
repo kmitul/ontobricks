@@ -20,7 +20,7 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, Optional
 
-from back.core.errors import OntoBricksError
+from back.core.errors import OntoBricksError, OperationCancelledError
 from back.core.logging import get_logger
 from back.objects.digitaltwin.models import DomainSnapshot
 
@@ -100,6 +100,19 @@ class _BuildPipeline:
         logger.info(
             "[DT-BUILD %s] phase [%s]: %.2fs", self.task_id, name, elapsed
         )
+
+    def _is_cancelled(self) -> bool:
+        """Cancel-check hook passed to long-running workers.
+
+        Returns ``True`` once the user has flipped this build's task to
+        ``cancelled``. Wired into :class:`SyncedTableManager` so the
+        Lakeflow wait loops bail out promptly instead of observing a
+        stale FAILED state from a pipeline the user already abandoned.
+        """
+        try:
+            return self.tm.is_cancelled(self.task_id)
+        except Exception:  # noqa: BLE001
+            return False
 
     def _resolve_lakebase_mode(self) -> None:
         """Resolve graph engine + engine_config once, before ``_open_store``."""
@@ -183,6 +196,12 @@ class _BuildPipeline:
 
             self._complete_task()
 
+        except OperationCancelledError as exc:
+            # Cooperative cancel from a wait loop bubbled up past the
+            # phase-level handler — task is already CANCELLED, just log.
+            logger.info(
+                "[DT-BUILD %s] aborted by cancel: %s", self.task_id, exc
+            )
         except Exception as exc:  # noqa: BLE001 — orchestrator final guard
             self._fail_unexpected(exc)
 
@@ -622,7 +641,9 @@ class _BuildPipeline:
             )
         try:
             state = mgr.trigger_and_wait(
-                synced_uc, timeout_s=self.store.sync_timeout_s
+                synced_uc,
+                timeout_s=self.store.sync_timeout_s,
+                cancel_check=self._is_cancelled,
             )
             logger.info(
                 "[DT-BUILD %s] synced table %s reached state=%s in %.1fs",
@@ -631,6 +652,16 @@ class _BuildPipeline:
                 state,
                 time.time() - t0,
             )
+        except OperationCancelledError as exc:
+            # User cancelled the task while we were polling Lakeflow. The
+            # task is already in CANCELLED — do NOT flip it to FAILED.
+            logger.info(
+                "[DT-BUILD %s] synced refresh aborted by cancel for %s (%s)",
+                self.task_id,
+                synced_uc,
+                exc,
+            )
+            return False
         except Exception as exc:  # noqa: BLE001
             logger.exception(
                 "[DT-BUILD %s] synced refresh failed for %s: %s",
@@ -715,7 +746,6 @@ class _BuildPipeline:
 
             local_lbug_exists = final_count > 0
             local_path = ""
-            registry_lbug_path = ""
 
             dt = DigitalTwin(self.domain)
 
@@ -727,9 +757,6 @@ class _BuildPipeline:
                 "local_lbug_exists": local_lbug_exists,
                 "lakebase_table_exists": local_lbug_exists,
                 "local_lbug_path": local_path,
-                "registry_lbug_exists": None,
-                "registry_lbug_path": registry_lbug_path,
-                "registry_archive_applicable": False,
                 "last_built": self.domain.last_build,
                 "last_update": self.domain.last_update,
             }

@@ -216,11 +216,24 @@ class TaskManager:
         task.progress = max(task.progress, step_progress)
         return True
 
+    _TERMINAL_STATUSES = (
+        TaskStatus.COMPLETED,
+        TaskStatus.FAILED,
+        TaskStatus.CANCELLED,
+    )
+
     def complete_task(
         self, task_id: str, result: Any = None, message: str = "Completed"
     ) -> bool:
         task = self._tasks.get(task_id)
         if not task:
+            return False
+        if task.status in self._TERMINAL_STATUSES:
+            logger.warning(
+                "complete_task ignored — task %s already %s",
+                task_id,
+                task.status.value,
+            )
             return False
         task.status = TaskStatus.COMPLETED
         task.completed_at = _now_iso()
@@ -243,6 +256,14 @@ class TaskManager:
     def fail_task(self, task_id: str, error: str) -> bool:
         task = self._tasks.get(task_id)
         if not task:
+            return False
+        if task.status in self._TERMINAL_STATUSES:
+            logger.warning(
+                "fail_task ignored — task %s already %s (would-be error: %s)",
+                task_id,
+                task.status.value,
+                error[:200],
+            )
             return False
         task.status = TaskStatus.FAILED
         task.completed_at = _now_iso()
@@ -276,6 +297,16 @@ class TaskManager:
             )
             return True
         return False
+
+    def is_cancelled(self, task_id: str) -> bool:
+        """Return ``True`` if the task exists and has been cancelled.
+
+        Worker threads should poll this between long-running calls so they
+        can bail out cooperatively. Returns ``False`` for unknown tasks so
+        a missing task never forces a worker to abort.
+        """
+        task = self._tasks.get(task_id)
+        return task is not None and task.status == TaskStatus.CANCELLED
 
     def delete_task(self, task_id: str) -> bool:
         if task_id in self._tasks:

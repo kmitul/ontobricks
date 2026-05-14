@@ -160,23 +160,6 @@
                                         <div class="mb-1" id="dtGraphPrimaryRow">
                                             <code id="dtLocalPath" class="d-block text-break ob-code-tiny"></code>
                                         </div>
-                                        <!-- Registry archive row (kept hidden; reserved for future archive-capable engines) -->
-                                        <div class="d-flex justify-content-between align-items-center d-none" id="dtRegistryArchiveRow">
-                                            <span class="text-muted">Registry archive</span>
-                                            <span class="d-flex align-items-center gap-1">
-                                                <span id="dtExistRegistry"></span>
-                                                {% if _dr in ('builder', 'admin', '') %}
-                                                <button type="button" id="dtReloadFromRegistry" class="btn btn-outline-secondary btn-sm py-0 px-1 ob-btn-compact d-none" data-sync-action="reload-graph-from-registry" title="Download the graph archive from the registry and restore it locally">
-                                                    <i class="bi bi-cloud-arrow-down me-1"></i>Reload
-                                                </button>
-                                                {% else %}
-                                                <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-1 ob-btn-compact d-none" disabled
-                                                        title="Only builders and admins can reload the graph">
-                                                    <i class="bi bi-lock me-1"></i>Reload
-                                                </button>
-                                                {% endif %}
-                                            </span>
-                                        </div>
                                         <!-- Lakebase: connection + UC details -->
                                         <div id="dtLakebaseDetails" class="d-none">
                                             <div class="d-flex justify-content-between align-items-center mb-1">

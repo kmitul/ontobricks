@@ -2,7 +2,7 @@
     <div class="section-header d-flex justify-content-between align-items-center mb-4">
         <div>
             <h4 class="mb-1"><i class="bi bi-archive me-2"></i>Registry Location</h4>
-            <p class="text-muted mb-0 small">Registry data (domains, versions, permissions, schedules, global config) lives in <strong>Lakebase</strong> (Postgres). The Unity Catalog Volume only stores binary artefacts (documents, <code>.lbug</code> archives).</p>
+            <p class="text-muted mb-0 small">Registry data (domains, versions, permissions, schedules, global config) lives in <strong>Lakebase</strong> (Postgres). The Unity Catalog Volume only stores domain-scoped binary artefacts (the <code>documents/</code> uploads imported by the ontology designer).</p>
         </div>
     </div>
 
@@ -128,9 +128,8 @@
                 <div>
                     Already running on a Volume-only registry? Use
                     <code>scripts/migrate-registry-to-lakebase.sh</code> to copy
-                    your existing JSON config into Lakebase. Binary artefacts
-                    (<code>documents/</code>, <code>.lbug</code> archives) stay
-                    on the Volume.
+                    your existing JSON config into Lakebase. Domain-scoped
+                    <code>documents/</code> uploads stay on the Volume.
                 </div>
             </div>
         </div>

@@ -736,10 +736,6 @@ class DigitalTwin:
         if not force_refresh:
             cached = self.get_ts_cache("dt_existence")
             if cached:
-                if cached.get("registry_lbug_exists") is None and cached.get(
-                    "registry_lbug_path"
-                ):
-                    await self._backfill_registry_lbug(cached, settings)
                 logger.debug("get_or_fetch_dt_existence: serving from cache")
                 return cached
             logger.debug("get_or_fetch_dt_existence: cache miss — fetching live")
@@ -755,36 +751,6 @@ class DigitalTwin:
                 result.get("lakebase_check_error") or "unknown",
             )
         return result
-
-    async def _backfill_registry_lbug(self, cached: dict, settings) -> None:
-        """Resolve an unknown ``registry_lbug_exists`` in a cached result."""
-        from back.core.helpers import get_databricks_host_and_token, run_blocking
-        from back.core.databricks import VolumeFileService
-
-        try:
-            host, token = get_databricks_host_and_token(self._domain, settings)
-            if not host or not token:
-                return
-            path = cached["registry_lbug_path"]
-            parent_dir = path.rsplit("/", 1)[0]
-            archive_name = path.rsplit("/", 1)[1]
-            uc = VolumeFileService(host=host, token=token)
-            ok, items, _ = await run_blocking(
-                uc.list_directory, parent_dir, extensions=[".tar.gz"]
-            )
-            if ok and items:
-                cached["registry_lbug_exists"] = any(
-                    f["name"] == archive_name for f in items
-                )
-            else:
-                cached["registry_lbug_exists"] = False
-            self.set_ts_cache("dt_existence", cached)
-            logger.debug(
-                "_backfill_registry_lbug: resolved to %s",
-                cached["registry_lbug_exists"],
-            )
-        except Exception as e:
-            logger.debug("_backfill_registry_lbug failed: %s", e)
 
     # ------------------------------------------------------------------
     # Schedule sync (instance method)
@@ -920,19 +886,15 @@ class DigitalTwin:
         result: Dict[str, Any] = {
             "view_exists": None,
             "graph_engine": graph_engine,
-            "registry_archive_applicable": False,
             "local_lbug_exists": None,
             "lakebase_table_exists": None,
             "lakebase_check_error": None,
-            "registry_lbug_exists": None,
             "view_table": view_table,
             "graph_name": graph_name,
             "local_lbug_path": "",
-            "registry_lbug_path": "",
             "last_update": last_update,
             "last_built": last_built,
             "view_check_error": None,
-            "registry_check_error": None,
             "triple_count": 0,
         }
 
@@ -963,8 +925,6 @@ class DigitalTwin:
 
         result["view_exists"] = view_ok
         result["view_check_error"] = view_err
-        result["registry_lbug_exists"] = None
-        result["registry_check_error"] = None
 
         exists_tbl: Optional[bool] = None
         cnt = 0
@@ -3072,12 +3032,6 @@ class DigitalTwin:
         count = (ts_status or {}).get("count", 0)
 
         view_exists = (dt_exist or {}).get("view_exists")
-        reg_applicable = (dt_exist or {}).get("registry_archive_applicable", True)
-        archive_exists = (dt_exist or {}).get("registry_lbug_exists")
-        if reg_applicable:
-            archive_fail = archive_exists is not True
-        else:
-            archive_fail = False
 
         if graph_loaded and view_exists is not False:
             return {
@@ -3091,7 +3045,6 @@ class DigitalTwin:
             not domain.last_build
             and not graph_loaded
             and not view_exists
-            and archive_fail
         ):
             return {
                 "indicator": "red",

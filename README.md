@@ -42,15 +42,25 @@ scripts/setup.sh
 ### Prerequisites
 
 - Python 3.10 or higher
-- Databricks workspace access with a Personal Access Token
-- A SQL Warehouse ID
-- A Databricks Lakebase Postgres database for the domain registry
-  (domains, versions, permissions, schedules, global config).
-  OntoBricks targets **Lakebase Autoscaling** exclusively (Provisioned
-  instances are not supported). Install the driver with
-  `uv sync --extra lakebase`.
-- A Unity Catalog Volume — reserved for binary artefacts only
-  (`documents/` uploads and `*.lbug.tar.gz` archive exports).
+- Databricks workspace access (Databricks Apps must be enabled). Local
+  development uses a Personal Access Token; production uses the App's
+  service principal.
+- A SQL Warehouse (you'll need its ID for local dev).
+- **Databricks Lakebase Autoscaling** project + branch + Postgres
+  database — **required since v0.4.0** for the domain registry
+  (domains, versions, permissions, schedules, global config) and the
+  Graph DB triple store. Provisioned Lakebase instances are **not**
+  supported. The Postgres driver (`psycopg[binary]` + `psycopg-pool`)
+  is declared as an optional dependency so volume-only forks can opt
+  out — install with `uv sync --extra lakebase` for any normal
+  deployment.
+- **Unity Catalog Volume** in the catalog/schema that hosts the
+  triplestore VIEWs (`triplestore_<domain>_v<n>`). The volume is
+  reserved for binary artefacts (`documents/` uploads — domain-scoped
+  attachments imported by the ontology designer).
+- `psql` (libpq client) on `PATH` for the Lakebase permission
+  bootstrap scripts (`brew install libpq && brew link --force libpq`
+  on macOS).
 
 ## Deploying / Installing the Project
 
@@ -69,28 +79,41 @@ scripts/start.sh
 ### Deploy to Databricks Apps
 
 ```bash
-# Install and configure the Databricks CLI
-pip install databricks-cli
-databricks configure --token
+# Install and authenticate the Databricks CLI (>= 0.250.0)
+brew install databricks            # or curl -fsSL https://databricks.com/install.sh | sh
+databricks auth login --host https://<workspace>
 
-# Deploy
+# Edit scripts/deploy.config.sh (warehouse, registry catalog/schema,
+# Lakebase project/branch/database — see the file header) and then:
 make deploy
-# Or: scripts/deploy.sh
+# Or directly: scripts/deploy.sh
 ```
 
-After deployment, bind the **sql-warehouse**, **volume**, and **database** (Lakebase) resources in the Databricks Apps UI (**Compute > Apps > ontobricks > Resources**). Open the app and click **Settings > Registry > Initialize** to create the Lakebase tables and the binary Volume (if it doesn't exist yet).
+`scripts/deploy.sh` generates `app.yaml` from `app.yaml.template` +
+`scripts/deploy.config.sh`, validates and deploys the DAB bundle on
+target `dev-lakebase`, runs `scripts/bootstrap-app-permissions.sh`
+(app SP `CAN_MANAGE` on itself), then runs
+`scripts/bootstrap-lakebase-perms.sh` on the registry / graph / sync
+schemas. All steps are idempotent.
+
+After the first deploy, bind the **sql-warehouse**, **volume**, and
+**postgres** (Lakebase) resources in the Databricks Apps UI
+(**Compute > Apps > <your-app> > Resources**) if the DAB bind did
+not take. Open the app and click **Settings > Registry > Initialize**
+to create the Lakebase schema; re-run `make bootstrap-lakebase` once
+afterwards so the freshly created schema picks up `USAGE/DML`.
 
 > **Lakebase deploy targets.** Pick a Databricks Lakebase Autoscaling
-> project + branch and a Postgres database, then tune the bundle
-> variables `lakebase_project`, `lakebase_branch`,
-> `lakebase_database_resource_segment` (the `db-…` id from
+> project + branch and a Postgres database, then set the
+> `LAKEBASE_PROJECT`, `LAKEBASE_BRANCH`,
+> `LAKEBASE_DATABASE_RESOURCE_SEGMENT` (the `db-…` id from
 > `databricks postgres list-databases "projects/<id>/branches/<branch>" -o json`,
 > **not** the Postgres database name shown in the SQL UI), and
-> `lakebase_registry_schema` (mirror in `app.yaml` as `LAKEBASE_SCHEMA`).
+> `LAKEBASE_REGISTRY_SCHEMA` defaults in `scripts/deploy.config.sh`.
 > The DAB composes the full Apps `postgres.database` path and binds a
-> `database` Apps resource so the runtime auto-injects
-> `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`; the app mints the OAuth
-> token automatically (no user secret required).
+> `postgres` Apps resource so the runtime auto-injects
+> `PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER`; the app mints the
+> Lakebase JWT automatically (no user secret required).
 
 > **Upgrading from a pre-v0.4.0 deployment.** Pre-v0.4.0 stored the
 > entire registry as JSON on the Unity Catalog Volume. Run

@@ -576,8 +576,8 @@ class TestDeleteDomain:
 
         assert errors == []
         store.delete_domain.assert_called_once_with("my_proj")
-        # Binary side (documents/ + *.lbug.tar.gz) wiped via
-        # recursive_delete against the UC Volume.
+        # Binary side (documents/ uploads) wiped via recursive_delete
+        # against the UC Volume.
         assert uc.list_directory.call_args_list == [
             call("/Volumes/cat/sch/vol/domains/my_proj")
         ]

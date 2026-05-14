@@ -5,8 +5,9 @@ set -euo pipefail
 # Pre-v0.4.0 deployments stored the *entire* registry (domains,
 # versions, permissions, schedules, global config) as JSON files on a
 # Unity Catalog Volume. v0.4.0 moves that structured data to Lakebase
-# (Postgres) and keeps the Volume strictly for binary artefacts
-# (``documents/`` + ``*.lbug.tar.gz`` archives).
+# (Postgres) and keeps the Volume strictly for domain-scoped binary
+# artefacts (the ``documents/`` uploads imported by the ontology
+# designer).
 #
 # This script is a one-shot migration: it reads the on-Volume JSON
 # tree with the Databricks SDK (Volume Files API) and replays it

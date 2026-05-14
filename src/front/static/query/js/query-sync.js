@@ -254,24 +254,6 @@ function _applyDtExistence(data) {
     var localPathEl = document.getElementById('dtLocalPath');
     if (localPathEl) localPathEl.textContent = data.local_lbug_path || '';
 
-    var regEl = document.getElementById('dtExistRegistry');
-    if (regEl) {
-        regEl.innerHTML = _badge(data.registry_lbug_exists, 'Archived', 'Not archived', 'Not configured');
-        if (data.registry_check_error) regEl.title = data.registry_check_error;
-        else if (data.registry_lbug_path) regEl.title = 'Archive: ' + data.registry_lbug_path;
-        else regEl.title = '';
-    }
-
-    var reloadBtn = document.getElementById('dtReloadFromRegistry');
-    if (reloadBtn) {
-        var skipReload = data.registry_archive_applicable === false;
-        if (!skipReload && data.registry_lbug_exists === true) {
-            reloadBtn.classList.remove('d-none');
-        } else {
-            reloadBtn.classList.add('d-none');
-        }
-    }
-
     var graphCard = document.getElementById('dtGraphCard');
     if (graphCard) {
         if (data.local_lbug_exists === true)
@@ -779,7 +761,21 @@ async function monitorSyncTask(taskId) {
             console.error('[Sync] Monitoring error:', error);
             sessionStorage.removeItem(SYNC_TASK_KEY);
             hideSyncProgress();
-            showNotification('Error monitoring sync task', 'error');
+
+            // Try to pull the real task.error one last time before giving up —
+            // the polling loop may have raced with a cancel→fail transition.
+            var detail = '';
+            try {
+                var lastResp = await fetch(`/tasks/${taskId}`, { credentials: 'same-origin' });
+                if (lastResp.ok) {
+                    var lastData = await lastResp.json();
+                    var t = (lastData && lastData.task) || null;
+                    if (t && t.error) detail = t.error;
+                    else if (t && t.message) detail = t.message;
+                }
+            } catch (_) { /* swallow — fallback to error.message */ }
+            if (!detail) detail = error && error.message ? error.message : 'unknown error';
+            showNotification('Sync monitoring failed: ' + detail, 'error');
 
             syncIsRunning = false;
             updateDataMenus();
@@ -924,8 +920,6 @@ function _renderBuildStepRow(step, idx, runningMessage, task) {
         detailHtml = '<div class="sync-step-detail text-muted">Not needed for this build</div>';
     } else if (step.status === 'failed' && runningMessage) {
         detailHtml = '<div class="sync-step-detail text-danger">' + escapeHtml(runningMessage) + '</div>';
-    } else if (_isArchiveBackgroundStep(step, task)) {
-        detailHtml = '<div class="sync-step-detail text-muted">The registry file copy keeps running on the server; the time on the right is only the hand-off, not the upload.</div>';
     }
 
     const timeHtml = _renderStepTime(step, task);
@@ -1067,14 +1061,10 @@ function _formatBuildLogAsText(task) {
             if (step.started_at)   lines.push('     started   : ' + step.started_at);
             if (step.completed_at) lines.push('     completed : ' + step.completed_at);
             if (step.started_at) {
-                if (_isArchiveBackgroundStep(step, task)) {
-                    lines.push('     duration  : (registry copy runs in the background — not the seconds shown on this row)');
-                } else {
-                    const dur = formatDuration(step.started_at, step.completed_at || null);
-                    if (dur) {
-                        const label = step.completed_at ? '     duration  : ' : '     elapsed   : ';
-                        lines.push(label + dur);
-                    }
+                const dur = formatDuration(step.started_at, step.completed_at || null);
+                if (dur) {
+                    const label = step.completed_at ? '     duration  : ' : '     elapsed   : ';
+                    lines.push(label + dur);
                 }
             }
             if (step.status === 'running' && task.message) {
@@ -1466,37 +1456,6 @@ async function _loadDtExistence() {
     }
 }
 
-/**
- * Download the Graph DB archive from the registry volume and restore it locally.
- */
-async function reloadGraphFromRegistry() {
-    var btn = document.getElementById('dtReloadFromRegistry');
-    if (!btn) return;
-    var origHtml = btn.innerHTML;
-    btn.disabled = true;
-    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Reloading...';
-
-    try {
-        var resp = await fetch('/dtwin/sync/reload-from-registry', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin'
-        });
-        var data = await resp.json();
-        if (data.success) {
-            showNotification('Graph reloaded from registry', 'success');
-            _loadDtExistence();
-        } else {
-            showNotification('Reload failed: ' + (data.message || 'Unknown error'), 'error');
-        }
-    } catch (e) {
-        showNotification('Reload failed: ' + e.message, 'error');
-    } finally {
-        btn.disabled = false;
-        btn.innerHTML = origHtml;
-    }
-}
-
 // Initialize on page load with a single consolidated API call
 document.addEventListener('DOMContentLoaded', async function() {
     // Wire the standalone Insight section refresh button
@@ -1516,7 +1475,6 @@ document.addEventListener('DOMContentLoaded', async function() {
             var act = btn.getAttribute('data-sync-action');
             if (act === 'refresh-triple-store') checkTripleStoreStatus(true);
             else if (act === 'start-triple-store-sync') startTripleStoreSync();
-            else if (act === 'reload-graph-from-registry') reloadGraphFromRegistry();
         });
     }
 
@@ -1528,14 +1486,6 @@ document.addEventListener('DOMContentLoaded', async function() {
     const exportLogBtn = document.getElementById('syncBuildLogExport');
     if (exportLogBtn) {
         exportLogBtn.addEventListener('click', exportBuildLog);
-    }
-
-    // Resume the live log if a build was already running when the user
-    // navigated away and came back to this section.
-    const resumeId = sessionStorage.getItem(SYNC_TASK_KEY);
-    if (resumeId) {
-        showBuildLog();
-        monitorSyncTask(resumeId);
     }
 
     // Re-load when the sync section becomes visible after navigating away and back

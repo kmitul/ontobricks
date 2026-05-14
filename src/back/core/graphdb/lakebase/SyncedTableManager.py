@@ -28,10 +28,35 @@ from __future__ import annotations
 
 import time
 from datetime import timedelta
-from typing import Any, List, Optional
+from typing import Any, Callable, List, Optional
 
-from back.core.errors import InfrastructureError, ValidationError
+from back.core.errors import (
+    InfrastructureError,
+    OperationCancelledError,
+    ValidationError,
+)
 from back.core.logging import get_logger
+
+
+def _raise_if_cancelled(
+    cancel_check: Optional[Callable[[], bool]], context: str
+) -> None:
+    """Raise ``OperationCancelledError`` if ``cancel_check`` reports True.
+
+    Centralised so every wait loop has the same cancellation semantics
+    and the same human-readable message format.
+    """
+    if cancel_check is None:
+        return
+    try:
+        if cancel_check():
+            raise OperationCancelledError(
+                f"Cancelled while {context}"
+            )
+    except OperationCancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("cancel_check raised %s — treating as not-cancelled", exc)
 
 logger = get_logger(__name__)
 
@@ -336,8 +361,16 @@ class SyncedTableManager:
         *,
         timeout_s: int = DEFAULT_TIMEOUT_S,
         pipeline_update_id: Optional[str] = None,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> str:
-        """Block until the sync reaches a terminal state; raise on failure / timeout."""
+        """Block until the sync reaches a terminal state; raise on failure / timeout.
+
+        ``cancel_check`` is invoked between polls. When it returns ``True``
+        the wait stops promptly with :class:`OperationCancelledError` so
+        callers can flip the surrounding task to ``cancelled`` instead of
+        observing a stale ``FAILED`` state from a pipeline that the user
+        already abandoned.
+        """
         deadline = time.time() + max(1, int(timeout_s))
         last_state = ""
         idle_pipeline_wait_done = False
@@ -358,10 +391,15 @@ class SyncedTableManager:
                     pid,
                     name,
                 )
-                self._wait_for_pipeline_update(pid, uid, remaining)
+                self._wait_for_pipeline_update(
+                    pid, uid, remaining, cancel_check=cancel_check
+                )
             idle_pipeline_wait_done = True
 
         while True:
+            _raise_if_cancelled(
+                cancel_check, f"waiting for synced table {name}"
+            )
             now = time.time()
             if now >= deadline:
                 raise InfrastructureError(
@@ -391,16 +429,37 @@ class SyncedTableManager:
                             pid,
                             name,
                         )
-                        try:
-                            self._w().pipelines.wait_get_pipeline_idle(
-                                pipeline_id=pid,
-                                timeout=timedelta(seconds=float(remaining)),
+                        # wait_get_pipeline_idle blocks for ``remaining`` seconds
+                        # with no cancellation hook. Chunk it so we can observe
+                        # the cancel signal between SDK calls.
+                        chunk = max(1.0, float(_POLL_INTERVAL_S))
+                        chunk_deadline = deadline
+                        while time.time() < chunk_deadline:
+                            _raise_if_cancelled(
+                                cancel_check,
+                                f"waiting for pipeline {pid} to become idle",
                             )
-                        except Exception as exc:  # noqa: BLE001
-                            raise InfrastructureError(
-                                f"Lakeflow pipeline {pid} did not become idle while "
-                                f"syncing {name}: {exc}"
-                            ) from exc
+                            slice_remaining = min(
+                                chunk, chunk_deadline - time.time()
+                            )
+                            if slice_remaining <= 0:
+                                break
+                            try:
+                                self._w().pipelines.wait_get_pipeline_idle(
+                                    pipeline_id=pid,
+                                    timeout=timedelta(seconds=slice_remaining),
+                                )
+                                break
+                            except TimeoutError:
+                                continue
+                            except Exception as exc:  # noqa: BLE001
+                                msg = str(exc).lower()
+                                if "timeout" in msg or "timed out" in msg:
+                                    continue
+                                raise InfrastructureError(
+                                    f"Lakeflow pipeline {pid} did not become idle "
+                                    f"while syncing {name}: {exc}"
+                                ) from exc
                     idle_pipeline_wait_done = True
                     continue
 
@@ -415,8 +474,14 @@ class SyncedTableManager:
         *,
         timeout_s: int = DEFAULT_TIMEOUT_S,
         skip_initial_trigger: bool = False,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> str:
-        """Convenience: ``trigger_refresh`` then ``wait_for_completion``."""
+        """Convenience: ``trigger_refresh`` then ``wait_for_completion``.
+
+        ``cancel_check`` is forwarded to :meth:`wait_for_completion` so
+        long-running pipeline waits bail out promptly when the surrounding
+        task is cancelled.
+        """
         update_id = ""
         if not skip_initial_trigger:
             try:
@@ -430,16 +495,26 @@ class SyncedTableManager:
             name,
             timeout_s=timeout_s,
             pipeline_update_id=uid or None,
+            cancel_check=cancel_check,
         )
 
     def _wait_for_pipeline_update(
-        self, pipeline_id: str, update_id: str, timeout_s: float
+        self,
+        pipeline_id: str,
+        update_id: str,
+        timeout_s: float,
+        *,
+        cancel_check: Optional[Callable[[], bool]] = None,
     ) -> None:
         """Poll ``pipelines.get_update`` until the update completes or fails."""
         deadline = time.time() + max(1.0, float(timeout_s))
         terminal_ok = {"COMPLETED"}
         terminal_bad = {"FAILED", "CANCELED"}
         while time.time() < deadline:
+            _raise_if_cancelled(
+                cancel_check,
+                f"waiting for pipeline update {update_id}",
+            )
             try:
                 resp = self._w().pipelines.get_update(
                     pipeline_id=pipeline_id,

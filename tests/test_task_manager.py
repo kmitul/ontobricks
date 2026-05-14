@@ -271,6 +271,41 @@ class TestTaskLifecycle:
     def test_cancel_nonexistent(self, mgr):
         assert mgr.cancel_task("nope") is False
 
+    def test_fail_after_cancel_is_ignored(self, mgr):
+        """Once cancelled, a stale worker thread must not flip the task to FAILED."""
+        task = mgr.create_task("T", "t")
+        mgr.start_task(task.id)
+        mgr.cancel_task(task.id)
+        assert task.status == TaskStatus.CANCELLED
+        assert mgr.fail_task(task.id, "boom") is False
+        assert task.status == TaskStatus.CANCELLED
+        assert task.error is None
+
+    def test_complete_after_cancel_is_ignored(self, mgr):
+        task = mgr.create_task("T", "t")
+        mgr.start_task(task.id)
+        mgr.cancel_task(task.id)
+        assert mgr.complete_task(task.id) is False
+        assert task.status == TaskStatus.CANCELLED
+
+    def test_fail_after_fail_is_ignored(self, mgr):
+        task = mgr.create_task("T", "t")
+        mgr.start_task(task.id)
+        mgr.fail_task(task.id, "first")
+        assert mgr.fail_task(task.id, "second") is False
+        assert task.error == "first"
+
+    def test_is_cancelled(self, mgr):
+        task = mgr.create_task("T", "t")
+        assert mgr.is_cancelled(task.id) is False
+        mgr.start_task(task.id)
+        assert mgr.is_cancelled(task.id) is False
+        mgr.cancel_task(task.id)
+        assert mgr.is_cancelled(task.id) is True
+
+    def test_is_cancelled_unknown_task(self, mgr):
+        assert mgr.is_cancelled("nope") is False
+
 
 class TestQueryAndCleanup:
     def test_get_task(self, mgr):

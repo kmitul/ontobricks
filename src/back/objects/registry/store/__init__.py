@@ -17,10 +17,10 @@ A single concrete backend is supported:
 Always go through :class:`RegistryFactory` to obtain a concrete store
 — call sites must not import the ``lakebase`` subpackage directly.
 
-Binary artifacts (``documents/`` and ``*.lbug.tar.gz``) always live on
-the Unity Catalog Volume and are managed by
-:class:`back.core.databricks.VolumeFileService` — the store handles
-JSON-shaped data only.
+Domain-scoped binary artefacts (the ``documents/`` uploads imported by
+the ontology designer) always live on the Unity Catalog Volume and are
+managed by :class:`back.core.databricks.VolumeFileService` — the store
+handles JSON-shaped data only.
 
 The historical JSON-on-Volume backend (``VolumeRegistryStore``) was
 removed in v0.4.0. Operators with on-Volume registry data must run
