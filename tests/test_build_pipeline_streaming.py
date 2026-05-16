@@ -103,11 +103,15 @@ class TestFullRebuildProgressMessage:
         )
         captured_cb: dict = {}
 
-        def _capture_stream(select_sql, *, insert_batch_size=5000, on_progress=None):
+        # _apply_full_rebuild now routes through bulk_load_into_sync (Lakebase
+        # store exposes it via MagicMock auto-creation). Capture the callback
+        # from the new code path instead of the legacy _stream_triples_into_store.
+        def _capture_bulk_load(table_name, triple_iter, batch_size=5000, on_progress=None):
             captured_cb["fn"] = on_progress
-            return view_total
+            return 1  # pretend 1 row written
 
-        pipe._stream_triples_into_store = _capture_stream
+        pipe.store.bulk_load_into_sync = _capture_bulk_load
+        pipe.source_client.iter_rows = MagicMock(return_value=iter([]))
         pipe._captured_cb = captured_cb
         return pipe
 

@@ -569,11 +569,32 @@ class _BuildPipeline:
         select_sql = (
             f"SELECT subject, predicate, object FROM {self.view_table}"
         )
-        self._stream_triples_into_store(
-            select_sql,
-            insert_batch_size=5000,
-            on_progress=_on_progress_full,
-        )
+        if hasattr(self.store, "bulk_load_into_sync"):
+            # Lakebase app_managed: warehouse data goes into *_sync; app writes
+            # (reasoning / materialise) target the companion (*__app) via
+            # _writable_table_id.  Non-Lakebase backends fall through to the
+            # legacy single-table path below.
+            triple_iter = self.source_client.iter_rows(
+                select_sql, batch_size=5000
+            )
+            written = self.store.bulk_load_into_sync(
+                self.graph_name,
+                triple_iter,
+                batch_size=5000,
+                on_progress=_on_progress_full,
+            )
+            logger.info(
+                "[DT-BUILD %s] bulk_load_into_sync wrote %d rows into %s_sync",
+                self.task_id,
+                written,
+                self.graph_name,
+            )
+        else:
+            self._stream_triples_into_store(
+                select_sql,
+                insert_batch_size=5000,
+                on_progress=_on_progress_full,
+            )
         logger.info(
             "[DT-BUILD %s] optimizing graph table %s",
             self.task_id,

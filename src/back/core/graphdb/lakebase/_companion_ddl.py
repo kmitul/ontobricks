@@ -1,10 +1,13 @@
-"""DDL helpers for the writable companion table + union view.
+"""DDL helpers for the synced table, writable companion table, and union view.
 
-In ``managed_synced`` mode, the Lakebase triple table per graph version is
-actually three Postgres objects in the same schema:
+Both ``managed_synced`` and ``app_managed`` modes use the same three-object
+Postgres layout per graph version:
 
-- ``g_<dom>_v<n>_sync`` -- read-only synced table managed by Lakeflow (single ``_sync``, distinct from the union view bare name).
-- ``g_<dom>_v<n>__app``  -- writable companion table (reasoning + cohort).
+- ``g_<dom>_v<n>_sync`` -- bulk-data table.
+  In ``managed_synced`` it is read-only, populated by Lakeflow.
+  In ``app_managed`` it is populated by the app during build (streaming from
+  the Delta warehouse view) and is otherwise read-only post-build.
+- ``g_<dom>_v<n>__app``  -- writable companion (reasoning + cohort writes).
 - ``g_<dom>_v<n>``       -- union view that readers query (back-compat name).
 
 The synced table mirrors the source Delta view's columns
@@ -47,6 +50,42 @@ def view_phy(name: str) -> str:
 def _idx_name(table: str, suffix: str) -> str:
     base = f"g_{table}_{suffix}".lower()
     return base[:63]
+
+
+def ensure_synced(cur: Any, schema: str, synced: str) -> None:
+    """Create the *_sync bulk-data table + standard B-tree indexes if absent.
+
+    Used by the ``app_managed`` build path to provision the table that receives
+    warehouse-streamed triples.  In ``managed_synced`` mode this table is
+    created by Lakebase/Lakeflow instead.
+    """
+    cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{schema}"')
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {synced} (
+            subject TEXT NOT NULL,
+            predicate TEXT NOT NULL,
+            object TEXT NOT NULL,
+            datatype TEXT,
+            lang TEXT,
+            PRIMARY KEY (subject, predicate, object)
+        )
+        """
+    )
+    for sfx, cols in (
+        ("sp", "subject, predicate"),
+        ("po", "predicate, object"),
+        ("ops", "object, predicate"),
+    ):
+        cur.execute(
+            f"CREATE INDEX IF NOT EXISTS {_idx_name(synced, sfx)} "
+            f"ON {synced} ({cols})"
+        )
+
+
+def drop_synced(cur: Any, synced: str) -> None:
+    """Drop the *_sync bulk-data table (app_managed cleanup path)."""
+    cur.execute(f"DROP TABLE IF EXISTS {synced}")
 
 
 def ensure_companion(cur: Any, schema: str, companion: str) -> None:

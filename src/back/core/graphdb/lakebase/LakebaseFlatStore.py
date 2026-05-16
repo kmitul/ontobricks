@@ -117,14 +117,13 @@ class LakebaseFlatStore(LakebaseBase):
     # -- Table-name resolution --------------------------------------------
 
     def _writable_table_id(self, name: str) -> str:
-        """Return the Postgres table that direct writes target.
+        """Return the Postgres table that direct app writes target.
 
-        In synced mode this is the writable companion; in app-managed mode
-        it is the legacy single table.
+        Both ``app_managed`` and ``managed_synced`` use the companion table
+        (``*__app``) for reasoning and cohort writes so that bulk warehouse
+        data in ``*_sync`` is never modified by the app post-build.
         """
-        if self.is_synced:
-            return _companion_ddl.companion_phy(name)
-        return self.physical_table_id(name)
+        return _companion_ddl.companion_phy(name)
 
     def _readable_table_id(self, name: str) -> str:
         """Return the table / view that direct reads should query."""
@@ -351,44 +350,32 @@ class LakebaseFlatStore(LakebaseBase):
     def create_table(self, table_name: str) -> None:
         validate_table_name(table_name)
         if self.is_synced:
-            # In synced mode the bulk table is provisioned by SyncedTableManager
-            # (Lakeflow). The writable companion is created early; the union view
-            # is created after the first snapshot materializes the ``_sync`` table.
+            # In managed_synced mode the *_sync table is provisioned by Lakebase/
+            # Lakeflow via SyncedTableManager. The companion and union view are
+            # created by ensure_synced_companion / ensure_synced_union_view at
+            # the appropriate points in _apply_via_synced_pipeline.
             logger.debug(
                 "create_table %s is a no-op in managed_synced mode "
                 "(provisioning deferred to SyncedTableManager)",
                 table_name,
             )
             return
-        phy = self.physical_table_id(table_name)
+        # app_managed: create the full 3-object layout so reasoning / materialise
+        # can write to the companion while bulk warehouse data lives in *_sync.
+        synced = _companion_ddl.synced_phy(table_name)
+        companion = _companion_ddl.companion_phy(table_name)
+        view = self._readable_table_id(table_name)
         with self._cursor() as cur:
-            cur.execute(f'CREATE SCHEMA IF NOT EXISTS "{self._schema}"')
-            cur.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS {phy} (
-                    subject TEXT NOT NULL,
-                    predicate TEXT NOT NULL,
-                    object TEXT NOT NULL,
-                    datatype TEXT,
-                    lang TEXT,
-                    PRIMARY KEY (subject, predicate, object)
-                )
-                """
-            )
-            self._ensure_legacy_columns(cur, phy)
-            cur.execute(
-                f"CREATE INDEX IF NOT EXISTS {self._idx_name(phy, 'sp')} "
-                f"ON {phy} (subject, predicate)"
-            )
-            cur.execute(
-                f"CREATE INDEX IF NOT EXISTS {self._idx_name(phy, 'po')} "
-                f"ON {phy} (predicate, object)"
-            )
-            cur.execute(
-                f"CREATE INDEX IF NOT EXISTS {self._idx_name(phy, 'ops')} "
-                f"ON {phy} (object, predicate)"
-            )
-        logger.info("Lakebase graph table ready: %s.%s", self._schema, phy)
+            _companion_ddl.ensure_synced(cur, self._schema, synced)
+            _companion_ddl.ensure_companion(cur, self._schema, companion)
+            _companion_ddl.ensure_union_view(cur, view, synced, companion)
+        logger.info(
+            "Lakebase graph layout ready: %s.[%s | %s | view %s]",
+            self._schema,
+            synced,
+            companion,
+            view,
+        )
 
     def drop_table(self, table_name: str) -> None:
         validate_table_name(table_name)
@@ -414,10 +401,20 @@ class LakebaseFlatStore(LakebaseBase):
                 "Dropped Lakebase synced trio for %s.%s", self._schema, table_name
             )
             return
-        phy = self.physical_table_id(table_name)
+        view = self._readable_table_id(table_name)
+        companion = _companion_ddl.companion_phy(table_name)
+        synced = _companion_ddl.synced_phy(table_name)
         with self._cursor() as cur:
-            cur.execute(f"DROP TABLE IF EXISTS {phy}")
-        logger.info("Dropped Lakebase graph table %s.%s", self._schema, phy)
+            _companion_ddl.drop_view(cur, view)
+            _companion_ddl.drop_companion(cur, companion)
+            _companion_ddl.drop_synced(cur, synced)
+        logger.info(
+            "Dropped Lakebase graph layout %s.[%s | %s | view %s]",
+            self._schema,
+            synced,
+            companion,
+            view,
+        )
 
     @contextmanager
     def _txn_cursor(self) -> Iterator[Tuple[Any, Any]]:
@@ -440,23 +437,15 @@ class LakebaseFlatStore(LakebaseBase):
                     cur.execute(f'SET search_path TO "{self._schema}", public')
                     yield conn, cur
 
-    def _copy_insert_batch(
-        self, table_name: str, batch: List[Dict[str, str]]
-    ) -> int:
+    def _copy_insert_batch_phy(self, phy: str, batch: List[Dict[str, str]]) -> int:
         """COPY *batch* into a temp staging table then ``INSERT … ON CONFLICT DO NOTHING``.
 
-        Bulk path used when the caller opts into iterator-based ingestion.
-        Compared to ``executemany``, ``COPY FROM STDIN`` keeps the per-row
-        overhead at protocol level and lets large batches (5–10k triples) cross
-        the wire as a single binary stream.
-
-        In ``managed_synced`` mode the target is the writable companion table
-        (the synced side is read-only).
+        Takes the resolved physical Postgres table name directly so callers can
+        target either the writable companion (``*__app``) or the bulk-data sync
+        table (``*_sync``) without going through ``_writable_table_id``.
         """
         if not batch:
             return 0
-        validate_table_name(table_name)
-        phy = self._writable_table_id(table_name)
         with self._txn_cursor() as (_, cur):
             cur.execute(
                 f"CREATE TEMP TABLE {_COPY_INSERT_TEMP} ("
@@ -485,6 +474,15 @@ class LakebaseFlatStore(LakebaseBase):
                 f"FROM {_COPY_INSERT_TEMP} ON CONFLICT DO NOTHING"
             )
         return len(batch)
+
+    def _copy_insert_batch(
+        self, table_name: str, batch: List[Dict[str, str]]
+    ) -> int:
+        """Route a COPY batch to the writable companion table for *table_name*."""
+        if not batch:
+            return 0
+        validate_table_name(table_name)
+        return self._copy_insert_batch_phy(self._writable_table_id(table_name), batch)
 
     def _copy_delete_batch(
         self, table_name: str, batch: List[Dict[str, str]]
@@ -620,6 +618,48 @@ class LakebaseFlatStore(LakebaseBase):
                 total,
                 self._schema,
                 self.physical_table_id(table_name),
+            )
+        return total
+
+    def bulk_load_into_sync(
+        self,
+        table_name: str,
+        triple_iterator: Iterable[Dict[str, str]],
+        batch_size: int = 5000,
+        on_progress: Optional[Callable[[int, int], None]] = None,
+    ) -> int:
+        """Bulk-load warehouse data into the ``*_sync`` table for *table_name*.
+
+        Used by the ``app_managed`` full-rebuild path where the app streams
+        triples from the Delta warehouse view directly into the sync table,
+        mirroring what Lakeflow does automatically in ``managed_synced`` mode.
+
+        Writes target ``synced_phy(table_name)`` (``*_sync``) so that
+        post-build app writes (reasoning / materialise) continue to use the
+        companion (``*__app``) via :meth:`_writable_table_id` and are not
+        mixed with the warehouse snapshot.
+        """
+        validate_table_name(table_name)
+        sync_phy = _companion_ddl.synced_phy(table_name)
+        batch: List[Dict[str, str]] = []
+        total = 0
+        for t in triple_iterator:
+            batch.append(t)
+            if len(batch) >= batch_size:
+                total += self._copy_insert_batch_phy(sync_phy, batch)
+                if on_progress:
+                    on_progress(total, total)
+                batch = []
+        if batch:
+            total += self._copy_insert_batch_phy(sync_phy, batch)
+            if on_progress:
+                on_progress(total, total)
+        if total:
+            logger.info(
+                "COPY-loaded %d triple rows into %s.%s (sync table)",
+                total,
+                self._schema,
+                sync_phy,
             )
         return total
 
@@ -782,16 +822,14 @@ class LakebaseFlatStore(LakebaseBase):
 
     def optimize_table(self, table_name: str) -> None:
         validate_table_name(table_name)
-        # In synced mode the synced side is a Lakeflow-managed table; vacuum
-        # only the writable companion. In app-managed mode there is one
-        # physical table to vacuum.
-        target = (
-            self.companion_phy(table_name)
-            if self.is_synced
-            else self.physical_table_id(table_name)
-        )
+        # managed_synced: vacuum the companion only (*_sync is Lakeflow-managed).
+        # app_managed: vacuum *_sync (just bulk-loaded) and the companion.
+        companion = self.companion_phy(table_name)
         with self._cursor() as cur:
-            cur.execute(f"VACUUM ANALYZE {target}")
+            if not self.is_synced:
+                synced = self.synced_phy(table_name)
+                cur.execute(f"VACUUM ANALYZE {synced}")
+            cur.execute(f"VACUUM ANALYZE {companion}")
 
 
 def resolve_lakebase_graph_schema(

@@ -62,15 +62,72 @@ class _CopyRecorder:
 
 
 def test_create_table_issues_schema_ddl_and_indexes(auth):
+    """app_managed create_table now produces the 3-object layout (*_sync + *__app + view)."""
     cur = MagicMock()
     store = LakebaseFlatStore(auth, schema="ontobricks_graph")
     with patch.object(store, "_cursor", _cursor_ctx(cur)):
         store.create_table("MyDomain_V1")
     executed = [str(c[0][0]) for c in cur.execute.call_args_list]
     assert any("CREATE SCHEMA" in s for s in executed)
-    ddl = next(s for s in executed if "CREATE TABLE" in s)
-    assert "datatype" in ddl and "lang" in ddl
+    # Both *_sync and *__app tables must be created.
+    create_tables = [s for s in executed if "CREATE TABLE" in s]
+    assert len(create_tables) >= 2
+    assert any("mydomain_v1_sync" in s for s in create_tables)
+    assert any("mydomain_v1__app" in s for s in create_tables)
+    # Union view must be created.
+    assert any("CREATE OR REPLACE VIEW" in s and "mydomain_v1" in s for s in executed)
     assert any("CREATE INDEX" in s for s in executed)
+
+
+def test_writable_table_id_is_companion_for_app_managed(auth):
+    """app_managed _writable_table_id resolves to the *__app companion table."""
+    store = LakebaseFlatStore(auth, schema="ontobricks_graph")
+    assert store._writable_table_id("G_V1") == "g_v1__app"
+
+
+def test_drop_table_app_managed_drops_view_companion_and_sync(auth):
+    """app_managed drop_table removes all 3 Postgres objects without Lakeflow API calls."""
+    cur = MagicMock()
+    store = LakebaseFlatStore(auth, schema="ontobricks_graph")
+    with patch.object(store, "_cursor", _cursor_ctx(cur)):
+        store.drop_table("G_V1")
+    executed = [str(c[0][0]) for c in cur.execute.call_args_list]
+    assert any("DROP VIEW IF EXISTS g_v1" in s for s in executed)
+    assert any("DROP TABLE IF EXISTS g_v1__app" in s for s in executed)
+    assert any("DROP TABLE IF EXISTS g_v1_sync" in s for s in executed)
+
+
+def test_optimize_table_vacuums_sync_and_companion_for_app_managed(auth):
+    """app_managed optimize_table vacuums both *_sync and *__app."""
+    cur = MagicMock()
+    store = LakebaseFlatStore(auth, schema="ontobricks_graph")
+    with patch.object(store, "_cursor", _cursor_ctx(cur)):
+        store.optimize_table("G_V1")
+    executed = [str(c[0][0]) for c in cur.execute.call_args_list]
+    assert any("VACUUM ANALYZE g_v1_sync" in s for s in executed)
+    assert any("VACUUM ANALYZE g_v1__app" in s for s in executed)
+
+
+def test_bulk_load_into_sync_writes_to_sync_table(auth):
+    """bulk_load_into_sync targets *_sync (not the companion) via _copy_insert_batch_phy."""
+    store = LakebaseFlatStore(auth, schema="ontobricks_graph")
+
+    written_to: list = []
+
+    def _fake_copy_batch_phy(phy: str, batch: list) -> int:
+        written_to.append(phy)
+        return len(batch)
+
+    triples = [
+        {"subject": f"http://ex/{i}", "predicate": "http://ex/p", "object": "http://ex/o"}
+        for i in range(25)
+    ]
+    with patch.object(store, "_copy_insert_batch_phy", side_effect=_fake_copy_batch_phy):
+        n = store.bulk_load_into_sync("G_V1", iter(triples), batch_size=20)
+    assert n == 25
+    # Every batch must target the *_sync table, never the companion.
+    assert all(phy == "g_v1_sync" for phy in written_to)
+    assert written_to == ["g_v1_sync", "g_v1_sync"]  # 20 + 5
 
 
 def test_insert_triples_executemany(auth):
