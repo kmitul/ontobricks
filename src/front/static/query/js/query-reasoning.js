@@ -462,11 +462,17 @@ const ReasoningModule = {
             if (graphChecked && data.materialize_graph_count > 0) {
                 if (typeof SigmaGraph !== 'undefined' && typeof SigmaGraph.refreshCurrentExpansion === 'function') {
                     const refreshed = await SigmaGraph.refreshCurrentExpansion();
-                    if (!refreshed && area) {
-                        const hint = document.createElement('div');
-                        hint.className = 'small text-muted mt-1';
-                        hint.innerHTML = '<i class="bi bi-info-circle me-1"></i>Open the <strong>Knowledge Graph</strong> tab and run a filter to see the new triples.';
-                        area.appendChild(hint);
+                    if (!refreshed) {
+                        // No active filter expansion — fall back to silently reloading the full
+                        // triple store so the graph chart reflects the newly materialised triples.
+                        if (typeof loadTripleStore === 'function') {
+                            await loadTripleStore({ silent: true, navigate: false });
+                        } else if (area) {
+                            const hint = document.createElement('div');
+                            hint.className = 'small text-muted mt-1';
+                            hint.innerHTML = '<i class="bi bi-info-circle me-1"></i>Open the <strong>Knowledge Graph</strong> tab and reload to see the new triples.';
+                            area.appendChild(hint);
+                        }
                     }
                 }
             }

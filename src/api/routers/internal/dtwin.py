@@ -1429,6 +1429,7 @@ async def dtwin_assistant_chat(
     data = await request.json()
     user_message = (data.get("message") or "").strip()
     client_history = data.get("history") or []
+    describe_depth = max(1, min(int(data.get("depth") or 1), 5))
 
     if not user_message:
         raise ValidationError("No message provided")
@@ -1516,6 +1517,7 @@ async def dtwin_assistant_chat(
             session_headers=session_headers,
             user_message=user_message,
             conversation_history=history,
+            describe_depth=describe_depth,
         )
 
     if not agent_result.success:

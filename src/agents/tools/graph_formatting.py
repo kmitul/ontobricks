@@ -61,8 +61,18 @@ def is_label_predicate(pred: str) -> bool:
 # ── Triple formatting ─────────────────────────────────────────────────────
 
 
-def _format_entity_block(entity_uri: str, triples: list[dict]) -> str:
-    """Build a human-readable text block for one entity."""
+def _format_entity_block(
+    entity_uri: str,
+    triples: list[dict],
+    inbound_triples: list[dict] | None = None,
+) -> str:
+    """Build a human-readable text block for one entity.
+
+    *triples* are outgoing (entity is the subject).
+    *inbound_triples* are incoming (entity is the object) — used to show
+    relationships such as inferred/materialised inverse edges (e.g. a Contract
+    that points back to this Customer via ``hasCustomer``).
+    """
     lines: list[str] = []
     entity_label = local_name(entity_uri)
     types: list[str] = []
@@ -83,6 +93,19 @@ def _format_entity_block(entity_uri: str, triples: list[dict]) -> str:
         else:
             attributes.append((pretty_predicate(pred), obj))
 
+    # Inbound relationships: other entities that point TO this entity.
+    # Excluding rdf:type and label predicates (those are class/label assertions,
+    # not meaningful "X is related to this entity" relationships).
+    inbound: list[tuple[str, str]] = []
+    for t in (inbound_triples or []):
+        pred = t.get("predicate", "")
+        subj = t.get("subject", "")
+        if pred in (RDF_TYPE, RDFS_LABEL):
+            continue
+        if is_label_predicate(pred):
+            continue
+        inbound.append((local_name(subj), pretty_predicate(pred)))
+
     display_name = labels[0] if labels else entity_label
     type_str = ", ".join(types) if types else "Unknown type"
     lines.append(f"■ {display_name}  ({type_str})")
@@ -98,9 +121,14 @@ def _format_entity_block(entity_uri: str, triples: list[dict]) -> str:
             lines.append(f"    • {attr_name}: {attr_val}")
 
     if relationships:
-        lines.append("  Relationships:")
+        lines.append("  Relationships (outgoing):")
         for rel_name, target in relationships:
             lines.append(f"    → {rel_name}: {target}")
+
+    if inbound:
+        lines.append("  Referenced by (incoming relationships):")
+        for src_name, rel_name in inbound:
+            lines.append(f"    ← {src_name}  via  {rel_name}")
 
     return "\n".join(lines)
 
@@ -162,6 +190,15 @@ def format_find_response(data: dict) -> str:
         seed_uris = set(list(by_subject.keys())[:seed_count])
         related_uris = set(by_subject.keys()) - seed_uris
 
+    # Build an inbound index: object_uri → list of triples where it is the object.
+    # Used to show incoming relationships on seed entities so the LLM can see
+    # e.g. "Contract X hasCustomer → this entity" directly on the seed block.
+    by_object: dict[str, list[dict]] = {}
+    for t in triples:
+        obj = t.get("object", "")
+        if is_uri(obj):
+            by_object.setdefault(obj, []).append(t)
+
     unique_entities = len(by_subject)
     parts: list[str] = []
     parts.append(
@@ -171,7 +208,11 @@ def format_find_response(data: dict) -> str:
 
     parts.append("── Matching Entities ──")
     for uri in seed_uris:
-        parts.append(_format_entity_block(uri, by_subject.get(uri, [])))
+        parts.append(_format_entity_block(
+            uri,
+            by_subject.get(uri, []),
+            inbound_triples=by_object.get(uri, []),
+        ))
         parts.append("")
 
     if related_uris:

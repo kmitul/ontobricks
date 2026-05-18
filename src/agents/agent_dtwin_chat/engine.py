@@ -64,26 +64,46 @@ TOOLS
   - get_status          : triple-store status (view, graph, row count)
   - get_graphql_schema  : auto-generated GraphQL SDL for the domain
 
-  QUERY
-  - describe_entity(search, entity_type?, depth?) : full-text description of
-      entities matching the search text and/or type, with attributes and
-      related entities (BFS traversal up to ``depth`` hops).
-  - query_graphql(query, variables?) : execute GraphQL. Use it for typed,
-      nested look-ups once you know the schema.
-  - run_sparql(query, limit?) : read-only SPARQL (SELECT / ASK / DESCRIBE).
-      Use it for aggregations (COUNT, GROUP BY) or joins that GraphQL can
-      not express concisely.
+  QUERY — IMPORTANT: three tools, three different data sources
+
+  - describe_entity(search, entity_type?, depth?)
+      GROUND TRUTH for individual entities and their relationships.
+      Does a BFS over the RAW TRIPLE STORE — returns ALL triples regardless
+      of the ontology schema, including predicates added by inference /
+      materialisation that are not declared in the ontology.
+      Use this as the PRIMARY tool whenever you need to know what
+      relationships or attributes an entity has.
+      Use depth ≥ 2 for richer traversal.
+
+  - query_graphql(query, variables?)
+      Reads the GRAPH STORE but through the ONTOLOGY SCHEMA layer.
+      WARNING: only predicates declared in the ontology appear as fields.
+      Inferred / materialised triples whose predicate is NOT in the ontology
+      schema are silently invisible to GraphQL.
+      Use only for bulk typed look-ups (e.g. "all Customers with their
+      Orders") where you already know the schema covers the data you need.
+
+  - run_sparql(query, limit?)
+      Translates SPARQL to SQL over the WAREHOUSE MAPPING VIEWS — NOT the
+      graph store. Does NOT include triples added by inference or
+      materialisation. Use only for aggregations (COUNT, GROUP BY) or
+      cross-type joins over warehouse data.
 
 WORKFLOW
-  1. If you are unsure what the graph contains, first call
-     ``list_entity_types`` to see entity types and their counts.
-  2. For "tell me about <thing>" questions call ``describe_entity``.
-  3. For "how many / group by / aggregate" questions, prefer
-     ``run_sparql``.  For typed nested look-ups (e.g. customer + orders
-     + products in one payload), prefer ``query_graphql`` after
-     inspecting the schema.
-  4. When data fetching is done, reply with a concise, well-formatted
-     answer using the data you retrieved. Never invent URIs or counts.
+  1. If you are unsure what the graph contains, call ``list_entity_types``
+     to see entity types and their counts.
+  2. For ANY question about a specific entity — its attributes, what it is
+     connected to, what relationships it has — ALWAYS start with
+     ``describe_entity`` (depth=1). This is the ONLY tool guaranteed to show
+     ALL direct relationships including inferred/materialised ones.
+     DO NOT rely on ``query_graphql`` or ``run_sparql`` alone to determine
+     whether an entity has a relationship — they can miss inferred data.
+     Use depth=2 only when the user explicitly asks for indirect or extended
+     relationships (e.g. "related through claims", "all connected entities").
+  3. After ``describe_entity`` confirms what relationships exist, you may use
+     ``query_graphql`` for bulk typed look-ups or ``run_sparql`` for
+     aggregations, but treat ``describe_entity`` as the authoritative source.
+  4. Reply with a concise, well-formatted answer. Never invent URIs or counts.
 
 RULES
   * Use the exact entity / predicate names returned by the tools.
@@ -136,6 +156,7 @@ def run_agent(
     conversation_history: Optional[List[dict]] = None,
     session_headers: Optional[dict] = None,
     on_step: Optional[Callable[[str], None]] = None,
+    describe_depth: int = 1,
 ) -> AgentResult:
     """Run one turn of the Graph Chat agent.
 
@@ -178,7 +199,13 @@ def run_agent(
 
     result = AgentResult(success=False)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    depth = max(1, min(int(describe_depth or 1), 5))
+    system_prompt = SYSTEM_PROMPT.replace(
+        "``describe_entity`` (depth=1)",
+        f"``describe_entity`` (depth={depth})",
+    )
+
+    messages = [{"role": "system", "content": system_prompt}]
     if conversation_history:
         for msg in conversation_history:
             if not isinstance(msg, dict):

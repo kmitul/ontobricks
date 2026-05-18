@@ -58,6 +58,15 @@
                 <kbd>Enter</kbd> to send &middot; <kbd>Shift</kbd>+<kbd>Enter</kbd> for newline
             </span>
             <span class="graph-chat-hint-controls">
+                <span class="graph-chat-limit" title="Relationship traversal depth used when describing entities (1 = direct links only, 2 = neighbors of neighbors)">
+                    <i class="bi bi-diagram-3"></i>
+                    <label for="chatDepth">Depth</label>
+                    <select id="chatDepth" class="form-select form-select-sm">
+                        <option value="1" selected>1</option>
+                        <option value="2">2</option>
+                        <option value="3">3</option>
+                    </select>
+                </span>
                 <span class="graph-chat-limit" title="Maximum number of user+assistant turns kept per domain in this session">
                     <i class="bi bi-gear-fill"></i>
                     <label for="chatHistoryLimit">Keep last</label>
