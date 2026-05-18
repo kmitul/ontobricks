@@ -567,6 +567,74 @@ def _check_lakebase_permissions(settings: Settings) -> Tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Lakebase Accelerated Sync probe
+# ---------------------------------------------------------------------------
+
+
+def _check_lakebase_accelerated_sync(settings: Optional[Settings] = None) -> Tuple[str, str]:
+    """Probe whether Lakebase Accelerated Sync (Database Synced Tables) is available.
+
+    Sends a lightweight ``GET /api/2.0/database/synced_tables?limit=1`` request
+    using the workspace bearer token.  Three outcomes are distinguished:
+
+    * **ok** — the endpoint returned HTTP 200; the feature is enabled and
+      accessible in this workspace.
+    * **warning** — the workspace is reachable but the endpoint returned 403 or
+      404, indicating the feature is not yet activated (e.g. workspace preview
+      not enabled, region not supported, or entitlement missing).
+    * **error** — credentials are unavailable, the host is not configured, or
+      an unexpected HTTP / network error was encountered.
+    """
+    from back.core.databricks.DatabricksAuth import DatabricksAuth
+
+    auth = DatabricksAuth()
+    if not auth.has_valid_auth():
+        return _WARNING, "Databricks credentials unavailable — Accelerated Sync not probed"
+    if not auth.host:
+        return _WARNING, "DATABRICKS_HOST not configured — Accelerated Sync not probed"
+
+    import requests as _requests
+
+    url = f"{auth.host}/api/2.0/database/synced_tables"
+    headers = {
+        "Authorization": f"Bearer {auth.get_bearer_token()}",
+        "Accept": "application/json",
+    }
+    try:
+        resp = _requests.get(url, headers=headers, params={"limit": "1"}, timeout=10)
+    except Exception as exc:  # noqa: BLE001
+        return _ERROR, f"Accelerated Sync probe request failed: {exc}"
+
+    if resp.status_code == 200:
+        data = resp.json() if resp.content else {}
+        count = len(data.get("synced_database_tables") or data.get("tables") or [])
+        return _OK, f"Lakebase Accelerated Sync enabled — {count} synced table(s) found"
+
+    if resp.status_code in (403, 404):
+        try:
+            msg = (resp.json() or {}).get("message") or resp.text or ""
+        except Exception:  # noqa: BLE001
+            msg = resp.text or ""
+        return (
+            _WARNING,
+            f"Lakebase Accelerated Sync not available in this workspace "
+            f"(HTTP {resp.status_code}"
+            + (f": {msg[:200]}" if msg else "")
+            + ") — enable the preview from workspace Previews settings",
+        )
+
+    try:
+        err_msg = (resp.json() or {}).get("message") or resp.text or ""
+    except Exception:  # noqa: BLE001
+        err_msg = resp.text or ""
+    return (
+        _ERROR,
+        f"Accelerated Sync probe returned unexpected HTTP {resp.status_code}"
+        + (f": {err_msg[:200]}" if err_msg else ""),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Aggregator
 # ---------------------------------------------------------------------------
 
@@ -667,6 +735,13 @@ def run_readiness_checks(settings: Optional[Settings] = None) -> Dict[str, Any]:
             "graphdb.lakebase",
             "Graph DB (Lakebase)",
             lambda: _check_graphdb_lakebase(settings),
+        )
+    )
+    checks.append(
+        _safely_run(
+            "lakebase.accelerated_sync",
+            "Lakebase Accelerated Sync",
+            lambda: _check_lakebase_accelerated_sync(settings),
         )
     )
 
