@@ -4,11 +4,15 @@ Vendored from https://github.com/D2KLab/Ontology-Pitfalls-Detector (Apache-2.0).
 Heavy ML deps (sentence-transformers, scikit-learn, nltk) are imported at module
 level via try/except so taxonomy constants are always accessible even when the
 optional ``pitfalls`` extra is not installed.
+
+Modified by: Benoit Cayla (may 2026) / replacing the Owlready2 support by other libs. 
+OWL RL doesn't infer class-level unsatisfiability from disjointWith — that requires OWL DL reasoning. 
+The best approach here is pure rdflib (already a core dep): check each class's ancestor chain against
+declared disjoint pairs. No extra import needed at all.
 """
 from __future__ import annotations
 
 from collections import Counter
-import io
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
@@ -1408,40 +1412,62 @@ class OntologyPatternToolkit:
         }
 
     def run_p1_3(self) -> Dict[str, Any]:
-        ontology_uris = [s for s in self.graph.subjects(RDF.type, OWL.Ontology)]
-        ontology_uri = str(ontology_uris[0]) if ontology_uris else self.ontology_path.as_uri()
+        """Detect logically unsatisfiable classes via rule-based disjointness analysis.
 
-        try:
-            from owlready2 import World, sync_reasoner
-        except Exception as exc:
-            return {
-                "ontology_uri": ontology_uri,
-                "error": f"Could not import owlready2: {exc}",
-            }
+        Uses pure rdflib — no extra dependencies. A class is flagged as
+        unsatisfiable when it (or any ancestor) is a subclass of two classes
+        that are declared mutually disjoint via ``owl:disjointWith`` or
+        ``owl:AllDisjointClasses``. This covers the most common unsatisfiability
+        pattern without requiring a full OWL DL reasoner.
+        """
+        from typing import FrozenSet as _FSet, Set as _Set
+        from rdflib.collection import Collection
 
-        try:
-            world = World()
-            onto = world.get_ontology(ontology_uri)
+        # Build direct parent map (URIRef classes only)
+        direct_parents: dict = {cls: set() for cls in self.oclasses}
+        for cls in self.oclasses:
+            for parent in self.graph.objects(cls, RDFS.subClassOf):
+                if isinstance(parent, URIRef):
+                    direct_parents[cls].add(parent)
 
-            serialized = self.graph.serialize(format="xml")
-            if isinstance(serialized, str):
-                serialized = serialized.encode("utf-8")
+        def _ancestors(cls: URIRef) -> _Set:
+            seen: _Set = set()
+            queue = list(direct_parents.get(cls, []))
+            while queue:
+                c = queue.pop()
+                if c not in seen:
+                    seen.add(c)
+                    queue.extend(direct_parents.get(c, []))
+            return seen
 
-            onto.load(fileobj=io.BytesIO(serialized), format="rdfxml")
+        # Collect all disjoint pairs from owl:disjointWith and owl:AllDisjointClasses
+        disjoint_pairs: _Set[_FSet] = set()
+        for a, _, b in self.graph.triples((None, OWL.disjointWith, None)):
+            if isinstance(a, URIRef) and isinstance(b, URIRef):
+                disjoint_pairs.add(frozenset([a, b]))
+        for bnode in self.graph.subjects(RDF.type, OWL.AllDisjointClasses):
+            members_head = list(self.graph.objects(bnode, OWL.members))
+            if not members_head:
+                continue
+            try:
+                member_list = [
+                    m for m in Collection(self.graph, members_head[0])
+                    if isinstance(m, URIRef)
+                ]
+            except Exception:
+                continue
+            for i, a in enumerate(member_list):
+                for b in member_list[i + 1:]:
+                    disjoint_pairs.add(frozenset([a, b]))
 
-            with onto:
-                sync_reasoner()
+        inconsistent = []
+        for cls in self.oclasses:
+            ancestors = _ancestors(cls) | {cls}
+            for pair in disjoint_pairs:
+                pair_list = list(pair)
+                if pair_list[0] in ancestors and pair_list[1] in ancestors:
+                    inconsistent.append(str(cls))
+                    break
 
-            inconsistent_classes = [str(c) for c in world.inconsistent_classes()]
-            ratio = len(inconsistent_classes) / len(self.oclasses) if self.oclasses else 0.0
-            return {
-                "ontology_uri": ontology_uri,
-                "count": len(inconsistent_classes),
-                "ratio": ratio,
-                "items": inconsistent_classes,
-            }
-        except Exception as exc:
-            return {
-                "ontology_uri": ontology_uri,
-                "error": str(exc),
-            }
+        ratio = len(inconsistent) / len(self.oclasses) if self.oclasses else 0.0
+        return {"count": len(inconsistent), "ratio": ratio, "items": inconsistent}

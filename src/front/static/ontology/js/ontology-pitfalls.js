@@ -135,7 +135,7 @@ window.PitfallsModule = (function () {
 
     function run() {
         if (_selectedPatterns.size === 0) {
-            alert('Please select at least one pitfall pattern.');
+            showNotification('Please select at least one pitfall pattern to run the analysis.', 'warning');
             return;
         }
 
