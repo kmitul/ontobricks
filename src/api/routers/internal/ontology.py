@@ -24,8 +24,10 @@ from agents.serialization import serialize_agent_steps
 from back.core.industry import (
     get_fibo_catalog,
     get_cdisc_catalog,
+    get_fhir_catalog,
     get_iof_catalog,
 )
+from back.core.industry.fhir import get_fhir_versions
 from back.core.logging import get_logger
 from back.core.w3c import SHACLService
 from shared.config.constants import DEFAULT_BASE_URI, DEFAULT_GRAPH_NAME
@@ -282,6 +284,7 @@ _INDUSTRY_CATALOGS = {
     "fibo": get_fibo_catalog,
     "cdisc": get_cdisc_catalog,
     "iof": get_iof_catalog,
+    "fhir": get_fhir_catalog,
 }
 
 
@@ -294,6 +297,12 @@ async def industry_catalog(kind: str):
     return {"success": True, "catalog": catalog_fn()}
 
 
+@router.get("/fhir-versions")
+async def fhir_versions():
+    """Return the list of supported FHIR release versions."""
+    return {"success": True, "versions": get_fhir_versions()}
+
+
 @router.post("/import-{kind}")
 async def import_industry(
     kind: str,
@@ -302,14 +311,16 @@ async def import_industry(
 ):
     """Fetch industry domain modules, merge, parse, and store in session.
 
-    Expects JSON body: ``{ "domains": ["FND", "BE", ...] }``
+    Expects JSON body: ``{ "domains": ["FND", "BE", ...], "version": "R5" }``
+    The ``version`` field is only used by the FHIR importer; other importers ignore it.
     """
     if kind not in _INDUSTRY_CATALOGS:
         raise ValidationError(f"Unknown industry kind: {kind}")
     data = await request.json()
     domain_keys = data.get("domains", [])
+    version = data.get("version") or None
     domain = get_domain(session_mgr)
-    return Ontology(domain).import_industry_ontology(kind, domain_keys)
+    return Ontology(domain).import_industry_ontology(kind, domain_keys, version=version)
 
 
 # ===========================================
