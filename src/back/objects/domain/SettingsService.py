@@ -14,6 +14,7 @@ from back.core.errors import (
     OntoBricksError,
     ValidationError,
 )
+from shared.config.constants import HTTP_USER_AGENT
 from shared.config.settings import Settings
 from back.core.databricks import is_databricks_app
 from back.core.helpers import (
@@ -1947,7 +1948,7 @@ class SettingsService:
                 host = diag.get("sdk_host", "").rstrip("/")
                 resp = _req.get(
                     f"{host}/api/2.0/permissions/apps/{app_name}",
-                    headers={"Authorization": f"Bearer {user_token}"},
+                    headers={"Authorization": f"Bearer {user_token}", "User-Agent": HTTP_USER_AGENT},
                     timeout=5,
                 )
                 resp.raise_for_status()

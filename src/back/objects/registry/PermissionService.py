@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from back.core.logging import get_logger
 from back.core.databricks.DatabricksClient import DatabricksClient
+from shared.config.constants import HTTP_USER_AGENT
 
 logger = get_logger(__name__)
 
@@ -160,6 +161,7 @@ class PermissionService:
             headers = {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
+                "User-Agent": HTTP_USER_AGENT,
             }
             resp = req.get(
                 f"{h}/api/2.0/preview/scim/v2/Users",
@@ -300,7 +302,7 @@ class PermissionService:
             return None
         try:
             h = host.rstrip("/")
-            headers = {"Authorization": f"Bearer {token}"}
+            headers = {"Authorization": f"Bearer {token}", "User-Agent": HTTP_USER_AGENT}
             resp = req.get(
                 f"{h}/api/2.0/permissions/apps/{app_name}",
                 headers=headers,
