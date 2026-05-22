@@ -1,7 +1,7 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Setup script for OntoBricks
 
-set -e
+set -euo pipefail
 
 echo "====================================="
 echo "  OntoBricks Setup"
@@ -32,9 +32,9 @@ echo "Activating virtual environment..."
 source .venv/bin/activate
 echo ""
 
-# Install dependencies (including optional lakebase extras for local dev)
+# Install dependencies (including optional lakebase and pitfalls extras for local dev)
 echo "Installing dependencies..."
-uv sync --extra lakebase
+uv sync --extra lakebase --extra pitfalls
 echo ""
 
 # Create .env file if it doesn't exist

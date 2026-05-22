@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Start script for OntoBricks (Local Development)
 # Usage: scripts/start.sh [--background]
 #

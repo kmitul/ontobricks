@@ -231,32 +231,6 @@ class DatabricksAuth:
             return False, f"pyarrow unavailable: {exc}"
         return True, "prerequisites ok"
 
-    def cloud_fetch_status(self, force: bool = False) -> Tuple[bool, str]:
-        """Return ``(capable, reason)`` for CloudFetch in the current runtime.
-
-        Cached per ``(host, warehouse_id)`` for
-        ``_CLOUD_FETCH_PROBE_TTL_SECONDS``. Pass ``force=True`` to bypass
-        the cache (used by ``/health``).
-        """
-        if self._env_true("DATABRICKS_DISABLE_CLOUD_FETCH"):
-            return False, "Disabled by DATABRICKS_DISABLE_CLOUD_FETCH"
-        if self._env_true("DATABRICKS_FORCE_CLOUD_FETCH"):
-            return True, "Forced by DATABRICKS_FORCE_CLOUD_FETCH"
-        if not self.use_cloud_fetch:
-            return False, "Disabled by global settings"
-
-        ok, msg = self._cloud_fetch_prerequisites()
-        if not ok:
-            return False, msg
-
-        key = (self.host, self.warehouse_id)
-        now = time.time()
-        cached = DatabricksAuth._cloud_fetch_cache.get(key)
-        if not force and cached and (now - cached[2]) < _CLOUD_FETCH_PROBE_TTL_SECONDS:
-            return cached[0], cached[1]
-
-        return self.probe_cloud_fetch_capability()
-
     def can_use_cloud_fetch(self) -> bool:
         """Return whether CloudFetch should be enabled for SQL params.
 

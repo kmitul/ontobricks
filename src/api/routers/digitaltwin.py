@@ -1509,7 +1509,8 @@ async def dt_cohort_materialize(
     def _label_resolver(uris):
         try:
             metadata = store.get_entity_metadata(graph_name, list(uris))
-        except Exception:
+        except Exception as exc:
+            logger.debug("Label resolver: entity metadata unavailable: %s", exc)
             return {}
         return {row.get("uri", ""): row.get("label", "") for row in metadata or []}
 

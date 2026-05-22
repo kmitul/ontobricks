@@ -19,7 +19,11 @@ Tools:
     * ``get_status``          -- GET  /dtwin/sync/status
     * ``get_graphql_schema``  -- GET  /dtwin/graphql/schema
     * ``query_graphql``       -- POST /dtwin/graphql/execute
-    * ``run_sparql``          -- POST /dtwin/execute
+
+Note: ``run_sparql`` (POST /dtwin/execute) is implemented but excluded from
+the active tool set — it queries the warehouse Delta view and cannot see
+inferred/reasoning triples. Use ``describe_entity`` or ``query_graphql`` for
+full-graph access.
 """
 
 from __future__ import annotations
@@ -28,10 +32,10 @@ import json
 import re
 from typing import Callable, Dict, List
 
-import httpx
+import httpx  # noqa: F401 — kept for httpx.HTTPStatusError in tool handlers
 
 from agents.tools.context import ToolContext
-from shared.config.constants import HTTP_USER_AGENT
+from agents.tools.loopback_http import loopback_client, loopback_registry_params
 from agents.tools.graph_formatting import (
     format_find_response,
     format_graphql_response,
@@ -56,39 +60,13 @@ _SPARQL_DANGEROUS = re.compile(
 # =====================================================
 
 
-def _client(ctx: ToolContext) -> httpx.Client:
-    """Build a sync HTTP client bound to the loopback OntoBricks URL.
-
-    Session cookies AND the user's Databricks-Apps ``X-Forwarded-*``
-    identity headers are forwarded so the loopback route resolves the
-    same active session *and* passes the ``PermissionMiddleware`` on
-    the deployed app (which would otherwise 302-redirect the anonymous
-    internal call to ``/access-denied``).
-    """
-    return httpx.Client(
-        base_url=ctx.dtwin_base_url or "http://localhost:8000",
-        cookies=ctx.dtwin_session_cookies or {},
-        headers={"User-Agent": HTTP_USER_AGENT, **(ctx.dtwin_session_headers or {})},
-        timeout=_HTTP_TIMEOUT,
-        follow_redirects=False,
-    )
+def _client(ctx: ToolContext):
+    """Build a sync HTTP client bound to the loopback OntoBricks URL."""
+    return loopback_client(ctx, timeout=_HTTP_TIMEOUT)
 
 
 def _registry_params(ctx: ToolContext) -> dict:
-    params = {}
-    for k, v in (ctx.dtwin_registry_params or {}).items():
-        if v:
-            params[k] = v
-    return params
-
-
-def _domain_params(ctx: ToolContext, extra: dict | None = None) -> dict:
-    params = _registry_params(ctx)
-    if extra:
-        params.update(extra)
-    if ctx.dtwin_domain_name:
-        params["domain_name"] = ctx.dtwin_domain_name
-    return params
+    return loopback_registry_params(ctx)
 
 
 def _error(msg: str) -> str:
@@ -353,7 +331,12 @@ def tool_run_sparql(
     limit: int | None = None,
     **_kwargs,
 ) -> str:
-    """Execute a read-only SPARQL SELECT (or ASK) query."""
+    """Execute a read-only SPARQL SELECT (or ASK) query.
+
+    Dormant: excluded from TOOL_DEFINITIONS/TOOL_HANDLERS because it queries
+    the warehouse Delta view and cannot see inferred/reasoning triples.  Kept
+    for future activation when a raw-SPARQL mode is needed.
+    """
     if not query or not query.strip():
         return _error("Missing required 'query' argument.")
     if _SPARQL_DANGEROUS.search(query):
@@ -362,7 +345,7 @@ def tool_run_sparql(
             "Only SELECT / ASK / DESCRIBE queries are allowed."
         )
 
-    payload = {"query": query}
+    payload: dict = {"query": query}
     if limit is not None:
         try:
             payload["limit"] = int(limit)
@@ -495,43 +478,12 @@ _QUERY_GRAPHQL_DEF = {
     },
 }
 
-_RUN_SPARQL_DEF = {
-    "type": "function",
-    "function": {
-        "name": "run_sparql",
-        "description": (
-            "Execute a READ-ONLY SPARQL query (SELECT / ASK / DESCRIBE) "
-            "against the selected domain's digital twin. Mutating queries "
-            "(DROP / DELETE / INSERT / ...) are rejected."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "SPARQL query (SELECT / ASK / DESCRIBE only).",
-                },
-                "limit": {
-                    "type": "integer",
-                    "description": "Optional row cap.",
-                },
-            },
-            "required": ["query"],
-        },
-    },
-}
-
-
 TOOL_DEFINITIONS: List[dict] = [
     _LIST_ENTITY_TYPES_DEF,
     _DESCRIBE_ENTITY_DEF,
     _GET_STATUS_DEF,
     _GET_GRAPHQL_SCHEMA_DEF,
     _QUERY_GRAPHQL_DEF,
-    # run_sparql intentionally excluded: it queries the warehouse Delta view and
-    # cannot see inferred/reasoning triples.  Use describe_entity (raw triple
-    # store, union view) or query_graphql (schema-filtered, same union view) so
-    # Graph Chat always operates on the full graph including materialised data.
 ]
 
 TOOL_HANDLERS: Dict[str, Callable] = {

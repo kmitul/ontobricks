@@ -181,12 +181,6 @@ class PermissionService:
             logger.debug("Could not resolve groups for %s: %s", email, e)
             return []
 
-    def clear_user_groups_cache(self, email: str = ""):
-        if email:
-            self._user_groups_cache.pop(email.lower(), None)
-        else:
-            self._user_groups_cache.clear()
-
     # ------------------------------------------------------------------
     # Admin detection via Databricks App Permissions API
     # ------------------------------------------------------------------

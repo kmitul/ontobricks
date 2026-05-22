@@ -116,6 +116,25 @@ Cohort Discovery Agent
    :show-inheritance:
    :exclude-members: ToolContext
 
+Graph Chat Agent
+----------------
+
+.. automodule:: agents.agent_dtwin_chat
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: agents.agent_dtwin_chat.engine
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: agents.agent_dtwin_chat.tools
+   :members:
+   :undoc-members:
+   :show-inheritance:
+   :exclude-members: ToolContext
+
 Shared Tools
 ------------
 
@@ -150,6 +169,11 @@ Shared Tools
    :show-inheritance:
 
 .. automodule:: agents.tools.sql
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+.. automodule:: agents.tools.loopback_http
    :members:
    :undoc-members:
    :show-inheritance:

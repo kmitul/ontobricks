@@ -1,0 +1,56 @@
+graph LR
+    subgraph FE["① Frontend  /src/front  +  /src/api"]
+        UI["HTML Routes\nJinja2 Templates"]
+        API["FastAPI\nRouters"]
+        EXT["External\nAPI v1"]
+        MCP["MCP\nServer"]
+    end
+
+    subgraph OBJ["② Domain Objects  /src/back/objects"]
+        SES["DomainSession"]
+        DOM["Domain"]
+        ONT["Ontology"]
+        DT["DigitalTwin"]
+        MAP["Mapping"]
+        REG["RegistryService"]
+    end
+
+    subgraph CORE["③ Core Engines  /src/back/core"]
+        W3C["W3C Parsers\nOWL · RDFS · SPARQL\nSHACL · R2RML"]
+        GDB["GraphDB Backend\nLakebaseFlatStore\nDeltaTripleStore"]
+        RES["Reasoning\nSWRL · OWL-RL\nSPARQL Rules"]
+        DBC["Databricks\nClient · Auth\nUnityCatalog · SQL"]
+        GA["Graph Analysis\nCohortBuilder"]
+        GQL["GraphQL\nBuilder"]
+    end
+
+    subgraph AGT["④ AI Agents  /src/agents"]
+        AGC["AgentClient"]
+        OWLGen["owl_generator"]
+        OntA["ontology_assistant"]
+        AutoA["auto_assignment"]
+        Coh["cohort"]
+    end
+
+    subgraph SHR["⑤ Shared  /src/shared"]
+        CFG["Settings\nConstants"]
+        MID["FastAPI\nMiddleware"]
+    end
+
+    UI  --> SES
+    API --> SES
+    API --> DOM & ONT & DT & MAP & REG
+    EXT --> DOM
+    MCP --> DOM
+
+    DOM --> W3C & GDB & DBC
+    ONT --> W3C & GDB & AGC
+    DT  --> GDB & RES & GA & AGC
+    MAP --> W3C & AGC
+    REG --> DBC
+
+    AGC --> OWLGen & OntA & AutoA & Coh
+
+    CORE --> SHR
+    OBJ  --> SHR
+    FE   --> SHR

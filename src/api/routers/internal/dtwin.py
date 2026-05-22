@@ -225,7 +225,8 @@ async def start_triplestore_sync(
 
         _engine = TripleStoreFactory._resolve_graph_engine(domain, settings) or ""
         _ecfg = TripleStoreFactory._resolve_graph_engine_config(domain, settings) or {}
-    except Exception:  # noqa: BLE001
+    except Exception as _exc:  # noqa: BLE001
+        logger.debug("Engine config resolution failed, defaulting to non-synced: %s", _exc)
         _engine = ""
         _ecfg = {}
     _is_synced_mode = _engine == "lakebase" and _ecfg.get("sync_mode") == "managed_synced"
@@ -537,7 +538,8 @@ async def cohort_materialize(
     def _label_resolver(uris):
         try:
             metadata = ctx.store.get_entity_metadata(ctx.graph_name, list(uris))
-        except Exception:
+        except Exception as exc:
+            logger.debug("Label resolver: entity metadata unavailable: %s", exc)
             return {}
         return {row.get("uri", ""): row.get("label", "") for row in metadata or []}
 
