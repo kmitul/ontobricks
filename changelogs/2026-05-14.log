@@ -472,3 +472,57 @@ uv run pytest -q --ignore=tests/e2e --ignore=tests/property
 
 - `/healthz` returns 200.
 - `/access-denied?reason=bootstrap` now returns 302 (redirect to the app, since the bootstrap state is satisfied).
+
+---
+
+## Live integration probe suite + MCP deploy fix (round 9)
+
+**Context:** Asked to run integration tests against the deployed int instance. Existing `tests/integration` / `tests/e2e` use in-process TestClient / local Uvicorn — they're integration tests of the codebase, not of a deployed instance. Wrote a new `tests/live_integration/` suite that hits the real URL with a workspace OAuth Bearer minted from the active Databricks CLI profile.
+
+**Production bug surfaced + fixed:**
+
+The round-8 deploy started the MCP app's *compute* (container running) but never deployed source code to it — only `bundle run ontobricks_dev_app` was invoked, never `bundle run mcp_ontobricks_app`. The `databricks apps get mcp-ontobricks` payload had `app_status.state=UNAVAILABLE` with message "App has not been deployed yet. Run your app by deploying source code". `/mcp` returned 502 Bad Gateway.
+
+Fix: ran `databricks bundle run mcp_ontobricks_app -t dev` with the int variable overrides. MCP now serves a proper JSON-RPC error envelope on unframed GET ("Missing session ID", code -32600) and a full two-step Streamable-HTTP handshake (`initialize` → `tools/list`) returns the OntoBricks tool inventory.
+
+**Test assumptions corrected by the live probes:**
+
+1. `/healthz` returns 200 with an **empty body** (not JSON). Original test asserting non-empty body was wrong — fixed.
+2. OpenAPI does not use `/api/v1/...` or `/api/routers/internal/...` prefixes. The actual public surface is top-level: `/dtwin/`, `/ontology/`, `/mapping/`, `/settings/`, `/domain/`, `/tasks/`, `/graphql`, `/api/help/...`. Tests rewritten to assert these.
+3. MCP needs the full Streamable-HTTP session protocol: `initialize` → server returns `Mcp-Session-Id` header → client sends `notifications/initialized` → subsequent `tools/list` includes the session ID. Bearer-only auth without the handshake yields 400 "Missing session ID" — that's correct behaviour, not a bug.
+
+**New artifacts:**
+
+- `tests/live_integration/__init__.py`
+- `tests/live_integration/conftest.py` — session-scoped Bearer-token fixture (sources `databricks auth token`), `live_base` / `mcp_base` fixtures gated by `ONTOBRICKS_LIVE_BASE` env var (suite skipped if unset).
+- `tests/live_integration/test_app_smoke.py` — 11 probes: health endpoints, OpenAPI shape + router coverage, static assets, session endpoints, settings fan-out.
+- `tests/live_integration/test_mcp_smoke.py` — 6 probes: MCP gateway alive (non-5xx), proper JSON-RPC error on unframed GET, full `initialize` handshake returns session ID, full `initialize` → `tools/list` round-trip returns real tools, anonymous POST rejected.
+- `pytest.ini` + `pyproject.toml` — new `live_integration` marker registered (gated behind env var so default CI ignores).
+
+**Verification:**
+
+```
+ONTOBRICKS_LIVE_BASE=https://ontobricks-030-7474657573264612.aws.databricksapps.com \
+ONTOBRICKS_LIVE_MCP_BASE=https://mcp-ontobricks-7474657573264612.aws.databricksapps.com \
+DATABRICKS_CONFIG_PROFILE=fevm-ontobricks-int \
+  uv run pytest tests/live_integration/ -v -m live_integration --no-cov
+# 17 passed in 12.18s
+```
+
+**Followup tickets:**
+
+- `scripts/deploy.sh` only runs the main app via `databricks bundle run "$APP_RESOURCE_KEY"`; it should also run `"$MCP_APP_RESOURCE_KEY"` so a single deploy invocation produces a working pair. (We hit this on the int deploy.)
+- The post-deploy verification block hard-references `${APP_NAME}` / `${MCP_APP_NAME}` from env but app names are hard-coded in `databricks.yml`; printed `NOT DEPLOYED` even when deploy succeeded.
+
+**Files modified (round 9):**
+
+Created:
+- `tests/live_integration/__init__.py`
+- `tests/live_integration/conftest.py`
+- `tests/live_integration/test_app_smoke.py`
+- `tests/live_integration/test_mcp_smoke.py`
+
+Modified:
+- `pytest.ini`
+- `pyproject.toml`
+- `changelogs/2026-05-14.log`
