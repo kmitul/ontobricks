@@ -11,6 +11,7 @@ This directory holds the SPEC.md scaffold for every agent that existed **before*
 | `agent_auto_assignment` | 🟡 scaffold | ❌ not built | ❌ |
 | `agent_auto_icon_assign` | 🟡 scaffold | ❌ not built | ❌ |
 | `agent_dtwin_chat` | 🟡 scaffold | ❌ not built | ❌ |
+| `agent_cohort` | 🟡 scaffold | ❌ not built | ❌ |
 
 **Legend:** 🟢 complete, 🟡 scaffold present, ❌ missing.
 

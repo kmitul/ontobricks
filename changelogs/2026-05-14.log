@@ -348,3 +348,50 @@ uv run pytest tests/back/core/w3c/sparql/ -q
 uv run pytest --collect-only -q
 # 2071 tests collected (21 more than round-4's 2050)
 ```
+
+---
+
+## Test additions for new cohort code (round 7)
+
+**Context:** Re-evaluated test coverage of the cohort feature that develop introduced (`agent_cohort` + `CohortService` + `_BuildPipeline` + `CohortBuilder` + `CohortVocabulary`, ~3000 LOC). Most of it came with tests on develop, but two gaps remained:
+
+1. **G2 CI gate compliance** — `agent_cohort` had no SPEC.md scaffold and no eval dataset, which `.cursor/12-ai-feature-lifecycle.mdc` + `.github/workflows/eval-gate.yml` would block on the next PR touching `src/agents/agent_cohort/**`.
+2. **Pure-function coverage gap** — `CohortService` (609 LOC) only had ~3 references in `test_digitaltwin_api.py`; `_BuildPipeline` (1006 LOC) had **zero** direct tests for its constructor-derived state and `_log_phase` helper.
+
+**Changes:**
+
+1. **`.planning/agents/agent_cohort/SPEC.md`** — retroactive scaffold mirroring the other 5 agents' template; documents the 6-tool surface (`list_classes`, `list_properties_of`, `count_class_members`, `sample_values_of`, `propose_rule`, `dry_run`), proposed eval dimensions table with thresholds, failure modes table. Sections 4/6/7 left for the team to fill at M2.P4.
+2. **`tests/eval/datasets/agent_cohort/baseline.jsonl`** — 3-example seed (single-linkage happy, multi-property happy, vague-prompt adversarial). Needs expansion to ≥20.
+3. **`tests/eval/thresholds.yaml`** — added `cohort:` block matching the SPEC §5 proposal.
+4. **`.planning/agents/README.md`** — status table row for `agent_cohort`.
+5. **`tests/back/core/digitaltwin/test_cohort_service_units.py`** — 39 tests covering `_snake_case` (11 parametrized + 4 edge cases), `_result_to_dict` (3 tests), `_enrich_members` (6 tests including store-exception fall-through), `probe_uc_write` (11 tests across all permission-probe branches), `suggest_uc_target` (5 tests across the priority chain). Catches the public-API contract of all 3 `@staticmethod`s on `CohortService` plus the priority-resolution logic.
+6. **`tests/back/core/digitaltwin/test_build_pipeline_units.py`** — 15 tests on `_BuildPipeline.__init__` derived state (`is_api`, `actual_mode`, `cfg_forced_full` — including the api-mode-ignores-config-changed nuance), `parts` split, `domain_name` fallback, lazy-state initialisation, and the `_log_phase` helper (records elapsed, accumulates, overwrites on retry).
+
+**Verification:**
+
+```
+uv run pytest tests/back/core/digitaltwin/test_cohort_service_units.py -v
+# 39 passed in 2.89s
+
+uv run pytest tests/back/core/digitaltwin/test_build_pipeline_units.py -v
+# 15 passed in 0.89s
+
+uv run pytest tests/back/ tests/contract/ tests/property/ tests/mcp/ -q
+# 232 passed (CNS suite, was 178 before)
+
+uv run pytest --collect-only -q
+# 2373 tests collected (was 2319; +54 new)
+```
+
+**Files modified / created (round 7):**
+
+Created:
+- `.planning/agents/agent_cohort/SPEC.md`
+- `tests/eval/datasets/agent_cohort/baseline.jsonl`
+- `tests/back/core/digitaltwin/test_cohort_service_units.py`
+- `tests/back/core/digitaltwin/test_build_pipeline_units.py`
+
+Modified:
+- `.planning/agents/README.md`
+- `tests/eval/thresholds.yaml`
+- `changelogs/2026-05-14.log`
