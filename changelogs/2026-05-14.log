@@ -455,3 +455,20 @@ uv run pytest -q --ignore=tests/e2e --ignore=tests/property
 
 - `tests/test_settings_lakebase_status.py` — psycopg_installed fixture + 5 test signatures.
 - `changelogs/2026-05-14.log` — this entry.
+
+---
+
+## Bootstrap app self-permissions (round 8 follow-up)
+
+**Context:** The round-8 deploy used `--no-bootstrap` and landed on the "Access Denied — First-deploy bootstrap required" page. Ran `scripts/bootstrap-app-permissions.sh ontobricks-030 mcp-ontobricks` against the int workspace to complete the first-deploy step.
+
+**Result:**
+
+- `ontobricks-030` service principal `4499b5ef-08f6-4be6-b1f9-d271c2797019` → granted `CAN_MANAGE` on `ontobricks-030`.
+- `mcp-ontobricks` service principal `c0fd3f1f-f4cf-4d7b-8840-373fa64f7e45` → granted `CAN_MANAGE` on `mcp-ontobricks`.
+- `mcp-ontobricks` SP → granted `CAN_USE` on `ontobricks-030` (so the MCP server can call back into the FastAPI REST API on behalf of LLM clients).
+
+**Verification:**
+
+- `/healthz` returns 200.
+- `/access-denied?reason=bootstrap` now returns 302 (redirect to the app, since the bootstrap state is satisfied).
