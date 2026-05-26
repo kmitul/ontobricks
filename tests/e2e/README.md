@@ -124,7 +124,7 @@ Merges the two previously separate Digital Twin test files.
 | File | Class | What it tests |
 |---|---|---|
 | `test_help_modal_flows.py` | `TestHelpModalPresence` | `#helpCenterToggle` visible; `#helpModal` in DOM; toggle adds `.show`; `#help-welcome` active by default |
-| | `TestHelpDocsApi` | `GET /api/help/docs` → JSON `{categories}`; first catalogued slug fetches to 200; unknown slug → 404; path-traversal → 404 |
+| | `TestHelpDocsApi` | `GET /api/help/docs` → JSON `{categories}`; all catalogued slugs fetch to 200 with markdown; unknown slug → 404; path-traversal → 404 |
 
 ### `security/` — 9 tests
 

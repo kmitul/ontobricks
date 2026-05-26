@@ -1392,7 +1392,7 @@ make bootstrap-lakebase  # Lakebase schema grants (see scripts/bootstrap-lakebas
 
 ### File Sync
 
-The `.databricksignore` at the project root excludes non-runtime files (tests, docs, data, IDE config, etc.) from the main app sync. The MCP server has its own `source_code_path` pointing directly to `src/mcp-server/`.
+The `.databricksignore` at the project root excludes non-runtime files (tests, data, IDE config, Sphinx HTML build output, etc.) from the main app sync, but **includes** `docs/` so the in-app Help Center can serve `/api/help/docs/*` in production. The MCP server has its own `source_code_path` pointing directly to `src/mcp-server/`.
 
 ### Binding existing apps
 

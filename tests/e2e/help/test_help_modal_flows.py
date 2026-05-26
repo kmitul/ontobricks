@@ -70,13 +70,30 @@ class TestHelpDocsApi:
         assert slug, "No catalogued docs found"
 
         doc = page.request.get(f"{live_server}/api/help/docs/{slug}")
-        # 200 when the markdown file is present on disk; 404 otherwise.
-        # Both are legal -- but 500 never is.
-        assert doc.status in (200, 404)
-        if doc.status == 200:
-            body = json.loads(doc.body())
-            assert body["slug"] == slug
-            assert "markdown" in body
+        assert doc.status == 200, (
+            f"/api/help/docs/{slug} must return 200 when docs/ is shipped"
+        )
+        body = json.loads(doc.body())
+        assert body["slug"] == slug
+        assert body.get("markdown", "").strip()
+
+    def test_all_catalogued_docs_return_200(self, page, live_server):
+        """Every Help Center catalog entry must load — no 404 in production."""
+        index = page.request.get(f"{live_server}/api/help/docs")
+        assert index.status == 200
+        failures: list[str] = []
+        for cat in json.loads(index.body()).get("categories", []):
+            for doc in cat.get("docs", []):
+                slug = doc["slug"]
+                title = doc.get("title", slug)
+                response = page.request.get(f"{live_server}/api/help/docs/{slug}")
+                if response.status != 200:
+                    failures.append(f"{title} ({slug}) -> HTTP {response.status}")
+                    continue
+                body = json.loads(response.body())
+                if not body.get("markdown", "").strip():
+                    failures.append(f"{title} ({slug}) -> empty markdown")
+        assert not failures, "Help Center docs failed to load:\n" + "\n".join(failures)
 
     def test_help_doc_unknown_slug_returns_404(self, page, live_server):
         response = page.request.get(f"{live_server}/api/help/docs/does-not-exist")
