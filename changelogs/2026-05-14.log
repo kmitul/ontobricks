@@ -395,3 +395,63 @@ Modified:
 - `.planning/agents/README.md`
 - `tests/eval/thresholds.yaml`
 - `changelogs/2026-05-14.log`
+
+---
+
+## Deploy to integration + lakebase status test fix (round 8)
+
+**Context:** Deployed CNS test-foundations branch to the integration workspace at `https://fevm-ontobricks-int.cloud.databricks.com/`. Pre-flight surfaced 3 failing tests in `tests/test_settings_lakebase_status.py` — all caused by an implicit dependency on `psycopg` (optional `[lakebase]` extra) not being installed in the base venv. The production code's optional-import gate correctly short-circuited, but the tests assumed it wouldn't.
+
+**Fix:**
+
+1. **`tests/test_settings_lakebase_status.py`** — added `psycopg_installed` fixture that stubs `sys.modules["psycopg"]` so the optional-extra gate inside `_lakebase_schema_status` lets the test reach the mocked `RegistryFactory.lakebase`. Applied to the 5 tests that need the gate to pass (`test_uninitialized_skips_row_count_probe`, `test_initialized_but_empty_tables_reports_unpopulated`, `test_initialized_with_any_table_populated_reports_true`, `test_factory_failure_is_swallowed`, `test_row_count_failure_keeps_initialized_true`). The deliberate-miss test (`test_returns_false_pair_when_psycopg_missing`) does not use the fixture — it's testing the gate itself.
+
+**Integration workspace bootstrap:**
+
+1. Created `ontobricks_int_catalog.ontobricks` schema (Unity Catalog).
+2. Created managed volume `ontobricks_int_catalog.ontobricks.registry`.
+3. Started SQL warehouse `fcdf5a06992ad225` ("Serverless Starter Warehouse").
+4. Authenticated profile `fevm-ontobricks-int` against the workspace.
+
+**Deploy invocation:**
+
+```
+DATABRICKS_CONFIG_PROFILE=fevm-ontobricks-int \
+  DAB_TARGET=dev \
+  WAREHOUSE_ID=fcdf5a06992ad225 \
+  REGISTRY_CATALOG=ontobricks_int_catalog \
+  REGISTRY_SCHEMA=ontobricks \
+  REGISTRY_VOLUME=registry \
+  APP_SQL_WAREHOUSE_FALLBACK=fcdf5a06992ad225 \
+  APP_DATABRICKS_CATALOG=ontobricks_int_catalog \
+  APP_DATABRICKS_SCHEMA=ontobricks \
+  APP_TRIPLESTORE_TABLE=ontobricks_int_catalog.ontobricks.default_triplestore \
+  APP_REGISTRY_CATALOG=ontobricks_int_catalog \
+  APP_REGISTRY_SCHEMA=ontobricks \
+  APP_REGISTRY_VOLUME=registry \
+  scripts/deploy.sh --no-bootstrap
+```
+
+`DAB_TARGET=dev` (not `dev-lakebase`) because the int workspace has no Lakebase project; runtime backend stays on Volume.
+
+**Result:**
+
+- `ontobricks-030` (FastAPI UI) — ACTIVE — https://ontobricks-030-7474657573264612.aws.databricksapps.com — `/healthz` returns 200.
+- `mcp-ontobricks` — ACTIVE — https://mcp-ontobricks-7474657573264612.aws.databricksapps.com — `/mcp` returns 302 (OAuth redirect, expected for protected endpoint).
+
+**Known caveat:** the deploy script's post-deploy "Verification" block looks up apps by `${APP_NAME}` / `${MCP_APP_NAME}` and reports "NOT DEPLOYED" because the app names are hard-coded in `databricks.yml` (`ontobricks-030`, `mcp-ontobricks`) rather than derived from the env. Despite the misleading message the actual deploy succeeded — both apps respond to direct probes. Followup ticket: surface the resolved Databricks app names back to the script's verification step.
+
+**Verification:**
+
+```
+uv run pytest tests/test_settings_lakebase_status.py -v
+# 7 passed
+
+uv run pytest -q --ignore=tests/e2e --ignore=tests/property
+# 2281 passed (was 2280 with 1 failure pre-fix)
+```
+
+**Files modified (round 8):**
+
+- `tests/test_settings_lakebase_status.py` — psycopg_installed fixture + 5 test signatures.
+- `changelogs/2026-05-14.log` — this entry.
