@@ -578,3 +578,41 @@ All 80/80 pass. The 6 timeout failures are not bugs — they're tests that REQUI
 - `tests/e2e/conftest.py` — uvicorn log capture for debuggable startup failures.
 - `.gitignore` — `tests/e2e/_e2e_server.log` ignore.
 - `changelogs/2026-05-14.log` — this entry.
+
+---
+
+## E2E default-to-int workspace (round 10 follow-up)
+
+**Context:** The round-10 round showed that the e2e suite's default fake creds caused 6 of 80 tests to time out on Databricks-dependent routes. Manual real-creds invocation made them pass. The right answer is to make int the **default** so a plain `pytest tests/e2e/` is a real signal, not a half-broken run.
+
+**Change:**
+
+`tests/e2e/conftest.py` — the `_set_env` fixture now mints a workspace OAuth token from the Databricks CLI profile named by `ONTOBRICKS_E2E_PROFILE` (default `fevm-ontobricks-int`) and exports it as `DATABRICKS_HOST`/`DATABRICKS_TOKEN` into the subprocess. Three operating modes:
+
+| Mode | Trigger | Behaviour |
+|---|---|---|
+| Auto-int (default) | nothing | mint OAuth from the configured profile; uses warehouse `fcdf5a06992ad225` |
+| Caller creds | `DATABRICKS_HOST` + `DATABRICKS_TOKEN` already set | respect them, set warehouse override if `ONTOBRICKS_E2E_WAREHOUSE_ID` is supplied |
+| Fake | `ONTOBRICKS_E2E_FAKE_CREDS=1` | use the original `test.databricks.com` fake values (6 DB tests will time out — intentional for non-int CI) |
+| Skip | no working profile + no `_FAKE_CREDS` opt-in | skip the suite with an actionable error message |
+
+**Verification:**
+
+```
+# Default — int workspace, no env-var ritual required.
+uv run pytest tests/e2e/ --no-cov -q
+# 80 passed in 59.86s
+
+# Fake-creds opt-out still works.
+ONTOBRICKS_E2E_FAKE_CREDS=1 uv run pytest tests/e2e/test_e2e_flows.py::TestNavigation -q
+# 1 failed, 8 passed (the /dtwin/ test times out as expected)
+
+# Bad profile -> graceful skip with actionable error.
+ONTOBRICKS_E2E_PROFILE=does-not-exist uv run pytest tests/e2e/test_e2e_flows.py::TestNavigation -q
+# 6 skipped
+```
+
+**Files modified:**
+
+- `tests/e2e/conftest.py` — `_mint_workspace_token` helper + 3-mode `_set_env` fixture.
+- `changelogs/2026-05-14.log` — this entry.
