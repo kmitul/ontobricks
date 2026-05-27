@@ -41,7 +41,7 @@ class R2RMLParser:
         for triples_map in self.graph.subjects(RDF.type, self.RR.TriplesMap):
             mapping_info = self._extract_triples_map(triples_map)
 
-            if mapping_info["has_class"]:
+            if mapping_info["has_class"] and mapping_info["entity"] is not None:
                 entity_mappings.append(mapping_info["entity"])
 
             relationship_mappings.extend(mapping_info["relationships"])
@@ -90,8 +90,17 @@ class R2RMLParser:
                 else subject_class.split("/")[-1]
             )
 
+        # Extract source class name from subject template for relationship TriplesMaps
+        # Template format: "{base_uri}{ClassName}/{id_col}" → capture ClassName
+        source_class_name = None
+        if subject_template:
+            match = re.search(r"/([^/]+)/\{[^}]+\}$", subject_template)
+            if match:
+                source_class_name = match.group(1)
+
         # Process predicate-object maps
         label_column = None
+        attribute_mappings = {}
 
         for pom in self.graph.objects(triples_map, self.RR.predicateObjectMap):
             predicate = None
@@ -107,28 +116,39 @@ class R2RMLParser:
                 for col in self.graph.objects(obj_map, self.RR.column):
                     object_column = str(col)
 
-            # Check for rdfs:label
-            if predicate and predicate.endswith("label"):
-                label_column = object_column
+            if not predicate:
+                continue
 
-            # Check for relationship (object template pointing to another entity)
-            if predicate and object_template and not predicate.endswith("label"):
+            if predicate.endswith("label"):
+                label_column = object_column
+            elif object_template:
+                # Relationship: objectMap uses a template pointing to another entity
                 rel_mapping = self._extract_relationship(
-                    predicate, object_template, id_column, sql_query
+                    predicate, object_template, id_column, sql_query, source_class_name
                 )
                 if rel_mapping:
                     info["relationships"].append(rel_mapping)
+            elif object_column:
+                # Attribute: objectMap uses a plain column reference
+                attr_name = (
+                    predicate.split("#")[-1]
+                    if "#" in predicate
+                    else predicate.split("/")[-1]
+                )
+                attribute_mappings[attr_name] = object_column
 
-        # Build entity mapping
-        if info["has_class"] and table:
+        # Build entity mapping - works for both rr:tableName and rr:sqlQuery
+        if info["has_class"] and (table or sql_query):
             info["entity"] = {
                 "ontology_class": subject_class,
                 "ontology_class_label": class_name,
                 "catalog": catalog or "",
                 "schema": schema or "",
-                "table": table,
+                "table": table or "",
+                "sql_query": sql_query or "",
                 "id_column": id_column or "",
                 "label_column": label_column or "",
+                "attribute_mappings": attribute_mappings,
             }
 
         return info
@@ -147,7 +167,7 @@ class R2RMLParser:
             return None, None, table_name
 
     def _extract_relationship(
-        self, predicate, object_template, source_column, sql_query
+        self, predicate, object_template, source_id_column, sql_query, source_class_name=None
     ):
         """Extract relationship mapping from predicate-object map."""
         template_match = re.search(r"/([^/]+)/\{([^}]+)\}", object_template)
@@ -155,7 +175,7 @@ class R2RMLParser:
             return None
 
         target_class = template_match.group(1)
-        target_column = template_match.group(2)
+        target_id_column = template_match.group(2)
         prop_name = (
             predicate.split("#")[-1] if "#" in predicate else predicate.split("/")[-1]
         )
@@ -164,11 +184,17 @@ class R2RMLParser:
             "property": predicate,
             "property_label": prop_name,
             "property_name": prop_name,
-            "source_table": None,  # Will be derived from context
+            "source_class": source_class_name or "",
+            "source_class_label": source_class_name or "",
+            "target_class": target_class,
+            "target_class_label": target_class,
+            "source_table": source_class_name or "",
             "target_table": target_class,
-            "source_column": source_column,
-            "target_column": target_column,
+            "source_id_column": source_id_column or "",
+            "target_id_column": target_id_column,
             "sql_query": sql_query or "",
+            "attribute_mappings": {},
+            "direction": "forward",
         }
 
     @staticmethod
