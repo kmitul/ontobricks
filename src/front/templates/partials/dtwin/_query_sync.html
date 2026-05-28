@@ -67,29 +67,6 @@
         </div>
     </div>
 
-    <!-- Build Mode Options -->
-    <div class="d-flex align-items-center gap-3 mb-2 small">
-        <span class="fw-semibold text-muted"><i class="bi bi-sliders me-1"></i>Build Mode</span>
-        <div class="form-check mb-0">
-            <input class="form-check-input" type="radio" name="buildMode" id="buildModeIncremental" value="incremental" checked
-                   {% if _dr not in ('builder', 'admin', '') %}disabled{% endif %}>
-            <label class="form-check-label" for="buildModeIncremental">Incremental</label>
-        </div>
-        <div class="form-check mb-0">
-            <input class="form-check-input" type="radio" name="buildMode" id="buildModeFull" value="full"
-                   {% if _dr not in ('builder', 'admin', '') %}disabled{% endif %}>
-            <label class="form-check-label" for="buildModeFull">Full rebuild</label>
-        </div>
-    </div>
-    <div class="d-flex align-items-start gap-2 mb-2 small">
-        <div class="form-check mb-0">
-            <input class="form-check-input" type="checkbox" id="syncArchiveToRegistry" checked
-                   {% if _dr not in ('builder', 'admin', '') %}disabled{% endif %}>
-            <label class="form-check-label" for="syncArchiveToRegistry">Archive graph to registry</label>
-        </div>
-        <span class="text-muted" style="max-width: 28rem;">After the graph is updated locally, copy it to your registry Volume for reload on other machines. Uncheck for a faster build when you do not need that backup.</span>
-    </div>
-
     <!-- Progress -->
     <div id="syncProgressArea" class="mt-2 mb-2 d-none">
             <div class="progress mb-2 ob-progress-md">
@@ -116,48 +93,14 @@
                         <i class="bi bi-diagram-2 me-1"></i>Mapping
                     </span>
                 </div>
-                <div id="syncReadinessLoading" class="text-center py-3 d-none"></div>
                 <div id="syncReadinessContent" class="d-none">
-                    <div class="row g-2 mb-2">
-                        <div class="col">
-                            <div class="ob-kpi-tile" id="syncTileEntities">
-                                <div class="ob-kpi-tile-icon"><i class="bi bi-box"></i></div>
-                                <div class="ob-kpi-tile-value" id="syncTileEntitiesValue">-</div>
-                                <div class="ob-kpi-tile-label">Entities</div>
-                            </div>
-                        </div>
-                        <div class="col">
-                            <div class="ob-kpi-tile" id="syncTileAttributes">
-                                <div class="ob-kpi-tile-icon"><i class="bi bi-list-ul"></i></div>
-                                <div class="ob-kpi-tile-value" id="syncTileAttributesValue">-</div>
-                                <div class="ob-kpi-tile-label">Attributes</div>
-                            </div>
-                        </div>
-                        <div class="col">
-                            <div class="ob-kpi-tile" id="syncTileRelationships">
-                                <div class="ob-kpi-tile-icon"><i class="bi bi-arrow-left-right"></i></div>
-                                <div class="ob-kpi-tile-value" id="syncTileRelationshipsValue">-</div>
-                                <div class="ob-kpi-tile-label">Relationships</div>
-                            </div>
-                        </div>
-                        <div class="col">
-                            <div class="ob-kpi-tile" id="syncTileMappedEntities">
-                                <div class="ob-kpi-tile-icon"><i class="bi bi-link-45deg"></i></div>
-                                <div class="ob-kpi-tile-value" id="syncTileMappedEntitiesValue">-</div>
-                                <div class="ob-kpi-tile-label">Mapped Entities</div>
-                            </div>
-                        </div>
-                        <div class="col">
-                            <div class="ob-kpi-tile" id="syncTileMappedRels">
-                                <div class="ob-kpi-tile-icon"><i class="bi bi-diagram-2"></i></div>
-                                <div class="ob-kpi-tile-value" id="syncTileMappedRelsValue">-</div>
-                                <div class="ob-kpi-tile-label">Mapped Rel.</div>
-                            </div>
-                        </div>
+                    <div class="d-flex align-items-center gap-2">
+                        <span class="text-muted small"><i class="bi bi-diagram-2 me-1"></i>Mapping</span>
+                        <span id="syncMappingReadyBadge"></span>
                     </div>
                     <div class="alert alert-warning small mb-0 mt-2 d-none" id="syncNotReadyAlert">
                         <i class="bi bi-exclamation-triangle me-1"></i>
-                        <span id="syncNotReadyMessage">Both Ontology and Assignments must be ready before you can build or load data.</span>
+                        Mapping must be ready before you can build.
                     </div>
                 </div>
             </div>
@@ -187,86 +130,73 @@
                         <div id="tripleStoreStatusArea" class="d-none"></div>
                     </div>
 
-                    <!-- Two-column layout: Triple-Store | Graph DB -->
+                    <!-- Architecture diagram: Triple Store → Sync → Graph DB (Lakebase) -->
                     <div id="dtColumnsArea" class="d-none">
-                        <div class="row g-3">
-                            <!-- Triple-Store Digital Twin -->
-                            <div class="col-md-6">
-                                <div class="border rounded p-3 h-100" id="dtZeroCopyCard">
-                                    <div class="d-flex align-items-center mb-2">
-                                        <i class="bi bi-eye fs-5 me-2 text-primary"></i>
-                                        <strong>Triple-Store Digital Twin</strong>
-                                        <span id="dtExistView" class="ms-auto"></span>
-                                    </div>
-                                    <div class="small">
-                                        <div class="text-muted mb-1">Unity Catalog VIEW</div>
-                                        <code id="dtViewName" class="d-block text-break">N/A</code>
-                                    </div>
-                                    <div class="small mt-2 d-none" id="dtSnapshotArea">
-                                        <div class="text-muted mb-1">Incremental Snapshot</div>
-                                        <div class="d-flex justify-content-between align-items-center">
-                                            <code id="dtSnapshotName" class="text-break ob-code-tiny"></code>
-                                            <span class="d-flex align-items-center gap-1">
-                                                <span id="dtExistSnapshot"></span>
-                                                {% if _dr in ('builder', 'admin', '') %}
-                                                <button type="button" id="dtDropSnapshot" class="btn btn-outline-danger btn-sm py-0 px-1 ob-btn-compact d-none"
-                                                        data-sync-action="drop-snapshot-table"
-                                                        title="Drop snapshot to force a full rebuild on next build">
-                                                    <i class="bi bi-trash me-1"></i>Drop
-                                                </button>
-                                                {% else %}
-                                                <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-1 ob-btn-compact d-none" disabled
-                                                        title="Only builders and admins can drop the snapshot">
-                                                    <i class="bi bi-lock me-1"></i>Drop
-                                                </button>
-                                                {% endif %}
-                                            </span>
-                                        </div>
-                                    </div>
+                        <div class="dt-arch-diagram">
+
+                            <!-- Card 1: Triple Store (Unity Catalog VIEW) -->
+                            <div class="dt-arch-node" id="dtZeroCopyCard">
+                                <div class="dt-arch-header">
+                                    <i class="bi bi-database fs-4 dt-arch-icon-triplestore flex-shrink-0"></i>
+                                    <span class="dt-arch-title">Triple Store</span>
+                                    <span class="dt-arch-badge" id="dtExistView"></span>
                                 </div>
+                                <code class="dt-arch-name" id="dtViewName">N/A</code>
                             </div>
-                            <!-- Graph DB Digital Twin -->
-                            <div class="col-md-6">
-                                <div class="border rounded p-3 h-100" id="dtGraphCard">
-                                    <div class="d-flex align-items-center mb-2">
-                                        <i class="bi bi-diagram-3-fill fs-5 me-2 text-primary"></i>
-                                        <strong>Graph DB Digital Twin</strong>
-                                        <span id="dtExistLocal" class="ms-auto"></span>
-                                    </div>
-                                    <div class="small">
-                                        <div class="text-muted mb-1">Local graph database</div>
-                                        <div class="mb-1">
-                                            <code id="dtLocalPath" class="d-block text-break text-muted ob-code-tiny"></code>
-                                        </div>
-                                        <div class="d-flex justify-content-between align-items-center">
-                                            <span class="text-muted">Registry archive</span>
-                                            <span class="d-flex align-items-center gap-1">
-                                                <span id="dtExistRegistry"></span>
-                                                {% if _dr in ('builder', 'admin', '') %}
-                                                <button type="button" id="dtReloadFromRegistry" class="btn btn-outline-secondary btn-sm py-0 px-1 ob-btn-compact d-none" data-sync-action="reload-graph-from-registry" title="Download the graph archive from the registry and restore it locally">
-                                                    <i class="bi bi-cloud-arrow-down me-1"></i>Reload
-                                                </button>
-                                                {% else %}
-                                                <button type="button" class="btn btn-outline-secondary btn-sm py-0 px-1 ob-btn-compact d-none" disabled
-                                                        title="Only builders and admins can reload the graph">
-                                                    <i class="bi bi-lock me-1"></i>Reload
-                                                </button>
-                                                {% endif %}
-                                            </span>
-                                        </div>
-                                    </div>
+
+                            <!-- Lakebase section: arrow + Sync + arrow + Graph DB -->
+                            <div id="dtLakebaseDetails" class="d-none dt-arch-lakebase-section">
+
+                                <!-- Arrow: Triple Store → Sync -->
+                                <div class="dt-arch-connector">
+                                    <i class="bi bi-arrow-right"></i>
                                 </div>
+
+                                <!-- Card 2: UC Sync Object -->
+                                <div class="dt-arch-node" id="dtLakebaseSyncedUcRow">
+                                    <div class="dt-arch-header">
+                                        <i class="bi bi-arrow-repeat fs-4 dt-arch-icon-sync-lg flex-shrink-0"></i>
+                                        <span class="dt-arch-title">Sync</span>
+                                        <span class="dt-arch-badge" id="dtLakebaseSyncedUcExists"></span>
+                                    </div>
+                                    <code class="dt-arch-name" id="dtLakebaseSyncedUc">—</code>
+                                </div>
+
+                                <!-- Arrow: Sync → Graph DB -->
+                                <div class="dt-arch-connector">
+                                    <i class="bi bi-arrow-right"></i>
+                                </div>
+
+                                <!-- Card 3: Graph DB (Lakebase) -->
+                                <div class="dt-arch-node" id="dtGraphCard">
+                                    <div class="dt-arch-header">
+                                        <img src="/static/global/img/lakebase-icon.svg" class="dt-arch-icon-lakebase-img flex-shrink-0" alt="Lakebase">
+                                        <span class="dt-arch-title" id="dtGraphBackendTitle">Graph DB (Lakebase)</span>
+                                        <span class="dt-arch-badge" id="dtLakebaseTableExists"></span>
+                                    </div>
+                                    <code class="dt-arch-name" id="dtLakebaseFullName">—</code>
+                                </div>
+
+                                <!-- Build note (below cards) -->
+                                <div class="dt-arch-build-note w-100 d-none" id="dtLakebaseBuildNote">
+                                    <i class="bi bi-info-circle me-1"></i>
+                                    Build writes graph triples to Lakebase
+                                    (<code id="fnLkDatabase2">…</code>.<code id="fnLkSchema2">…</code>.<code id="fnLkTable2">…</code>)<span id="fnLkSyncNote" class="d-none"> and registers a Lakeflow synced table as <code id="fnLkSyncedUc2"></code></span>.
+                                </div>
+
                             </div>
+
+                            <!-- Hidden: individual fields + compat elements -->
+                            <code id="dtLakebaseDatabase" class="d-none"></code>
+                            <code id="dtLakebaseSchema" class="d-none"></code>
+                            <code id="dtLakebaseTable" class="d-none"></code>
+                            <span class="d-none" id="dtExistLocal"></span>
+                            <span class="d-none" id="dtGraphStorageSubtitle"></span>
+                            <span class="d-none" id="dtGraphPrimaryRow"><code id="dtLocalPath"></code></span>
+
                         </div>
                     </div>
 
-                    <div id="ladybugSyncInfo" class="mt-2 d-none">
-                        <small class="text-muted">
-                            <i class="bi bi-info-circle me-1"></i>
-                            Building creates a Triple-Store VIEW in Unity Catalog and populates the Graph DB.
-                            The graph is synced to / from the registry volume on domain save / load.
-                        </small>
-                    </div>
                 </div>
             </div>
 

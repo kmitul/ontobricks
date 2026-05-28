@@ -114,6 +114,12 @@ body.full-width-layout {
     color: #999;
 }
 
+/* Sync gating: empty triple store — match prior inline pointer-events/opacity */
+.sidebar-nav .nav-link.sync-requires-ready {
+    pointer-events: none;
+    opacity: 0.45;
+}
+
 .sidebar-nav .nav-link.sidebar-disabled:hover {
     background: none;
     color: #999;
@@ -268,6 +274,7 @@ body.full-width-layout {
 #r2rml-section.active {
     display: block;
 }
+
 
 /* Sections that use .content-section wrappers: stretch to fill the parent */
 .sidebar-section > .content-section {

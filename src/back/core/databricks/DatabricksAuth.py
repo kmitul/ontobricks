@@ -16,6 +16,7 @@ from .constants import (
     _OAUTH_TOKEN_TTL,
     _SQL_SOCKET_TIMEOUT,
 )
+from shared.config.constants import HTTP_USER_AGENT
 
 logger = get_logger(__name__)
 _CLOUD_FETCH_PROBE_TTL_SECONDS = 300
@@ -166,6 +167,7 @@ class DatabricksAuth:
                 token_url,
                 data={"grant_type": "client_credentials", "scope": "all-apis"},
                 auth=(self.client_id, self.client_secret),
+                headers={"User-Agent": HTTP_USER_AGENT},
                 timeout=5,
             )
             response.raise_for_status()
@@ -187,13 +189,15 @@ class DatabricksAuth:
             return {
                 "Authorization": f"Bearer {token}",
                 "Content-Type": "application/json",
+                "User-Agent": HTTP_USER_AGENT,
             }
         if self.token:
             return {
                 "Authorization": f"Bearer {self.token}",
                 "Content-Type": "application/json",
+                "User-Agent": HTTP_USER_AGENT,
             }
-        return {}
+        return {"User-Agent": HTTP_USER_AGENT}
 
     def get_sql_connection_params(self) -> dict:
         """Return kwargs suitable for ``databricks.sql.connect()``.
@@ -232,32 +236,6 @@ class DatabricksAuth:
         except Exception as exc:  # noqa: BLE001 - optional dependency probe
             return False, f"pyarrow unavailable: {exc}"
         return True, "prerequisites ok"
-
-    def cloud_fetch_status(self, force: bool = False) -> Tuple[bool, str]:
-        """Return ``(capable, reason)`` for CloudFetch in the current runtime.
-
-        Cached per ``(host, warehouse_id)`` for
-        ``_CLOUD_FETCH_PROBE_TTL_SECONDS``. Pass ``force=True`` to bypass
-        the cache (used by ``/health``).
-        """
-        if self._env_true("DATABRICKS_DISABLE_CLOUD_FETCH"):
-            return False, "Disabled by DATABRICKS_DISABLE_CLOUD_FETCH"
-        if self._env_true("DATABRICKS_FORCE_CLOUD_FETCH"):
-            return True, "Forced by DATABRICKS_FORCE_CLOUD_FETCH"
-        if not self.use_cloud_fetch:
-            return False, "Disabled by global settings"
-
-        ok, msg = self._cloud_fetch_prerequisites()
-        if not ok:
-            return False, msg
-
-        key = (self.host, self.warehouse_id)
-        now = time.time()
-        cached = DatabricksAuth._cloud_fetch_cache.get(key)
-        if not force and cached and (now - cached[2]) < _CLOUD_FETCH_PROBE_TTL_SECONDS:
-            return cached[0], cached[1]
-
-        return self.probe_cloud_fetch_capability()
 
     def can_use_cloud_fetch(self) -> bool:
         """Return whether CloudFetch should be enabled for SQL params.

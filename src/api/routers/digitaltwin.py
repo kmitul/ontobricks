@@ -82,6 +82,7 @@ class StatsResponse(BaseModel):
     label_count: int = 0
     type_assertion_count: int = 0
     relationship_count: int = 0
+    inferred_triples: int = 0
     message: Optional[str] = None
 
 
@@ -92,10 +93,6 @@ class BuildRequest(BaseModel):
     )
     drop_existing: bool = Field(
         False, description="Deprecated: use build_mode='full' instead"
-    )
-    archive_to_registry: bool = Field(
-        True,
-        description="When true, upload the LadybugDB graph archive to the registry Volume after build",
     )
 
 
@@ -400,6 +397,7 @@ async def dt_stats(
         pred_rows = store.get_predicate_distribution(graph_name)
 
         rel_cnt = max(total - type_cnt - lbl, 0)
+        inferred_cnt = store.get_inferred_triple_count(graph_name)
 
         return StatsResponse(
             success=True,
@@ -417,6 +415,7 @@ async def dt_stats(
             label_count=lbl,
             type_assertion_count=type_cnt,
             relationship_count=rel_cnt,
+            inferred_triples=inferred_cnt,
         )
     except Exception as e:
         logger.exception("dt_stats failed: %s", e)
@@ -499,8 +498,6 @@ async def dt_build(
     ontology_config = domain.ontology
 
     snap = DomainSnapshot(domain)
-    force_full = body.build_mode == "full" or body.drop_existing
-    stored_source_versions = dict(domain.source_versions or {})
     delta_cfg = domain.delta or {}
 
     tm = get_task_manager()
@@ -509,11 +506,8 @@ async def dt_build(
         task_type="triplestore_sync",
         steps=[
             {"name": "prepare", "description": "Preparing"},
-            {"name": "gate", "description": "Checking source tables"},
             {"name": "view", "description": "Creating VIEW"},
-            {"name": "diff", "description": "Computing diff"},
             {"name": "graph", "description": "Applying to graph"},
-            {"name": "snapshot", "description": "Refreshing snapshot"},
         ],
     )
 
@@ -533,12 +527,8 @@ async def dt_build(
             base_uri,
             mapping_config,
             ontology_config,
-            stored_source_versions,
             delta_cfg,
-            force_full,
-            snapshot_version=snap.current_version,
             build_kind="api",
-            archive_to_registry=body.archive_to_registry,
         )
 
     threading.Thread(target=_run, daemon=True).start()
@@ -1519,7 +1509,8 @@ async def dt_cohort_materialize(
     def _label_resolver(uris):
         try:
             metadata = store.get_entity_metadata(graph_name, list(uris))
-        except Exception:
+        except Exception as exc:
+            logger.debug("Label resolver: entity metadata unavailable: %s", exc)
             return {}
         return {row.get("uri", ""): row.get("label", "") for row in metadata or []}
 

@@ -76,6 +76,10 @@ let sharedPanelDashboardParams = {};  // Dashboard parameter mappings { paramNam
 let sharedPanelBridges = [];  // Cross-domain entity bridges
 let sharedPanelDirty = false;
 
+// Remembered active tab per panel type — persists across entity/relationship selections
+let _entityPanelActiveTab = 'details';
+let _relPanelActiveTab = 'details';
+
 // Panel resize state
 let isResizing = false;
 let panelStartWidth = 380;
@@ -186,6 +190,8 @@ function setupPanelListeners(section) {
 
 /**
  * Switch between form tabs inside the panel body.
+ * Persists the selection so the same tab is restored when another
+ * entity or relationship is opened.
  */
 function switchFormTab(tabLink) {
     const form = tabLink.closest('form') || tabLink.closest('.panel-body');
@@ -198,6 +204,12 @@ function switchFormTab(tabLink) {
     form.querySelectorAll('.form-tab-pane').forEach(pane => {
         pane.classList.toggle('active', pane.dataset.formTabContent === tabName);
     });
+
+    if (form.id === 'sharedEntityForm') {
+        _entityPanelActiveTab = tabName;
+    } else if (form.id === 'sharedRelationshipForm') {
+        _relPanelActiveTab = tabName;
+    }
 }
 
 /**
@@ -576,17 +588,18 @@ async function renderEntityForm(panel, cls, viewOnly = false) {
         console.warn('[SharedPanel] Could not load groups:', e);
     }
     
+    const _eTab = _entityPanelActiveTab || 'details';
     body.innerHTML = `
         <div id="sharedEntityAssignmentLink"></div>
         <form id="sharedEntityForm">
             <ul class="form-tabs-nav">
-                <li><a class="form-tab-link active" data-form-tab="details" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-info-circle me-1"></i>Details</a></li>
-                <li><a class="form-tab-link" data-form-tab="attributes" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-tags me-1"></i>Attributes</a></li>
-                <li><a class="form-tab-link" data-form-tab="actions" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-lightning me-1"></i>Actions</a></li>
-                <li><a class="form-tab-link" data-form-tab="constraints" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-sliders me-1"></i>Constraints</a></li>
+                <li><a class="form-tab-link ${_eTab === 'details' ? 'active' : ''}" data-form-tab="details" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-info-circle me-1"></i>Details</a></li>
+                <li><a class="form-tab-link ${_eTab === 'attributes' ? 'active' : ''}" data-form-tab="attributes" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-tags me-1"></i>Attributes</a></li>
+                <li><a class="form-tab-link ${_eTab === 'actions' ? 'active' : ''}" data-form-tab="actions" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-lightning me-1"></i>Actions</a></li>
+                <li><a class="form-tab-link ${_eTab === 'constraints' ? 'active' : ''}" data-form-tab="constraints" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-sliders me-1"></i>Constraints</a></li>
             </ul>
 
-            <div class="form-tab-pane active" data-form-tab-content="details">
+            <div class="form-tab-pane ${_eTab === 'details' ? 'active' : ''}" data-form-tab-content="details">
                 <div class="mb-3 p-2 bg-light rounded border">
                     <label for="sharedEntityParent" class="form-label"><i class="bi bi-diagram-2"></i> Inherits From</label>
                     <select class="form-select form-select-sm" id="sharedEntityParent" ${disabled} onchange="onSharedEntityParentChange()">
@@ -608,6 +621,10 @@ async function renderEntityForm(panel, cls, viewOnly = false) {
                     <input type="text" class="form-control form-control-sm" id="sharedEntityName" value="${cls?.name || ''}" ${disabled} required>
                 </div>
                 <div class="mb-3">
+                    <label for="sharedEntityLabel" class="form-label">Label</label>
+                    <input type="text" class="form-control form-control-sm" id="sharedEntityLabel" value="${cls?.label || cls?.name || ''}" ${disabled} placeholder="Defaults to name if empty">
+                </div>
+                <div class="mb-3">
                     <label class="form-label">Icon</label>
                     <div class="input-group input-group-sm">
                         <span class="input-group-text" id="sharedEntityEmojiPreview">${emoji}</span>
@@ -622,7 +639,7 @@ async function renderEntityForm(panel, cls, viewOnly = false) {
                 </div>
             </div>
 
-            <div class="form-tab-pane" data-form-tab-content="attributes">
+            <div class="form-tab-pane ${_eTab === 'attributes' ? 'active' : ''}" data-form-tab-content="attributes">
                 <div class="d-flex justify-content-end gap-1 mb-2">
                     ${!viewOnly ? `
                         <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="openMetadataAttributePicker()" title="Add from data sources"><i class="bi bi-database"></i></button>
@@ -632,7 +649,7 @@ async function renderEntityForm(panel, cls, viewOnly = false) {
                 <div id="sharedEntityAttributes" class="border rounded p-2" style="background: #f8f9fa; overflow-y: auto;"></div>
             </div>
 
-            <div class="form-tab-pane" data-form-tab-content="actions">
+            <div class="form-tab-pane ${_eTab === 'actions' ? 'active' : ''}" data-form-tab-content="actions">
                 <div class="mb-3">
                     <label class="form-label d-flex justify-content-between align-items-center">
                         <span><i class="bi bi-speedometer2 me-1"></i>Dashboard</span>
@@ -657,7 +674,7 @@ async function renderEntityForm(panel, cls, viewOnly = false) {
                 </div>
             </div>
 
-            <div class="form-tab-pane" data-form-tab-content="constraints">
+            <div class="form-tab-pane ${_eTab === 'constraints' ? 'active' : ''}" data-form-tab-content="constraints">
                 <div class="mb-3">
                     <label class="form-label small text-muted mb-1" title="Classes that share no instances with this class">
                         <i class="bi bi-x-circle me-1"></i>Disjoint With
@@ -1557,6 +1574,8 @@ function applyManualDashboardUrl() {
 
 async function saveSharedEntity() {
     const name = panelGetById('sharedEntityName')?.value.trim();
+    const labelRaw = panelGetById('sharedEntityLabel')?.value.trim();
+    const label = labelRaw || name;
     const icon = panelGetById('sharedEntityIcon')?.value.trim();
     const parent = panelGetById('sharedEntityParent')?.value;
     const description = panelGetById('sharedEntityDescription')?.value.trim();
@@ -1568,16 +1587,18 @@ async function saveSharedEntity() {
     const equivalentTo = equivalentToSelect ? Array.from(equivalentToSelect.selectedOptions).map(opt => opt.value) : [];
     
     if (!name) { showNotification('Please enter an entity name', 'warning'); return; }
+
+    const duplicateEntity = (OntologyState.config.classes || []).some((c, i) => c.name === name && i !== sharedPanelEditIndex);
+    if (duplicateEntity) { showNotification(`An entity named "${name}" already exists`, 'warning'); return; }
     
     const validAttributes = sharedPanelOwnAttributes.filter(a => a.name?.trim()).map(a => ({ name: a.name.trim(), localName: a.name.trim() }));
     
-    // Label is the same as name - NO constraints field in class data
     console.log('[SharedPanel] Saving - sharedPanelDashboardParams:', JSON.stringify(sharedPanelDashboardParams));
     
     const classData = { 
         name, 
         localName: name, 
-        label: name, 
+        label, 
         emoji: icon, 
         parent: parent || undefined, 
         description, 
@@ -1591,7 +1612,10 @@ async function saveSharedEntity() {
     console.log('[SharedPanel] Saving - classData.dashboardParams:', JSON.stringify(classData.dashboardParams));
     
     if (sharedPanelEditIndex >= 0) {
-        const oldName = OntologyState.config.classes[sharedPanelEditIndex].name;
+        const existing = OntologyState.config.classes[sharedPanelEditIndex] || {};
+        const oldName = existing.name;
+        // Preserve server-assigned URI so the backend prune doesn't orphan mappings.
+        if (existing.uri) classData.uri = existing.uri;
         OntologyState.config.classes[sharedPanelEditIndex] = classData;
         if (oldName !== name) {
             OntologyState.config.classes.forEach(c => { if (c.parent === oldName) c.parent = name; });
@@ -1815,18 +1839,24 @@ async function renderRelationshipForm(panel, prop, viewOnly = false) {
         }
     }
     
+    const _relTabValid = ['details', 'constraints'];
+    const _rTab = _relTabValid.includes(_relPanelActiveTab) ? _relPanelActiveTab : 'details';
     body.innerHTML = `
         <div id="sharedRelAssignmentLink"></div>
         <form id="sharedRelationshipForm">
             <ul class="form-tabs-nav">
-                <li><a class="form-tab-link active" data-form-tab="details" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-info-circle me-1"></i>Details</a></li>
-                <li><a class="form-tab-link" data-form-tab="constraints" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-sliders me-1"></i>Constraints</a></li>
+                <li><a class="form-tab-link ${_rTab === 'details' ? 'active' : ''}" data-form-tab="details" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-info-circle me-1"></i>Details</a></li>
+                <li><a class="form-tab-link ${_rTab === 'constraints' ? 'active' : ''}" data-form-tab="constraints" href="#" onclick="event.preventDefault(); switchFormTab(this)"><i class="bi bi-sliders me-1"></i>Constraints</a></li>
             </ul>
 
-            <div class="form-tab-pane active" data-form-tab-content="details">
+            <div class="form-tab-pane ${_rTab === 'details' ? 'active' : ''}" data-form-tab-content="details">
                 <div class="mb-3">
                     <label for="sharedRelName" class="form-label">Name <span class="text-danger">*</span></label>
                     <input type="text" class="form-control form-control-sm" id="sharedRelName" value="${prop?.name || ''}" ${disabled} required>
+                </div>
+                <div class="mb-3">
+                    <label for="sharedRelLabel" class="form-label">Label</label>
+                    <input type="text" class="form-control form-control-sm" id="sharedRelLabel" value="${prop?.label || prop?.name || ''}" ${disabled} placeholder="Defaults to name if empty">
                 </div>
                 <div class="mb-3">
                     <label for="sharedRelDomain" class="form-label">Source (Domain) <span class="text-danger">*</span></label>
@@ -1853,7 +1883,7 @@ async function renderRelationshipForm(panel, prop, viewOnly = false) {
                 </div>
             </div>
 
-            <div class="form-tab-pane" data-form-tab-content="constraints">
+            <div class="form-tab-pane ${_rTab === 'constraints' ? 'active' : ''}" data-form-tab-content="constraints">
                 <div class="mb-3">
                     <label class="form-label small text-muted mb-1">Cardinality</label>
                     <div class="row g-2">
@@ -1948,6 +1978,8 @@ async function renderRelationshipForm(panel, prop, viewOnly = false) {
 
 async function saveSharedRelationship() {
     const name = panelGetById('sharedRelName')?.value.trim();
+    const labelRaw = panelGetById('sharedRelLabel')?.value.trim();
+    const label = labelRaw || name;
     const domain = panelGetById('sharedRelDomain')?.value;
     const range = panelGetById('sharedRelRange')?.value;
     const direction = panelGetById('sharedRelDirection')?.value;
@@ -1962,6 +1994,10 @@ async function saveSharedRelationship() {
     const isTransitive = panelGetById('sharedRelTransitive')?.checked || false;
     
     if (!name) { showNotification('Please enter a relationship name', 'warning'); return; }
+
+    const duplicateRel = (OntologyState.config.properties || []).some((p, i) => p.name === name && i !== sharedPanelEditIndex);
+    if (duplicateRel) { showNotification(`A relationship named "${name}" already exists`, 'warning'); return; }
+
     if (!domain) { showNotification('Please select a source entity', 'warning'); return; }
     if (!range) { showNotification('Please select a target entity', 'warning'); return; }
     
@@ -1978,11 +2014,10 @@ async function saveSharedRelationship() {
     if (isSymmetric) constraints.symmetric = true;
     if (isTransitive) constraints.transitive = true;
     
-    // Label is the same as name - NO constraints field in property data
     const propertyData = { 
         name, 
         localName: name, 
-        label: name, 
+        label, 
         comment, 
         description: comment, 
         type: 'ObjectProperty', 
@@ -1994,6 +2029,9 @@ async function saveSharedRelationship() {
     const isRename = sharedPanelEditIndex >= 0 && sharedPanelOriginalName && sharedPanelOriginalName !== name;
     
     if (sharedPanelEditIndex >= 0) {
+        const existingProp = OntologyState.config.properties[sharedPanelEditIndex] || {};
+        // Preserve server-assigned URI so the backend prune doesn't orphan mappings.
+        if (existingProp.uri) propertyData.uri = existingProp.uri;
         OntologyState.config.properties[sharedPanelEditIndex] = propertyData;
         showNotification('Relationship updated', 'success', 2000);
     } else {

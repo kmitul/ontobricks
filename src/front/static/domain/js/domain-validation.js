@@ -353,11 +353,12 @@ function updateMappingCard(data) {
 
 /** Reusable existence badge (same pattern as query-sync.js _badge) */
 function _dtBadge(flag, okText, failText, unknownText) {
+    var s = 'style="font-size:.65rem;"';
     if (flag === true)
-        return '<span class="badge bg-success bg-opacity-10 text-success border border-success"><i class="bi bi-check-circle-fill me-1"></i>' + okText + '</span>';
+        return '<span class="badge bg-success bg-opacity-10 text-success border border-success" ' + s + '><i class="bi bi-check-circle-fill me-1"></i>' + okText + '</span>';
     if (flag === false)
-        return '<span class="badge bg-danger text-white border border-danger"><i class="bi bi-x-circle-fill me-1"></i>' + failText + '</span>';
-    return '<span class="badge bg-secondary bg-opacity-10 text-secondary border"><i class="bi bi-dash-circle me-1"></i>' + (unknownText || 'N/A') + '</span>';
+        return '<span class="badge bg-secondary bg-opacity-10 text-secondary border" ' + s + '><i class="bi bi-dash-circle me-1"></i>' + failText + '</span>';
+    return '<span class="badge bg-secondary bg-opacity-10 text-secondary border" ' + s + '><i class="bi bi-dash-circle me-1"></i>' + (unknownText || 'N/A') + '</span>';
 }
 
 function _formatTimestamp(iso) {
@@ -430,9 +431,9 @@ function updateDtwinCard(data) {
 
     var zcCard = document.getElementById('psDtZeroCopyCard');
     if (zcCard) {
-        if (dt.view_exists === true) zcCard.className = 'border rounded p-3 h-100 border-success';
-        else if (dt.view_exists === false) zcCard.className = 'border rounded p-3 h-100 border-danger';
-        else zcCard.className = 'border rounded p-3 h-100';
+        zcCard.classList.remove('border-success', 'border-danger');
+        if (dt.view_exists === true) zcCard.classList.add('border-success');
+        else if (dt.view_exists === false) zcCard.classList.add('border-danger');
     }
 
     var viewNameEl = document.getElementById('psDtViewName');
@@ -449,50 +450,66 @@ function updateDtwinCard(data) {
         }
     }
 
-    // Snapshot
-    var snapshotArea = document.getElementById('psDtSnapshotArea');
-    if (snapshotArea && dt.snapshot_table) {
-        snapshotArea.style.display = '';
-        var snapshotName = document.getElementById('psDtSnapshotName');
-        if (snapshotName) snapshotName.textContent = dt.snapshot_table;
-        var snapshotBadge = document.getElementById('psDtExistSnapshot');
-        if (snapshotBadge) snapshotBadge.innerHTML = _dtBadge(dt.snapshot_exists, 'Exists', 'Not created', 'N/A');
-    } else if (snapshotArea) {
-        snapshotArea.style.display = 'none';
-    }
-
-    // Graph DB card
-    var localEl = document.getElementById('psDtExistLocal');
-    if (localEl) localEl.innerHTML = _dtBadge(dt.local_lbug_exists, 'Loaded', 'Not loaded', 'N/A');
+    // Graph DB card — Lakebase details
+    var eng = dt.graph_engine || 'lakebase';
+    var titleGraph = document.getElementById('psDtGraphBackendTitle');
+    if (titleGraph) titleGraph.textContent = 'Graph DB (Lakebase)';
 
     var graphCard = document.getElementById('psDtGraphCard');
     if (graphCard) {
-        if (dt.local_lbug_exists === true) graphCard.className = 'border rounded p-3 h-100 border-success';
-        else if (dt.local_lbug_exists === false) graphCard.className = 'border rounded p-3 h-100 border-danger';
-        else graphCard.className = 'border rounded p-3 h-100';
+        graphCard.classList.remove('border-success', 'border-danger');
+        if (dt.lakebase_table_exists === true) graphCard.classList.add('border-success');
+        else if (dt.lakebase_table_exists === false) graphCard.classList.add('border-danger');
     }
 
-    var regEl = document.getElementById('psDtExistRegistry');
-    if (regEl) {
-        regEl.innerHTML = _dtBadge(dt.registry_lbug_exists, 'Archived', 'Not archived', 'Not configured');
-        if (dt.registry_check_error) regEl.title = dt.registry_check_error;
-        else if (dt.registry_lbug_path) regEl.title = 'Archive: ' + dt.registry_lbug_path;
-        else regEl.title = '';
-    }
+    var lkDetails = document.getElementById('psDtLakebaseDetails');
+    if (lkDetails) lkDetails.classList.toggle('d-none', eng !== 'lakebase');
 
-    var regPathEl = document.getElementById('psDtRegistryPath');
-    if (regPathEl) {
-        regPathEl.textContent = dt.registry_lbug_path || '';
-        regPathEl.style.display = dt.registry_lbug_path ? '' : 'none';
-    }
-    var regReasonEl = document.getElementById('psDtRegistryReason');
-    if (regReasonEl) {
-        if (dt.registry_check_error) {
-            regReasonEl.textContent = dt.registry_check_error;
-            regReasonEl.style.display = '';
-        } else {
-            regReasonEl.textContent = '';
-            regReasonEl.style.display = 'none';
+    if (eng === 'lakebase') {
+        var psDb  = document.getElementById('psDtLakebaseDatabase');
+        var psSch = document.getElementById('psDtLakebaseSchema');
+        var psTbl = document.getElementById('psDtLakebaseTable');
+        var psUcRow = document.getElementById('psDtLakebaseSyncedUcRow');
+        var psUc    = document.getElementById('psDtLakebaseSyncedUc');
+        if (psDb)  psDb.textContent  = dt.lakebase_database || '—';
+        if (psSch) psSch.textContent = dt.lakebase_schema   || '—';
+        if (psTbl) psTbl.textContent = dt.lakebase_table    || '—';
+        var psFullName = document.getElementById('psDtLakebaseFullName');
+        if (psFullName) {
+            var db = dt.lakebase_database || '', sch = dt.lakebase_schema || '', tbl = dt.lakebase_table || '';
+            psFullName.textContent = (db && sch && tbl) ? db + '.' + sch + '.' + tbl : (db || sch || tbl || '—');
+        }
+        var hasUcName = !!(dt.lakebase_synced_uc);
+        if (psUc) psUc.textContent = dt.lakebase_synced_uc || '—';
+
+        // existence badges
+        var psTblExistsEl = document.getElementById('psDtLakebaseTableExists');
+        if (psTblExistsEl) {
+            if (dt.lakebase_table_exists === true) {
+                psTblExistsEl.innerHTML = '<span class="badge bg-success bg-opacity-10 text-success border border-success" style="font-size:.65rem;"><i class="bi bi-check-circle-fill me-1"></i>Exists</span>';
+            } else if (dt.lakebase_table_exists === false) {
+                psTblExistsEl.innerHTML = '<span class="badge bg-secondary bg-opacity-10 text-secondary border" style="font-size:.65rem;"><i class="bi bi-dash-circle me-1"></i>Not found</span>';
+            } else {
+                // null/undefined → live probe could not reach Lakebase
+                psTblExistsEl.innerHTML = '<span class="badge bg-warning bg-opacity-10 text-warning border border-warning" style="font-size:.65rem;"><i class="bi bi-question-circle me-1"></i>Unable to check</span>';
+                var psSp = psTblExistsEl.querySelector('span');
+                if (psSp) psSp.title = dt.lakebase_check_error
+                    ? String(dt.lakebase_check_error)
+                    : 'Could not reach Lakebase Postgres to verify the triple table.';
+            }
+        }
+        var psUcExistsEl = document.getElementById('psDtLakebaseSyncedUcExists');
+        if (psUcExistsEl) {
+            if (dt.lakebase_synced_uc_exists === true) {
+                psUcExistsEl.innerHTML = '<span class="badge bg-success bg-opacity-10 text-success border border-success" style="font-size:.65rem;"><i class="bi bi-check-circle-fill me-1"></i>Exists</span>';
+            } else if (dt.lakebase_synced_uc_exists === false) {
+                psUcExistsEl.innerHTML = '<span class="badge bg-secondary bg-opacity-10 text-secondary border" style="font-size:.65rem;"><i class="bi bi-dash-circle me-1"></i>Not found</span>';
+            } else if (hasUcName) {
+                // name is configured but existence probe didn't return yet / failed
+                psUcExistsEl.innerHTML = '<span class="badge bg-warning bg-opacity-10 text-warning border border-warning" style="font-size:.65rem;" title="Could not verify whether the UC sync table exists."><i class="bi bi-question-circle me-1"></i>Unable to check</span>';
+            } else {
+                psUcExistsEl.innerHTML = '<span class="badge bg-secondary bg-opacity-10 text-secondary border" style="font-size:.65rem;"><i class="bi bi-dash-circle me-1"></i>Not found</span>';
+            }
         }
     }
 

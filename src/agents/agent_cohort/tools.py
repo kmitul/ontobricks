@@ -30,9 +30,10 @@ from __future__ import annotations
 import json
 from typing import Callable, Dict, List
 
-import httpx
+import httpx  # noqa: F401 — kept for httpx.HTTPStatusError in tool handlers
 
 from agents.tools.context import ToolContext
+from agents.tools.loopback_http import loopback_client, loopback_registry_params
 from back.core.graph_analysis.models import CohortRule
 from back.core.helpers import extract_local_name
 from back.core.logging import get_logger
@@ -51,23 +52,13 @@ _DRY_RUN_PREVIEW_CLUSTERS = 5
 # =====================================================
 
 
-def _client(ctx: ToolContext) -> httpx.Client:
+def _client(ctx: ToolContext):
     """Build a sync HTTP client bound to the loopback OntoBricks URL."""
-    return httpx.Client(
-        base_url=ctx.dtwin_base_url or "http://localhost:8000",
-        cookies=ctx.dtwin_session_cookies or {},
-        headers=ctx.dtwin_session_headers or {},
-        timeout=_HTTP_TIMEOUT,
-        follow_redirects=False,
-    )
+    return loopback_client(ctx, timeout=_HTTP_TIMEOUT)
 
 
 def _registry_params(ctx: ToolContext) -> dict:
-    out = {}
-    for k, v in (ctx.dtwin_registry_params or {}).items():
-        if v:
-            out[k] = v
-    return out
+    return loopback_registry_params(ctx)
 
 
 def _error(msg: str) -> str:

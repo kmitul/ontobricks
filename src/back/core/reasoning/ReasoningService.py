@@ -1,13 +1,11 @@
 """Reasoning service — orchestrates T-Box, SWRL, Graph, Constraint,
 Decision Table, SPARQL CONSTRUCT, and Aggregate rule phases."""
 
-import re
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from back.core.logging import get_logger
-from back.core.reasoning.models import InferredTriple, ReasoningResult, RuleViolation
-from back.core.reasoning.constants import RDF_TYPE, RDFS_LABEL, CONSTRAINT_SKIP_TYPES
+from back.core.reasoning.models import InferredTriple, ReasoningResult
 from shared.config.constants import DEFAULT_GRAPH_NAME
 
 logger = get_logger(__name__)
@@ -119,16 +117,23 @@ class ReasoningService:
         mat = opts.get("materialize", False)
         inf_limit = opts.get("inference_limit") or None
 
+        # Per-rule name filters (None = run all rules in that phase)
+        swrl_names = opts.get("swrl_rule_names") or None
+        dt_names = opts.get("decision_table_names") or None
+        sparql_names = opts.get("sparql_rule_names") or None
+        agg_names = opts.get("aggregate_rule_names") or None
+
         phases = [
             ("tbox", "tbox", True, lambda: self.run_tbox_reasoning(), True, {}),
             (
                 "swrl",
                 "swrl",
                 True,
-                lambda: self.run_swrl_rules(
+                lambda rn=swrl_names: self.run_swrl_rules(
                     materialize=mat,
                     inference_limit=inf_limit,
                     progress_callback=progress_callback,
+                    rule_names=rn,
                 ),
                 True,
                 {"rules_count": "swrl_rules_count"},
@@ -138,7 +143,7 @@ class ReasoningService:
                 "decision_tables",
                 "decision_tables",
                 False,
-                lambda: self.run_decision_tables(materialize=mat),
+                lambda rn=dt_names: self.run_decision_tables(materialize=mat, rule_names=rn),
                 False,
                 {"tables_count": "decision_tables_count"},
             ),
@@ -146,7 +151,7 @@ class ReasoningService:
                 "sparql_rules",
                 "sparql_rules",
                 False,
-                lambda: self.run_sparql_rules(materialize=mat),
+                lambda rn=sparql_names: self.run_sparql_rules(materialize=mat, rule_names=rn),
                 True,
                 {"rules_count": "sparql_rules_count"},
             ),
@@ -154,7 +159,7 @@ class ReasoningService:
                 "aggregate_rules",
                 "aggregate_rules",
                 False,
-                lambda: self.run_aggregate_rules(materialize=mat),
+                lambda rn=agg_names: self.run_aggregate_rules(materialize=mat, rule_names=rn),
                 False,
                 {"rules_count": "aggregate_rules_count"},
             ),
@@ -218,9 +223,12 @@ class ReasoningService:
         materialize: bool = False,
         inference_limit: Optional[int] = None,
         progress_callback: Optional[Any] = None,
+        rule_names: Optional[set] = None,
     ) -> ReasoningResult:
         """Execute SWRL rules against the triple store."""
         rules = self._get_swrl_rules()
+        if rule_names:
+            rules = [r for r in rules if r.get("name") in rule_names]
         if not rules:
             return ReasoningResult(
                 stats={
@@ -333,28 +341,24 @@ class ReasoningService:
     def run_constraint_checks(self) -> ReasoningResult:
         """Validate instance data against ontology constraints.
 
-        Supports cardinality, value checks, functional / inverseFunctional,
-        and global rules (noOrphans, requireLabels).  Runs Cypher queries
-        on the LadybugDB flat store.
+        .. note:: **Placeholder — always returns ``skipped``.**
 
-        Falls back to legacy ``constraints`` if ``shacl_shapes`` is empty.
+            Legacy cardinality, functional, value, and global-rule checks were
+            designed for a Cypher-capable graph backend.  No such backend is
+            currently registered; equivalent checks run through the SHACL
+            pipeline in the Data Quality runner (``/dataquality/*``).
+
+            To re-enable native constraint execution: implement the dispatch
+            helpers for a Cypher/Gremlin backend and replace the ``skipped``
+            short-circuit below with real execution logic.
+
+        Returns:
+            A :class:`ReasoningResult` with ``stats["skipped"] = True`` and
+            a human-readable ``reason``.
         """
         ontology = self._get_ontology_dict()
         constraints = ontology.get("constraints", [])
-
         shacl_shapes = ontology.get("shacl_shapes", [])
-        if shacl_shapes and not constraints:
-            try:
-                from back.core.w3c.shacl import SHACLService
-
-                svc = SHACLService(base_uri=ontology.get("base_uri", ""))
-                constraints = svc.migrate_legacy_constraints([])
-                logger.info(
-                    "Using %d SHACL shapes for constraint checking (via migration path)",
-                    len(shacl_shapes),
-                )
-            except Exception as e:
-                logger.warning("Could not migrate SHACL shapes for reasoning: %s", e)
 
         if not constraints and not shacl_shapes:
             return ReasoningResult(
@@ -373,360 +377,22 @@ class ReasoningService:
                 }
             )
 
-        from back.core.graphdb.GraphDBBackend import GraphDBBackend
-
-        if not GraphDBBackend.is_cypher_backend(self._store):
-            return ReasoningResult(
-                stats={
-                    "phase": "constraints",
-                    "skipped": True,
-                    "reason": "Constraint checks require a Cypher-capable graph backend",
-                }
-            )
-
-        t0 = time.time()
-        result = ReasoningResult()
-        table_name = self._get_graph_name()
-        node = self._store.get_node_table(table_name)
-        conn = self._store.get_connection()
-        base_uri = ontology.get("base_uri", "")
-        data_ns, sep = self._namespace_parts(base_uri)
-        checked = 0
-
-        for c in constraints:
-            ctype = (c.get("type") or "").strip()
-            if not ctype or ctype in CONSTRAINT_SKIP_TYPES:
-                continue
-            try:
-                violations = self._check_one_constraint(
-                    c,
-                    ctype,
-                    conn,
-                    node,
-                    data_ns,
-                    base_uri,
-                    sep,
-                )
-                result.violations.extend(violations)
-                checked += 1
-            except Exception as e:
-                logger.warning("Constraint check '%s' failed: %s", ctype, e)
-
-        result.stats = {
-            "phase": "constraints",
-            "violations_count": len(result.violations),
-            "constraints_checked": checked,
-            "constraints_total": len(constraints),
-            "duration_seconds": round(time.time() - t0, 3),
-        }
-        logger.info(
-            "Constraint checks: %d checked, %d violations (%.3fs)",
-            checked,
-            len(result.violations),
-            time.time() - t0,
-        )
-        return result
-
-    def _check_one_constraint(
-        self,
-        c: Dict,
-        ctype: str,
-        conn: Any,
-        node: str,
-        data_ns: str,
-        base_uri: str,
-        sep: str,
-    ) -> List[RuleViolation]:
-        """Dispatch a single constraint to the appropriate checker."""
-        cardinality_types = {"minCardinality", "maxCardinality", "exactCardinality"}
-        if ctype in cardinality_types:
-            return self._check_cardinality(
-                c, ctype, conn, node, data_ns, base_uri, sep, RDF_TYPE
-            )
-        if ctype == "functional":
-            return self._check_functional(c, conn, node, data_ns, base_uri, sep)
-        if ctype == "inverseFunctional":
-            return self._check_inverse_functional(c, conn, node, data_ns, base_uri, sep)
-        if ctype in ("valueCheck", "entityValueCheck", "entityLabelCheck"):
-            return self._check_value(c, conn, node, data_ns, base_uri, sep, RDF_TYPE)
-        if ctype == "globalRule":
-            rule_name = c.get("ruleName", "")
-            if rule_name == "noOrphans":
-                return self._check_no_orphans(conn, node, RDF_TYPE)
-            if rule_name == "requireLabels":
-                return self._check_require_labels(conn, node, RDF_TYPE, RDFS_LABEL)
-        return []
-
-    # -- Cardinality -------------------------------------------------------
-
-    def _check_cardinality(
-        self,
-        c: Dict,
-        ctype: str,
-        conn: Any,
-        node: str,
-        data_ns: str,
-        base_uri: str,
-        sep: str,
-        rdf_type: str,
-    ) -> List[RuleViolation]:
-        class_uri = c.get("className", "")
-        prop_name = c.get("property", "")
-        card_val = int(c.get("cardinalityValue", 0))
-        prop_uri = self._normalize_property_uri(
-            prop_name, data_ns, base_uri, sep, prop_name
-        )
-        if not class_uri or not prop_uri:
-            return []
-
-        subjects_result = conn.execute(
-            f"MATCH (t:{node}) WHERE t.predicate = $p AND t.object = $cls "
-            f"RETURN DISTINCT t.subject AS s",
-            parameters={"p": rdf_type, "cls": class_uri},
-        )
-        subjects = [row[0] for row in subjects_result]
-        violations: List[RuleViolation] = []
-        for subj in subjects:
-            cnt_result = conn.execute(
-                f"MATCH (t:{node}) WHERE t.subject = $s AND t.predicate = $pred "
-                f"RETURN COUNT(t) AS cnt",
-                parameters={"s": subj, "pred": prop_uri},
-            )
-            cnt_row = cnt_result.get_next()
-            cnt = int(cnt_row[0]) if cnt_row else 0
-
-            violated = False
-            if ctype == "minCardinality" and cnt < card_val:
-                violated = True
-            elif ctype == "maxCardinality" and cnt > card_val:
-                violated = True
-            elif ctype == "exactCardinality" and cnt != card_val:
-                violated = True
-
-            if violated:
-                local_subj = self._local_name(subj)
-                local_prop = self._local_name(prop_uri)
-                violations.append(
-                    RuleViolation(
-                        rule_name=f"{ctype}({local_prop}={card_val})",
-                        subject=subj,
-                        message=f"{local_subj} has {cnt} {local_prop} (expected {ctype.replace('Cardinality', '')} {card_val})",
-                        check_type="cardinality",
-                    )
-                )
-        return violations
-
-    # -- Functional / Inverse Functional -----------------------------------
-
-    def _check_functional(
-        self,
-        c: Dict,
-        conn: Any,
-        node: str,
-        data_ns: str,
-        base_uri: str,
-        sep: str,
-    ) -> List[RuleViolation]:
-        prop_name = c.get("property", "")
-        prop_uri = self._normalize_property_uri(
-            prop_name, data_ns, base_uri, sep, prop_name
-        )
-        if not prop_uri:
-            return []
-        rows = conn.execute(
-            f"MATCH (t:{node}) WHERE t.predicate = $pred "
-            f"RETURN t.subject AS s, COUNT(DISTINCT t.object) AS cnt",
-            parameters={"pred": prop_uri},
-        )
-        rows = [(row[0], int(row[1])) for row in rows]
-        violations: List[RuleViolation] = []
-        local = self._local_name(prop_uri)
-        for subj, cnt in rows:
-            if cnt > 1:
-                violations.append(
-                    RuleViolation(
-                        rule_name=f"functional({local})",
-                        subject=subj,
-                        message=f"Functional property {local} has {cnt} distinct values",
-                        check_type="functional",
-                    )
-                )
-        return violations
-
-    def _check_inverse_functional(
-        self,
-        c: Dict,
-        conn: Any,
-        node: str,
-        data_ns: str,
-        base_uri: str,
-        sep: str,
-    ) -> List[RuleViolation]:
-        prop_name = c.get("property", "")
-        prop_uri = self._normalize_property_uri(
-            prop_name, data_ns, base_uri, sep, prop_name
-        )
-        if not prop_uri:
-            return []
-        rows = conn.execute(
-            f"MATCH (t:{node}) WHERE t.predicate = $pred "
-            f"RETURN t.object AS o, COUNT(DISTINCT t.subject) AS cnt",
-            parameters={"pred": prop_uri},
-        )
-        rows = [(row[0], int(row[1])) for row in rows]
-        violations: List[RuleViolation] = []
-        local = self._local_name(prop_uri)
-        for obj, cnt in rows:
-            if cnt > 1:
-                violations.append(
-                    RuleViolation(
-                        rule_name=f"inverseFunctional({local})",
-                        subject=obj,
-                        message=f"Inverse-functional property {local}: value mapped by {cnt} subjects",
-                        check_type="inverseFunctional",
-                    )
-                )
-        return violations
-
-    # -- Value checks ------------------------------------------------------
-
-    def _check_value(
-        self,
-        c: Dict,
-        conn: Any,
-        node: str,
-        data_ns: str,
-        base_uri: str,
-        sep: str,
-        rdf_type: str,
-    ) -> List[RuleViolation]:
-        class_uri = c.get("className", "")
-        attr_name = c.get("attributeName", "")
-        check_type = c.get("checkType", "")
-        check_value = c.get("checkValue", "")
-        if not class_uri or not attr_name:
-            return []
-        attr_uri = self._normalize_property_uri(
-            attr_name, data_ns, base_uri, sep, attr_name
+        return ReasoningResult(
+            stats={
+                "phase": "constraints",
+                "skipped": True,
+                "reason": "Constraint checks require a Cypher-capable graph backend (not yet registered)",
+            }
         )
 
-        subjects_result = conn.execute(
-            f"MATCH (t:{node}) WHERE t.predicate = $p AND t.object = $cls "
-            f"RETURN DISTINCT t.subject AS s",
-            parameters={"p": rdf_type, "cls": class_uri},
-        )
-        subjects = [row[0] for row in subjects_result]
-        if not subjects:
-            return []
-
-        violations: List[RuleViolation] = []
-        local_attr = self._local_name(attr_uri)
-
-        for subj in subjects:
-            vals_result = conn.execute(
-                f"MATCH (t:{node}) WHERE t.subject = $s AND t.predicate = $pred "
-                f"RETURN t.object AS val",
-                parameters={"s": subj, "pred": attr_uri},
-            )
-            values = [row[0] for row in vals_result]
-            local_subj = self._local_name(subj)
-
-            if check_type == "notNull":
-                if not values or all(not v for v in values):
-                    violations.append(
-                        RuleViolation(
-                            rule_name=f"notNull({local_attr})",
-                            subject=subj,
-                            message=f"{local_subj} has no value for {local_attr}",
-                            check_type="value",
-                        )
-                    )
-                continue
-
-            for val in values:
-                failed = False
-                if check_type == "startsWith" and not val.startswith(check_value):
-                    failed = True
-                elif check_type == "endsWith" and not val.endswith(check_value):
-                    failed = True
-                elif check_type == "contains" and check_value not in val:
-                    failed = True
-                elif check_type == "equals" and val != check_value:
-                    failed = True
-                elif check_type == "notEquals" and val == check_value:
-                    failed = True
-                elif check_type == "matches":
-                    if not re.search(check_value, val):
-                        failed = True
-
-                if failed:
-                    violations.append(
-                        RuleViolation(
-                            rule_name=f"{check_type}({local_attr})",
-                            subject=subj,
-                            message=f"{local_subj}.{local_attr} = '{val}' fails {check_type} '{check_value}'",
-                            check_type="value",
-                        )
-                    )
-        return violations
-
-    # -- Global rules ------------------------------------------------------
-
-    def _check_no_orphans(
-        self,
-        conn: Any,
-        node: str,
-        rdf_type: str,
-    ) -> List[RuleViolation]:
-        """Find subjects that appear as subject but have no rdf:type."""
-        rows = conn.execute(
-            f"MATCH (t:{node}) "
-            f"WHERE NOT EXISTS {{ MATCH (t2:{node}) "
-            f"WHERE t2.subject = t.subject AND t2.predicate = $p }} "
-            f"RETURN DISTINCT t.subject AS s",
-            parameters={"p": rdf_type},
-        )
-        subjects = [row[0] for row in rows]
-        return [
-            RuleViolation(
-                rule_name="noOrphans",
-                subject=subj,
-                message=f"{self._local_name(subj)} has no rdf:type assertion",
-                check_type="global",
-            )
-            for subj in subjects
-        ]
-
-    def _check_require_labels(
-        self,
-        conn: Any,
-        node: str,
-        rdf_type: str,
-        rdfs_label: str,
-    ) -> List[RuleViolation]:
-        """Find typed subjects that have no rdfs:label."""
-        rows = conn.execute(
-            f"MATCH (t:{node}) WHERE t.predicate = $rdftype "
-            f"AND NOT EXISTS {{ MATCH (t2:{node}) "
-            f"WHERE t2.subject = t.subject AND t2.predicate = $lbl }} "
-            f"RETURN DISTINCT t.subject AS s",
-            parameters={"rdftype": rdf_type, "lbl": rdfs_label},
-        )
-        subjects = [row[0] for row in rows]
-        return [
-            RuleViolation(
-                rule_name="requireLabels",
-                subject=subj,
-                message=f"{self._local_name(subj)} has no rdfs:label",
-                check_type="global",
-            )
-            for subj in subjects
-        ]
-
-    def run_decision_tables(self, materialize: bool = False) -> ReasoningResult:
+    def run_decision_tables(
+        self, materialize: bool = False, rule_names: Optional[set] = None
+    ) -> ReasoningResult:
         """Execute decision tables against the triple store."""
         ontology = self._get_ontology_dict()
         tables = ontology.get("decision_tables", [])
+        if rule_names:
+            tables = [t for t in tables if t.get("name") in rule_names]
         if not tables:
             return ReasoningResult(
                 stats={
@@ -756,10 +422,14 @@ class ReasoningService:
             materialize=materialize,
         )
 
-    def run_sparql_rules(self, materialize: bool = False) -> ReasoningResult:
+    def run_sparql_rules(
+        self, materialize: bool = False, rule_names: Optional[set] = None
+    ) -> ReasoningResult:
         """Execute SPARQL CONSTRUCT rules against the triple store."""
         ontology = self._get_ontology_dict()
         rules = ontology.get("sparql_rules", [])
+        if rule_names:
+            rules = [r for r in rules if r.get("name") in rule_names]
         if not rules:
             return ReasoningResult(
                 stats={
@@ -789,10 +459,14 @@ class ReasoningService:
             materialize=materialize,
         )
 
-    def run_aggregate_rules(self, materialize: bool = False) -> ReasoningResult:
+    def run_aggregate_rules(
+        self, materialize: bool = False, rule_names: Optional[set] = None
+    ) -> ReasoningResult:
         """Execute aggregate rules against the triple store."""
         ontology = self._get_ontology_dict()
         rules = ontology.get("aggregate_rules", [])
+        if rule_names:
+            rules = [r for r in rules if r.get("name") in rule_names]
         if not rules:
             return ReasoningResult(
                 stats={

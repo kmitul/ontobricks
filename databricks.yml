@@ -46,9 +46,17 @@ bundle:
 workspace:
   # Sandbox path — distinct from any other ``ontobricks*`` bundle so
   # we cannot share/clobber sync state with the production apps.
-  root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/ontobricks-030/${bundle.target}
+  root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${var.app_name}/${bundle.target}
 
 sync:
+  include:
+    # app.yaml is .gitignored (it is rendered from app.yaml.template at deploy
+    # time with workspace-specific values).  Explicitly include it here so DAB
+    # uploads the rendered file on every `databricks bundle deploy` run.
+    - app.yaml
+    - src/mcp-server/app.yaml
+    # Help Center serves markdown from docs/ at runtime (/api/help/docs/*).
+    - docs/**
   exclude:
     - tests/
     - data/
@@ -67,11 +75,29 @@ sync:
     - scripts/
     - Makefile
     - CHANGELOG.md
-    # Keep deploy payload minimal for sandbox runtime: no docs/ or markdown.
-    - docs/
-    - "*.md"
+    # Help Center ships docs/*.md; exclude root/repo meta markdown only.
+    - README.md
+    - CONTRIBUTING.md
+    - AGENTS.md
+    - CLAUDE.md
+    - SECURITY.md
+    - releases/
+    - .claude/
+    - docs/sphinx/_build/
+    - docs/sphinx/.doctrees/
 
 variables:
+  # ── App names ──────────────────────────────────────────────────────
+  # Single source of truth for the deployed app names.  Overridden by
+  # deploy.config.sh via ``--var=app_name=…`` so you only need to
+  # change DEFAULT_APP_NAME there.
+  app_name:
+    description: "Databricks Apps name for the main FastAPI UI app"
+    default: "ontobricks-030"
+  mcp_app_name:
+    description: "Databricks Apps name for the MCP companion server"
+    default: "mcp-ontobricks"
+
   warehouse_id:
     description: "SQL Warehouse ID for query execution"
     default: "d2096aa075ad44a3"
@@ -161,7 +187,7 @@ resources:
   apps:
     # ── Dev sandbox app (FastAPI UI) ────────────────────────────
     ontobricks_dev_app:
-      name: "ontobricks-030"
+      name: "${var.app_name}"
       description: "OntoBricks (development sandbox app)"
       source_code_path: .
       resources:
@@ -185,7 +211,7 @@ resources:
     # back into the UI's REST API — ``scripts/deploy.sh`` grants this
     # automatically after every deploy.
     mcp_ontobricks_app:
-      name: "mcp-ontobricks"
+      name: "${var.mcp_app_name}"
       description: "OntoBricks MCP companion server (FastMCP)"
       source_code_path: ./src/mcp-server
       resources:

@@ -1,6 +1,7 @@
 # OntoBricks — files excluded from Databricks bundle sync
 # Only runtime-essential files should be deployed:
 #   src/          — application code
+#   docs/         — Help Center markdown + assets (/api/help/docs/*)
 #   app.yaml      — Databricks Apps runtime config
 #   run.py        — entry point
 #   pyproject.toml / uv.lock / requirements.txt — dependency resolution
@@ -38,13 +39,13 @@ logs/
 mlflow.db
 
 # ── Documentation ─────────────────────────────────────────────
-# Keep deployment payload minimal: ship no docs/ or markdown files.
+# Ship Help Center sources (docs/*.md, images/, screenshots/) at runtime.
+# Exclude Sphinx HTML build output (local/CI only).
+docs/sphinx/_build/
+docs/sphinx/.doctrees/
 data/
 licenses/
 dab/
-docs/
-*.md
-*.txt
 documentation.html
 
 # ── DAB config (not needed at runtime) ───────────────────────
@@ -75,5 +76,10 @@ LICENSE
 # WARNING: do NOT use a bare "internal/" pattern here — it would
 # also match src/api/routers/internal/, which is a required module
 # and its absence breaks app startup (ModuleNotFoundError).
+AGENTS.md
+CLAUDE.md
 CONTRIBUTING.md
 README.md
+SECURITY.md
+releases/
+.claude/

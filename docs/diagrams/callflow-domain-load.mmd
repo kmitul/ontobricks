@@ -1,0 +1,33 @@
+sequenceDiagram
+    participant UI as Streamlit / API Router
+    participant SES as DomainSession
+    participant REG as RegistryService
+    participant STORE as LakebaseRegistryStore
+    participant DOM as Domain
+    participant ONT as Ontology
+    participant GDB as LakebaseFlatStore
+    participant W3C as OntologyParser (OWL)
+    participant DBC as DatabricksClient
+
+    UI->>SES: load_domain(domain_id)
+    SES->>REG: from_context(session)
+    REG->>STORE: list_domain_folders()
+    STORE->>DBC: SQL query on registry table
+    DBC-->>STORE: domain metadata rows
+    STORE-->>REG: [DomainSummary]
+    REG-->>SES: domain config
+
+    SES->>DOM: Domain(config, session)
+    DOM->>GDB: GraphDBFactory.create(config)
+    GDB->>DBC: LakebaseAuth → psycopg2 connect
+    DBC-->>GDB: connection pool
+
+    DOM->>ONT: Ontology(graphdb)
+    ONT->>GDB: query_triples(owl:Class, ...)
+    GDB-->>ONT: RDF triples
+    ONT->>W3C: OntologyParser(graph)
+    W3C-->>ONT: classes, properties, constraints
+    ONT-->>DOM: ontology model
+
+    DOM-->>SES: DomainSession populated
+    SES-->>UI: session ready

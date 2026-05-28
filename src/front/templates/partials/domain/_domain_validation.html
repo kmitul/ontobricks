@@ -153,7 +153,7 @@
                     <div class="text-center">
                         <canvas id="gaugeMappingEntities" width="130" height="72"></canvas>
                         <div class="small text-muted mt-1"><span id="mappedEntitiesCount">-</span> / <span id="totalEntitiesCount">-</span> mapped</div>
-                        <span id="ignoredEntitiesLabel" class="badge bg-secondary bg-opacity-25 text-secondary mt-1" style="display:none; font-size:.7rem;"><i class="bi bi-eye-slash me-1"></i></span>
+                        <span id="ignoredEntitiesLabel" class="badge bg-secondary bg-opacity-25 text-secondary mt-1 ob-badge-ignored-tight" style="display:none;"><i class="bi bi-eye-slash me-1"></i></span>
                     </div>
                     <div id="mappingIssues" class="mb-1"></div>
                     <div id="mappingWarnings"></div>
@@ -170,7 +170,7 @@
                     <div class="text-center">
                         <canvas id="gaugeMappingRels" width="130" height="72"></canvas>
                         <div class="small text-muted mt-1"><span id="mappedRelationshipsCount">-</span> / <span id="totalRelationshipsCount">-</span> mapped</div>
-                        <span id="ignoredRelationshipsLabel" class="badge bg-secondary bg-opacity-25 text-secondary mt-1" style="display:none; font-size:.7rem;"><i class="bi bi-eye-slash me-1"></i></span>
+                        <span id="ignoredRelationshipsLabel" class="badge bg-secondary bg-opacity-25 text-secondary mt-1 ob-badge-ignored-tight" style="display:none;"><i class="bi bi-eye-slash me-1"></i></span>
                     </div>
                 </div>
             </div>
@@ -198,7 +198,7 @@
             <span><i class="bi bi-box-fill me-1"></i> Digital Twin</span>
             <div class="d-flex align-items-center gap-2">
                 <span id="dtwinValidationBadge" class="badge bg-secondary">Checking...</span>
-                <a href="/dtwin/" class="btn btn-outline-primary btn-sm py-0 px-2" style="font-size:.78rem;">
+                <a href="/dtwin/" class="btn btn-outline-primary btn-sm py-0 px-2 validation-dtwin-link">
                     <i class="bi bi-box-arrow-up-right me-1"></i>Open
                 </a>
             </div>
@@ -227,53 +227,65 @@
                 </div>
             </div>
 
-            <!-- Two-column layout: Triple-Store | Graph DB (same as DT page) -->
-            <div class="row g-3">
-                <!-- Triple-Store Digital Twin -->
-                <div class="col-md-6">
-                    <div class="border rounded p-3 h-100" id="psDtZeroCopyCard">
-                        <div class="d-flex align-items-center mb-2">
-                            <i class="bi bi-eye fs-5 me-2 text-primary"></i>
-                            <strong>Triple-Store Digital Twin</strong>
-                            <span id="psDtExistView" class="ms-auto"></span>
+            <!-- Architecture diagram: Triple Store → Sync → Graph DB (Lakebase) -->
+            <div class="dt-arch-diagram">
+
+                <!-- Card 1: Triple Store (Unity Catalog VIEW) -->
+                <div class="dt-arch-node" id="psDtZeroCopyCard">
+                    <div class="dt-arch-header">
+                        <i class="bi bi-database fs-4 dt-arch-icon-triplestore flex-shrink-0"></i>
+                        <span class="dt-arch-title">Triple Store</span>
+                        <span class="dt-arch-badge" id="psDtExistView"></span>
+                    </div>
+                    <code class="dt-arch-name" id="psDtViewName">N/A</code>
+                    <div id="psDtViewReason" class="text-danger dt-arch-reason" style="display:none;"></div>
+                </div>
+
+                <!-- Lakebase section: arrow + Sync + arrow + Graph DB -->
+                <div id="psDtLakebaseDetails" class="d-none dt-arch-lakebase-section">
+
+                    <!-- Arrow: Triple Store → Sync -->
+                    <div class="dt-arch-connector">
+                        <i class="bi bi-arrow-right"></i>
+                    </div>
+
+                    <!-- Card 2: UC Sync Object -->
+                    <div class="dt-arch-node" id="psDtLakebaseSyncedUcRow">
+                        <div class="dt-arch-header">
+                            <i class="bi bi-arrow-repeat fs-4 dt-arch-icon-sync-lg flex-shrink-0"></i>
+                            <span class="dt-arch-title">Sync</span>
+                            <span class="dt-arch-badge" id="psDtLakebaseSyncedUcExists"></span>
                         </div>
-                        <div class="small">
-                            <div class="text-muted mb-1">Unity Catalog VIEW</div>
-                            <code id="psDtViewName" class="d-block text-break">N/A</code>
-                            <div id="psDtViewReason" class="text-danger small mt-1" style="display:none;"></div>
+                        <code class="dt-arch-name" id="psDtLakebaseSyncedUc">—</code>
+                    </div>
+
+                    <!-- Arrow: Sync → Graph DB -->
+                    <div class="dt-arch-connector">
+                        <i class="bi bi-arrow-right"></i>
+                    </div>
+
+                    <!-- Card 3: Graph DB (Lakebase) -->
+                    <div class="dt-arch-node" id="psDtGraphCard">
+                        <div class="dt-arch-header">
+                            <img src="/static/global/img/lakebase-icon.svg" class="dt-arch-icon-lakebase-img flex-shrink-0" alt="Lakebase">
+                            <span class="dt-arch-title" id="psDtGraphBackendTitle">Graph DB (Lakebase)</span>
+                            <span class="dt-arch-badge" id="psDtLakebaseTableExists"></span>
                         </div>
-                        <div class="small mt-2" id="psDtSnapshotArea" style="display:none;">
-                            <div class="text-muted mb-1">Incremental Snapshot</div>
-                            <div class="d-flex justify-content-between align-items-center">
-                                <code id="psDtSnapshotName" class="text-break" style="font-size:.75em;"></code>
-                                <span id="psDtExistSnapshot"></span>
-                            </div>
+                        <code class="dt-arch-name" id="psDtLakebaseFullName">—</code>
+                        <div class="dt-arch-triple-count text-muted mt-1" id="psDtTripleArea" style="display:none;">
+                            <i class="bi bi-database me-1"></i><span id="psDtTripleValue">0</span> triples
                         </div>
                     </div>
+
                 </div>
-                <!-- Graph DB Digital Twin -->
-                <div class="col-md-6">
-                    <div class="border rounded p-3 h-100" id="psDtGraphCard">
-                        <div class="d-flex align-items-center mb-2">
-                            <i class="bi bi-diagram-3-fill fs-5 me-2 text-primary"></i>
-                            <strong>Graph DB Digital Twin</strong>
-                            <span id="psDtExistLocal" class="ms-auto"></span>
-                        </div>
-                        <div class="small">
-                            <div class="text-muted mb-1">Local graph database</div>
-                            <div class="d-flex justify-content-between align-items-center">
-                                <span class="text-muted">Registry archive</span>
-                                <span id="psDtExistRegistry"></span>
-                            </div>
-                            <code id="psDtRegistryPath" class="d-block text-break text-muted mt-1" style="display:none; font-size:.75em;"></code>
-                            <div id="psDtRegistryReason" class="text-danger small mt-1" style="display:none;"></div>
-                        </div>
-                        <div class="small mt-2" id="psDtTripleArea" style="display:none;">
-                            <i class="bi bi-database me-1 text-muted"></i>
-                            <span id="psDtTripleValue">0</span> triples
-                        </div>
-                    </div>
-                </div>
+
+                <!-- Hidden: individual fields + compat elements -->
+                <code id="psDtLakebaseDatabase" class="d-none"></code>
+                <code id="psDtLakebaseSchema" class="d-none"></code>
+                <code id="psDtLakebaseTable" class="d-none"></code>
+                <span class="d-none" id="psDtExistLocal"></span>
+                <span class="d-none" id="psDtGraphStorageSubtitle"></span>
+
             </div>
         </div>
     </div>
@@ -281,7 +293,7 @@
 
     <!-- Missing Items Detail -->
     <div class="col-12">
-    <div class="card validation-detail-card h-100" id="missingItemsCard" style="display: none;">
+    <div class="card validation-detail-card h-100 ob-hidden" id="missingItemsCard">
         <div class="card-header">
             <i class="bi bi-exclamation-triangle text-warning me-1"></i> Missing Assignments
         </div>

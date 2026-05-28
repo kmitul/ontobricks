@@ -269,7 +269,10 @@ class HomeService:
         await run_blocking(dt.sync_last_build_from_schedule, settings)
         ts_status, dt_exist, document_count = await asyncio.gather(
             dt.get_or_fetch_graph_status(settings),
-            dt.get_or_fetch_dt_existence(settings),
+            # Cockpit must show the live Lakebase state — bypass the session
+            # cache to avoid replaying a stale failure ("table not found")
+            # across page loads.
+            dt.get_or_fetch_dt_existence(settings, force_refresh=True),
             run_blocking(Domain(domain).count_documents_in_volume, settings),
         )
 
@@ -360,18 +363,21 @@ class HomeService:
             "view_table": dt_existence.get("view_table", ""),
             "view_check_error": dt_existence.get("view_check_error"),
             "graph_name": dt_existence.get("graph_name", ""),
-            "local_lbug_exists": dt_existence.get("local_lbug_exists", False),
-            "local_lbug_path": dt_existence.get("local_lbug_path", ""),
-            "registry_lbug_exists": dt_existence.get("registry_lbug_exists"),
-            "registry_lbug_path": dt_existence.get("registry_lbug_path", ""),
-            "registry_check_error": dt_existence.get("registry_check_error"),
-            "snapshot_table": dt_existence.get("snapshot_table", ""),
-            "snapshot_exists": dt_existence.get("snapshot_exists"),
-            "snapshot_check_error": dt_existence.get("snapshot_check_error"),
+            "graph_has_data": dt_existence.get("graph_has_data", False),
+            "graph_display": dt_existence.get("graph_display", ""),
+            "lakebase_table_exists": dt_existence.get("lakebase_table_exists"),
+            "lakebase_check_error": dt_existence.get("lakebase_check_error"),
+            "lakebase_database": dt_existence.get("lakebase_database", ""),
+            "lakebase_schema": dt_existence.get("lakebase_schema", ""),
+            "lakebase_table": dt_existence.get("lakebase_table", ""),
+            "lakebase_synced_uc": dt_existence.get("lakebase_synced_uc", ""),
+            "lakebase_synced_uc_exists": dt_existence.get("lakebase_synced_uc_exists"),
+            "lakebase_sync_mode": dt_existence.get("lakebase_sync_mode", "app_managed"),
+            "graph_engine": dt_existence.get("graph_engine", "lakebase"),
             "last_built": last_build,
             "last_update": last_update,
             "has_data": ts_st.get("has_data", False),
-            "triple_count": ts_st.get("count", 0),
+            "triple_count": dt_existence.get("triple_count") or ts_st.get("count", 0),
             "needs_rebuild": needs_rebuild,
         }
 

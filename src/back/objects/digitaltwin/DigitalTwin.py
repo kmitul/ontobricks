@@ -13,8 +13,9 @@ from back.core.errors import (
     OntoBricksError,
     ValidationError,
 )
-from back.core.helpers import sql_escape as escape_sql_value, extract_local_name
+from back.core.helpers import sql_escape as escape_sql_value, extract_local_name, is_databricks_app
 from back.core.logging import get_logger
+from back.core.w3c.rdf_utils import uri_local_name
 from back.objects.digitaltwin.constants import RDF_TYPE, RDFS_LABEL
 from back.objects.digitaltwin.models import DomainSnapshot
 from back.objects.session import get_domain
@@ -662,25 +663,48 @@ class DigitalTwin:
         """Read a cached triplestore section (e.g. ``'stats'``, ``'status'``) from the domain.
 
         Returns ``None`` when the section is missing or the cache is older than
-        :data:`_TS_STATS_CACHE_TTL_SECONDS` (see ``version_status`` for the same TTL pattern).
+        :data:`_TS_STATS_CACHE_TTL_SECONDS`.
+
+        Each section now carries its own ``_ts`` timestamp so that refreshing
+        one section (e.g. ``status``) does not inadvertently extend the TTL of
+        another (e.g. ``dt_existence``), which would cause stale cross-section
+        data to appear fresh and produce contradictory UI badges.
         """
         ts = self._domain.triplestore or {}
-        ts_stamp = ts.get("_ts_cache_timestamp")
-        if ts_stamp is None:
-            return None
-        if (time.time() - float(ts_stamp)) > _TS_STATS_CACHE_TTL_SECONDS:
-            return None
         stats = ts.get("stats", {})
         if not isinstance(stats, dict):
             return None
-        return stats.get(section)
+        entry = stats.get(section)
+        if not isinstance(entry, dict):
+            return None
+
+        # Per-section timestamp (preferred).
+        section_ts = entry.get("_ts")
+        if section_ts is not None:
+            if (time.time() - float(section_ts)) > _TS_STATS_CACHE_TTL_SECONDS:
+                return None
+            return {k: v for k, v in entry.items() if k != "_ts"}
+
+        # Fallback: shared timestamp written by older code paths.
+        shared_ts = ts.get("_ts_cache_timestamp")
+        if shared_ts is None:
+            return None
+        if (time.time() - float(shared_ts)) > _TS_STATS_CACHE_TTL_SECONDS:
+            return None
+        return entry
 
     def set_ts_cache(self, section: str, data: dict):
-        """Write a cached triplestore section and persist to session."""
+        """Write a cached triplestore section and persist to session.
+
+        Each section is stored with its own ``_ts`` timestamp so that sections
+        expire independently (prevents stale ``dt_existence`` from surviving a
+        fresh ``status`` write that bumps the shared clock).
+        """
         ts = self._domain.triplestore
         if "stats" not in ts:
             ts["stats"] = {}
-        ts["stats"][section] = data
+        ts["stats"][section] = {**data, "_ts": time.time()}
+        # Keep the shared key for any legacy readers.
         ts["_ts_cache_timestamp"] = time.time()
         self._domain.save()
 
@@ -695,50 +719,38 @@ class DigitalTwin:
         self.set_ts_cache("status", result)
         return result
 
-    async def get_or_fetch_dt_existence(self, settings) -> Dict[str, Any]:
-        """Return DT artefact existence from session cache, or fetch live and cache."""
-        cached = self.get_ts_cache("dt_existence")
-        if cached:
-            if cached.get("registry_lbug_exists") is None and cached.get(
-                "registry_lbug_path"
-            ):
-                await self._backfill_registry_lbug(cached, settings)
-            logger.debug("get_or_fetch_dt_existence: serving from cache")
-            return cached
-        logger.debug("get_or_fetch_dt_existence: cache miss — fetching live")
+    async def get_or_fetch_dt_existence(
+        self, settings, force_refresh: bool = False
+    ) -> Dict[str, Any]:
+        """Return DT artefact existence from session cache, or fetch live and cache.
+
+        ``force_refresh=True`` bypasses the session cache. Pages that must show
+        the *current* state of Lakebase (Build, Cockpit) pass this so a stale
+        ``lakebase_table_exists=False`` poisoned by a transient Postgres
+        timeout does not survive across navigations.
+
+        Unknown results (``lakebase_table_exists is None`` — probe failed) are
+        never cached: caching a transient failure as if it were a confirmed
+        absence is the bug this whole pathway exists to prevent.
+        """
+        if not force_refresh:
+            cached = self.get_ts_cache("dt_existence")
+            if cached:
+                logger.debug("get_or_fetch_dt_existence: serving from cache")
+                return cached
+            logger.debug("get_or_fetch_dt_existence: cache miss — fetching live")
+        else:
+            logger.debug("get_or_fetch_dt_existence: force_refresh — fetching live")
+
         result = await self.fetch_digital_twin_existence(settings)
-        self.set_ts_cache("dt_existence", result)
-        return result
-
-    async def _backfill_registry_lbug(self, cached: dict, settings) -> None:
-        """Resolve an unknown ``registry_lbug_exists`` in a cached result."""
-        from back.core.helpers import get_databricks_host_and_token, run_blocking
-        from back.core.databricks import VolumeFileService
-
-        try:
-            host, token = get_databricks_host_and_token(self._domain, settings)
-            if not host or not token:
-                return
-            path = cached["registry_lbug_path"]
-            parent_dir = path.rsplit("/", 1)[0]
-            archive_name = path.rsplit("/", 1)[1]
-            uc = VolumeFileService(host=host, token=token)
-            ok, items, _ = await run_blocking(
-                uc.list_directory, parent_dir, extensions=[".tar.gz"]
-            )
-            if ok and items:
-                cached["registry_lbug_exists"] = any(
-                    f["name"] == archive_name for f in items
-                )
-            else:
-                cached["registry_lbug_exists"] = False
-            self.set_ts_cache("dt_existence", cached)
+        if result.get("lakebase_table_exists") is not None:
+            self.set_ts_cache("dt_existence", result)
+        else:
             logger.debug(
-                "_backfill_registry_lbug: resolved to %s",
-                cached["registry_lbug_exists"],
+                "get_or_fetch_dt_existence: probe inconclusive (%s) — not caching",
+                result.get("lakebase_check_error") or "unknown",
             )
-        except Exception as e:
-            logger.debug("_backfill_registry_lbug failed: %s", e)
+        return result
 
     # ------------------------------------------------------------------
     # Schedule sync (instance method)
@@ -839,62 +851,52 @@ class DigitalTwin:
                 detail=str(e),
             ) from e
 
-    async def fetch_digital_twin_existence(self, settings) -> Dict[str, Any]:
-        """Live checks for SQL view, snapshot table, local/registry Ladybug archives."""
-        import asyncio
-        import os
+    @staticmethod
+    def resolve_graph_engine(domain: Any, settings: Any) -> str:
+        """Return the globally configured graph DB engine.
 
-        from shared.config.constants import DEFAULT_GRAPH_NAME
-        from back.core.databricks import DatabricksClient, VolumeFileService
+        Currently always resolves to ``"lakebase"`` — the only registered
+        engine.  Future engines plug in via ``back/core/graphdb/<engine>/``
+        and update :class:`back.core.graphdb.GraphDBFactory`.
+        """
+        from back.core.triplestore.TripleStoreFactory import TripleStoreFactory
+
+        raw = TripleStoreFactory._resolve_graph_engine(domain, settings) or "lakebase"
+        return raw if raw == "lakebase" else "lakebase"
+
+    async def fetch_digital_twin_existence(self, settings) -> Dict[str, Any]:
+        """Live checks for SQL view, snapshot table, and graph artefacts.
+
+        Lakebase: Postgres triple table existence/count (no Volume archive).
+        """
         from back.core.helpers import (
             effective_graph_name,
-            effective_uc_version_path,
             effective_view_table,
-            get_databricks_host_and_token,
-            resolve_ladybug_local_path,
-            resolve_warehouse_id,
             run_blocking,
         )
         from back.core.triplestore import get_triplestore
-        from back.core.triplestore import IncrementalBuildService
-        from back.core.graphdb.ladybugdb import graph_volume_path
 
         domain = self._domain
+        graph_engine = DigitalTwin.resolve_graph_engine(domain, settings)
         view_table = effective_view_table(domain)
         graph_name = effective_graph_name(domain)
         last_built = domain.last_build or None
         last_update = domain.last_update or None
 
-        snapshot_table = IncrementalBuildService.snapshot_table_name(
-            (domain.info or {}).get("name", DEFAULT_GRAPH_NAME),
-            getattr(domain, "delta", None) or {},
-            version=getattr(domain, "current_version", "1"),
-        )
-
-        host, token = get_databricks_host_and_token(domain, settings)
-        wh_id = resolve_warehouse_id(domain, settings)
-
-        db_name = graph_name or DEFAULT_GRAPH_NAME
-        local_path = resolve_ladybug_local_path(domain, db_name)
-
-        uc_path = effective_uc_version_path(domain)
-        registry_lbug_path = graph_volume_path(uc_path, db_name) if uc_path else ""
-
         result: Dict[str, Any] = {
             "view_exists": None,
-            "local_lbug_exists": bool(last_built) and os.path.exists(local_path),
-            "registry_lbug_exists": None,
+            "graph_engine": graph_engine,
+            "graph_has_data": None,
+            "lakebase_table_exists": None,
+            "lakebase_synced_uc_exists": None,
+            "lakebase_check_error": None,
             "view_table": view_table,
             "graph_name": graph_name,
-            "local_lbug_path": local_path,
-            "registry_lbug_path": registry_lbug_path,
+            "graph_display": "",
             "last_update": last_update,
             "last_built": last_built,
-            "snapshot_table": snapshot_table,
-            "snapshot_exists": None,
             "view_check_error": None,
-            "snapshot_check_error": None,
-            "registry_check_error": None,
+            "triple_count": 0,
         }
 
         async def _check_view() -> tuple[Optional[bool], Optional[str]]:
@@ -920,72 +922,120 @@ class DigitalTwin:
                 )
                 return None, f"View check failed: {e}"
 
-        async def _check_snapshot() -> tuple[Optional[bool], Optional[str]]:
-            if not (snapshot_table and "." in snapshot_table):
-                return None, None
-            try:
-                if not (host and wh_id):
-                    return None, "No SQL warehouse / host configured"
-                client = DatabricksClient(host=host, token=token, warehouse_id=wh_id)
-                incr_svc = IncrementalBuildService(client)
-                exists = await run_blocking(incr_svc.snapshot_exists, snapshot_table)
-                logger.info(
-                    "DT existence: snapshot %s -> exists=%s", snapshot_table, exists
-                )
-                return exists, None
-            except Exception as e:
-                logger.warning(
-                    "DT existence: snapshot %s check failed: %s", snapshot_table, e
-                )
-                return None, f"Snapshot check failed: {e}"
-
-        async def _check_registry() -> tuple[Optional[bool], Optional[str]]:
-            if not uc_path:
-                return None, "Domain has no UC volume version path (uc_version_path/uc_domain_path)"
-            if not registry_lbug_path:
-                return None, "Could not derive registry archive path from uc_path/db_name"
-            try:
-                if not (host and token):
-                    return None, "No Databricks host/token available for UC Files API"
-                uc = VolumeFileService(host=host, token=token)
-                parent_dir = registry_lbug_path.rsplit("/", 1)[0]
-                archive_name = registry_lbug_path.rsplit("/", 1)[1]
-                ok, items, msg = await run_blocking(
-                    uc.list_directory, parent_dir, extensions=[".tar.gz"]
-                )
-                if not ok:
-                    logger.info(
-                        "DT existence: registry archive parent %s not listable (%s)",
-                        parent_dir, msg,
-                    )
-                    return False, f"Cannot list {parent_dir}: {msg}"
-                exists = any(f.get("name") == archive_name for f in (items or []))
-                logger.info(
-                    "DT existence: archive %s -> exists=%s (%d candidates)",
-                    registry_lbug_path, exists, len(items or []),
-                )
-                return exists, None
-            except Exception as e:
-                logger.warning(
-                    "DT existence: registry archive %s check failed: %s",
-                    registry_lbug_path, e,
-                )
-                return None, f"Registry archive check failed: {e}"
-
-        (view_ok, view_err), (snap_ok, snap_err), (reg_ok, reg_err) = (
-            await asyncio.gather(
-                _check_view(),
-                _check_snapshot(),
-                _check_registry(),
-            )
-        )
+        view_ok, view_err = await _check_view()
 
         result["view_exists"] = view_ok
         result["view_check_error"] = view_err
-        result["snapshot_exists"] = snap_ok
-        result["snapshot_check_error"] = snap_err
-        result["registry_lbug_exists"] = reg_ok
-        result["registry_check_error"] = reg_err
+
+        exists_tbl: Optional[bool] = None
+        cnt = 0
+        display = ""
+        lk_database = ""
+        lk_schema = ""
+        lk_table = ""
+        lk_sync_mode = "app_managed"
+        lk_synced_uc = ""
+        lk_check_error: Optional[str] = None
+
+        # --- Resolve config without needing a Postgres connection ---
+        try:
+            from back.core.triplestore import TripleStoreFactory
+            from back.core.graphdb.lakebase.LakebaseFlatStore import (
+                resolve_sync_uc_fallback_catalog,
+                resolve_lakebase_graph_schema,
+            )
+            from back.core.graphdb.lakebase._companion_ddl import synced_phy
+
+            engine_config = TripleStoreFactory._resolve_graph_engine_config(
+                domain, settings
+            ) or {}
+            lk_sync_mode = str(engine_config.get("sync_mode") or "app_managed").strip() or "app_managed"
+
+            # Populate schema/table from config so the card shows values even without Postgres
+            schema_raw = str(engine_config.get("schema") or "").strip()
+            lk_schema = resolve_lakebase_graph_schema(domain, settings, schema_raw)
+            if graph_name:
+                from back.core.graphdb.lakebase.LakebaseBase import LakebaseBase
+                lk_table = LakebaseBase.physical_table_id(graph_name)
+
+            # Compute UC sync FQN (managed_synced only)
+            if lk_sync_mode == "managed_synced":
+                catalog = str(engine_config.get("sync_uc_catalog") or "").strip()
+                if not catalog:
+                    catalog = resolve_sync_uc_fallback_catalog(domain, settings)
+                uc_schema = lk_schema  # always equals the graph schema
+                if catalog and uc_schema:
+                    lk_synced_uc = f"{catalog}.{uc_schema}.{synced_phy(graph_name)}"
+        except Exception as e:
+            logger.warning("DT existence: lakebase config resolution failed: %s", e)
+
+        # --- Live Postgres check (optional — enriches display, may be unavailable) ---
+        try:
+            graph_store = get_triplestore(domain, settings, backend="graph")
+            if graph_store:
+                lk_schema_live = getattr(graph_store, "graph_schema", "") or ""
+                tbl_fn = getattr(graph_store, "physical_table_id", None)
+                lk_table_live = tbl_fn(graph_name) if callable(tbl_fn) else ""
+                db_fn = getattr(graph_store, "_effective_database_display", None)
+                lk_database = db_fn() if callable(db_fn) else ""
+                if lk_schema_live:
+                    lk_schema = lk_schema_live
+                if lk_table_live:
+                    lk_table = lk_table_live
+                if getattr(graph_store, "is_synced", False) and not lk_synced_uc:
+                    try:
+                        fallback_cat = resolve_sync_uc_fallback_catalog(domain, settings)
+                        lk_synced_uc = graph_store.synced_uc_name(
+                            graph_name, fallback_catalog=fallback_cat
+                        )
+                    except Exception:
+                        pass
+                exists_tbl = await run_blocking(graph_store.table_exists, graph_name)
+                if exists_tbl:
+                    gs = await run_blocking(graph_store.get_status, graph_name)
+                    cnt = int(gs.get("count", 0) or 0)
+                    dbpart = str(gs.get("database") or "").strip()
+                    schpart = str(gs.get("schema") or "").strip()
+                    if dbpart:
+                        lk_database = dbpart
+                    if schpart:
+                        lk_schema = schpart
+                    parts = [p for p in (dbpart, schpart, lk_table) if p]
+                    display = " · ".join(parts) if parts else lk_table
+        except Exception as e:
+            logger.warning("DT existence: lakebase graph check failed: %s", e)
+            lk_check_error = str(e)
+        result["triple_count"] = cnt
+        # Preserve the tri-state: True=present, False=absent, None=unknown
+        # (probe failed/timed out). Caller must NOT cache unknown results.
+        if exists_tbl is None:
+            result["graph_has_data"] = None
+        else:
+            result["graph_has_data"] = bool(exists_tbl and cnt > 0)
+        result["lakebase_table_exists"] = exists_tbl
+        result["lakebase_check_error"] = lk_check_error
+        result["graph_display"] = display or ""
+        result["lakebase_database"] = lk_database
+        result["lakebase_schema"] = lk_schema
+        result["lakebase_table"] = lk_table
+        result["lakebase_sync_mode"] = lk_sync_mode
+        result["lakebase_synced_uc"] = lk_synced_uc
+
+        # Check whether the UC synced table actually exists in Unity Catalog
+        if lk_synced_uc:
+            try:
+                view_store_uc = get_triplestore(domain, settings, backend="view")
+                if view_store_uc:
+                    uc_exists = await run_blocking(view_store_uc.table_exists, lk_synced_uc)
+                    result["lakebase_synced_uc_exists"] = uc_exists
+                    logger.info(
+                        "DT existence: synced UC table %s -> exists=%s",
+                        lk_synced_uc, uc_exists,
+                    )
+            except Exception as e:
+                logger.warning(
+                    "DT existence: synced UC table %s check failed: %s", lk_synced_uc, e
+                )
 
         return result
 
@@ -1168,7 +1218,7 @@ class DigitalTwin:
         delta = getattr(domain, "delta", None) or {}
         if delta.get("catalog"):
             return "Delta (SQL Warehouse)"
-        return "LadybugDB"
+        return "Lakebase"
 
     # ------------------------------------------------------------------
     # Data quality: private helpers (static)
@@ -1826,7 +1876,7 @@ class DigitalTwin:
         aggregate_rules=None,
         violation_limit=None,
     ):
-        """Execute SHACL shapes, SWRL, decision tables and aggregate rules against the LadybugDB graph."""
+        """Execute SHACL shapes, SWRL, decision tables and aggregate rules against the graph backend."""
         from back.core.w3c import SHACLService
 
         tm.update_progress(task.id, 5, "Loading triples from graph...")
@@ -1994,6 +2044,7 @@ class DigitalTwin:
         translator = engine._get_translator(store, graph_name)
         base_uri = ontology.get("base_uri", "")
         uri_map = engine._build_uri_map()
+        tbl_sql = store.sql_table_reference(graph_name)
         shape_count = total - len(swrl_rules)
         if pop_cache is None:
             pop_cache = {}
@@ -2011,7 +2062,7 @@ class DigitalTwin:
                 "base_uri": base_uri,
                 "uri_map": uri_map,
             }
-            query = translator.build_violation_query(params)
+            query = translator.build_violation_sql(tbl_sql, params)
             if not query:
                 results.append(
                     {
@@ -2019,7 +2070,7 @@ class DigitalTwin:
                         "category": "structural",
                         "shape_id": f"swrl:{rule.get('name', idx)}",
                         "status": "info",
-                        "message": "Cannot translate to Cypher",
+                        "message": "Cannot translate to SQL",
                         "violations": [],
                         "sql": "",
                     }
@@ -2027,9 +2078,8 @@ class DigitalTwin:
                 continue
             try:
                 t_rule = time.time()
-                conn = store.get_connection()
-                rows = conn.execute(query)
-                violations = [{"s": str(row[0])} for row in rows]
+                raw_rows = store.execute_query(query) or []
+                violations = [{"s": str(r.get("s", ""))} for r in raw_rows]
                 violation_total = len(violations)
                 if violation_limit is not None and violation_total > violation_limit:
                     violations = violations[:violation_limit]
@@ -2107,6 +2157,7 @@ class DigitalTwin:
         ontology = ontology or {}
         base_uri = ontology.get("base_uri", "")
         uri_map = engine._build_uri_map(ontology)
+        tbl_sql = store.sql_table_reference(graph_name)
         if pop_cache is None:
             pop_cache = {}
         for idx, dt in enumerate(decision_tables):
@@ -2118,7 +2169,7 @@ class DigitalTwin:
                 task.id, progress, f"DT {idx + 1}/{len(decision_tables)}: {dt_name}"
             )
             resolved = engine._resolve_dt(dt, uri_map, base_uri)
-            query = engine.build_violation_cypher(resolved, graph_name, base_uri, store)
+            query = engine.build_violation_sql(resolved, tbl_sql, base_uri)
             if not query:
                 results.append(
                     {
@@ -2126,7 +2177,7 @@ class DigitalTwin:
                         "category": "conformance",
                         "shape_id": f"dt:{dt.get('name', idx)}",
                         "status": "info",
-                        "message": "Cannot translate to Cypher",
+                        "message": "Cannot translate to SQL",
                         "violations": [],
                         "sql": "",
                     }
@@ -2134,9 +2185,8 @@ class DigitalTwin:
                 continue
             try:
                 t_rule = time.time()
-                conn = store.get_connection()
-                rows = conn.execute(query)
-                violations = [{"s": str(row[0])} for row in rows]
+                raw_rows = store.execute_query(query) or []
+                violations = [{"s": str(r.get("s", ""))} for r in raw_rows]
                 violation_total = len(violations)
                 if violation_limit is not None and violation_total > violation_limit:
                     violations = violations[:violation_limit]
@@ -2213,6 +2263,7 @@ class DigitalTwin:
         engine = AggregateRuleEngine()
         ontology = ontology or {}
         base_uri = ontology.get("base_uri", "")
+        tbl_sql = store.sql_table_reference(graph_name)
         if pop_cache is None:
             pop_cache = {}
         for idx, rule in enumerate(aggregate_rules):
@@ -2224,7 +2275,7 @@ class DigitalTwin:
                 task.id, progress, f"Agg {idx + 1}/{len(aggregate_rules)}: {agg_name}"
             )
             resolved = engine._resolve_rule(dict(rule), ontology)
-            query = engine.build_cypher(resolved, graph_name, base_uri, store)
+            query = engine.build_sql(resolved, tbl_sql, base_uri)
             if not query:
                 results.append(
                     {
@@ -2232,7 +2283,7 @@ class DigitalTwin:
                         "category": "conformance",
                         "shape_id": f"agg:{rule.get('name', idx)}",
                         "status": "info",
-                        "message": "Cannot translate to Cypher",
+                        "message": "Cannot translate to SQL",
                         "violations": [],
                         "sql": "",
                     }
@@ -2240,11 +2291,13 @@ class DigitalTwin:
                 continue
             try:
                 t_rule = time.time()
-                conn = store.get_connection()
-                rows = conn.execute(query)
+                raw_rows = store.execute_query(query) or []
                 violations = [
-                    {"s": str(row[0]), "agg_val": str(row[1]) if len(row) > 1 else ""}
-                    for row in rows
+                    {
+                        "s": str(r.get("s", "")),
+                        "agg_val": str(r.get("agg_val", "")),
+                    }
+                    for r in raw_rows
                 ]
                 violation_total = len(violations)
                 if violation_limit is not None and violation_total > violation_limit:
@@ -2345,32 +2398,24 @@ class DigitalTwin:
         base_uri: str,
         mapping_config,
         ontology_config,
-        stored_source_versions: dict,
         delta_cfg: dict,
-        force_full: bool,
         *,
-        config_changed: bool = False,
-        snapshot_version: str,
         build_kind: str = "session",
-        archive_to_registry: bool = True,
     ) -> None:
         """Execute Digital Twin build/sync in a worker thread (TaskManager progress).
 
         ``build_kind``:
-          * ``"session"`` — UI/internal build (config-change full rebuild, diagnostics,
-            progress callbacks, session cache, volume archive, phase timings).
+          * ``"session"`` — UI/internal build (diagnostics, progress callbacks,
+            session cache, volume archive, phase timings).
           * ``"api"`` — external REST build (matches legacy ``digitaltwin.dt_build``).
 
-        ``archive_to_registry`` (session only): when ``True`` (default), after the
-        graph is written locally the ``.lbug`` archive upload to the registry
-        Volume runs in a **background daemon thread** so ``complete_task`` is
-        not blocked by gzip + HTTP upload.  When ``False``, the archive step is
-        skipped entirely (local graph under ``/tmp/ontobricks`` is still up to
-        date).
+        All builds are full rebuilds. When the graph engine is ``lakebase`` in
+        ``managed_synced`` mode, the Lakeflow pipeline handles the data-plane
+        refresh and triples never enter this process.
 
         Implementation lives in :class:`_BuildPipeline` (Replace Method with
-        Method Object); this static method preserves the legacy call shape
-        for both internal callers and the external REST router.
+        Method Object); this static method preserves the call shape for both
+        internal callers and the external REST router.
         """
         from back.objects.digitaltwin._build_pipeline import _BuildPipeline
 
@@ -2389,13 +2434,8 @@ class DigitalTwin:
             base_uri,
             mapping_config,
             ontology_config,
-            stored_source_versions,
             delta_cfg,
-            force_full,
-            config_changed=config_changed,
-            snapshot_version=snapshot_version,
             build_kind=build_kind,
-            archive_to_registry=archive_to_registry,
         ).run()
 
     @staticmethod
@@ -2797,7 +2837,13 @@ class DigitalTwin:
         registry_schema=None,
         registry_volume=None,
     ):
-        """Resolve registry location: explicit query params -> session -> env."""
+        """Resolve registry location: explicit query params -> session -> env.
+
+        Always carries ``lakebase_schema`` / ``lakebase_database`` from the
+        session/env so callers that pass the dict straight to
+        ``RegistryCfg.from_dict`` get the correct Lakebase schema rather than
+        the hardcoded ``"ontobricks_registry"`` default.
+        """
         from back.objects.registry import RegistryCfg
 
         base = RegistryCfg.from_session(session_mgr, settings)
@@ -2805,6 +2851,8 @@ class DigitalTwin:
             "catalog": registry_catalog or base.catalog,
             "schema": registry_schema or base.schema,
             "volume": registry_volume or base.volume,
+            "lakebase_schema": base.lakebase_schema,
+            "lakebase_database": base.lakebase_database,
         }
 
     @staticmethod
@@ -3009,7 +3057,6 @@ class DigitalTwin:
         count = (ts_status or {}).get("count", 0)
 
         view_exists = (dt_exist or {}).get("view_exists")
-        archive_exists = (dt_exist or {}).get("registry_lbug_exists")
 
         if graph_loaded and view_exists is not False:
             return {
@@ -3023,7 +3070,6 @@ class DigitalTwin:
             not domain.last_build
             and not graph_loaded
             and not view_exists
-            and not archive_exists
         ):
             return {
                 "indicator": "red",
@@ -3174,3 +3220,191 @@ class DigitalTwin:
         from back.objects.digitaltwin.CohortService import CohortService
 
         return CohortService.probe_uc_write(target_dict, client)
+
+    # ------------------------------------------------------------------
+    # Filter / sync helpers (used by /sync/filter)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def filter_preview(
+        store: Any,
+        graph_name: str,
+        entity_type: str,
+        field: str,
+        match_type: str,
+        value: str,
+        max_preview: int = 500,
+    ) -> Dict[str, Any]:
+        """Seed-search phase: return a flat entity list for the filter modal.
+
+        Fetches up to *max_preview* + 1 subjects matching the criteria so the
+        caller can detect capping without an extra count query.
+
+        Returns a dict suitable for spreading into a ``{"success": True, ...}``
+        response.
+        """
+        probe_limit = max_preview + 1
+        try:
+            entity_set = store.find_seed_subjects(
+                graph_name,
+                entity_type=entity_type,
+                field=field,
+                match_type=match_type,
+                value=value,
+                limit=probe_limit,
+            )
+        except (ValidationError, InfrastructureError, NotFoundError):
+            raise
+        except Exception as e:
+            msg = str(e)
+            if "does not exist" in msg.lower():
+                raise NotFoundError(
+                    f"Graph {graph_name} does not exist. Run Build first.",
+                    detail=msg,
+                )
+            raise InfrastructureError("Error querying graph", detail=msg)
+
+        if not entity_set:
+            return {
+                "phase": "preview",
+                "seeds": [],
+                "total": 0,
+                "capped": False,
+                "message": "No entities found matching the filter criteria.",
+            }
+
+        capped = len(entity_set) > max_preview
+        preview_uris = list(entity_set)[:max_preview]
+
+        try:
+            metadata = store.get_entity_metadata(graph_name, preview_uris)
+        except (ValidationError, InfrastructureError, NotFoundError):
+            raise
+        except Exception as e:
+            raise InfrastructureError("Error fetching entity metadata", detail=str(e))
+
+        seeds = [
+            {
+                "uri": m["uri"],
+                "type": uri_local_name(m["type"]) if m["type"] else "Unknown",
+                "type_uri": m["type"],
+                "label": m["label"] or uri_local_name(m["uri"]),
+            }
+            for m in metadata
+        ]
+        seeds.sort(key=lambda s: (s["type"], s["label"]))
+
+        logger.info(
+            "Filter preview – %d seeds returned (total=%d, capped=%s)",
+            len(seeds),
+            len(entity_set),
+            capped,
+        )
+        return {
+            "phase": "preview",
+            "seeds": seeds,
+            "total": len(entity_set),
+            "capped": capped,
+        }
+
+    @staticmethod
+    def filter_expand(
+        store: Any,
+        graph_name: str,
+        selected_uris: List[str],
+        include_rels: bool = True,
+        depth: int = 3,
+        max_entities: int = 5000,
+        batch_size: int = 1000,
+        max_triples: int = 100_000,
+        max_fetch_seconds: float = 120.0,
+    ) -> Dict[str, Any]:
+        """BFS-expand selected URIs and return the induced subgraph triples.
+
+        Returns a dict suitable for spreading into a ``{"success": True, ...}``
+        response.
+        """
+        entity_set: Set[str] = set(selected_uris)
+        initial_count = len(entity_set)
+        capped = False
+
+        logger.info(
+            "Filter expand – %d selected URIs, depth=%d, max=%d",
+            initial_count,
+            depth,
+            max_entities,
+        )
+
+        if include_rels and depth > 0:
+            current_level = set(entity_set)
+            for d in range(depth):
+                if not current_level or len(entity_set) >= max_entities:
+                    break
+                logger.debug(
+                    "Filter expand – level %d (%d entities so far)", d + 1, len(entity_set)
+                )
+                try:
+                    neighbors = store.expand_entity_neighbors(graph_name, current_level)
+                except Exception as e:
+                    logger.warning("Expansion query at level %d failed: %s", d + 1, e)
+                    break
+                new_entities = neighbors - entity_set
+                if not new_entities:
+                    break
+                remaining = max_entities - len(entity_set)
+                if len(new_entities) > remaining:
+                    new_entities = set(list(new_entities)[:remaining])
+                    capped = True
+                entity_set.update(new_entities)
+                if capped:
+                    break
+                current_level = new_entities
+
+        logger.info(
+            "Filter expand – fetching triples for %d entities (%d seed + %d expanded, capped=%s)",
+            len(entity_set),
+            initial_count,
+            len(entity_set) - initial_count,
+            capped,
+        )
+
+        subject_list = list(entity_set)
+        fetch_t0 = time.monotonic()
+        timeout_capped = False
+        results = []
+        try:
+            for i in range(0, len(subject_list), batch_size):
+                if (time.monotonic() - fetch_t0) > max_fetch_seconds:
+                    timeout_capped = True
+                    capped = True
+                    logger.warning(
+                        "Filter expand – capped by time budget after %d/%d entities",
+                        i,
+                        len(subject_list),
+                    )
+                    break
+                batch_rows = store.get_triples_for_subjects(
+                    graph_name, subject_list[i : i + batch_size]
+                )
+                if batch_rows:
+                    results.extend(batch_rows)
+                if len(results) >= max_triples:
+                    results = results[:max_triples]
+                    capped = True
+                    break
+        except (ValidationError, InfrastructureError, NotFoundError):
+            raise
+        except Exception as e:
+            logger.exception("Filter final query failed: %s", e)
+            raise InfrastructureError("Error fetching triples for the filter", detail=str(e))
+
+        return {
+            "phase": "expand",
+            "results": results,
+            "columns": ["subject", "predicate", "object"],
+            "count": len(results),
+            "initial_count": initial_count,
+            "expanded_count": len(entity_set),
+            "capped": capped,
+            "timeout_capped": timeout_capped,
+        }

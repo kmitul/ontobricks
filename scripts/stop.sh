@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Stop script for OntoBricks (Local Development)
 # Usage: scripts/stop.sh
 #

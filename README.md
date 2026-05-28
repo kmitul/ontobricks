@@ -2,7 +2,7 @@
   <img src="src/front/static/global/img/ontobricks-icon.svg" alt="OntoBricks Logo" width="120" height="120">
 </p>
 
-<h1 align="center">OntoBricks 0.3.1</h1>
+<h1 align="center">OntoBricks 0.4.0</h1>
 
 <p align="center">
   <strong>Digital Twin Builder for Databricks</strong>
@@ -15,7 +15,7 @@
 
 ## Project Description
 
-OntoBricks is a web application that transforms Databricks tables into a materialized knowledge graph. It lets you design ontologies (OWL), map them to Unity Catalog tables via R2RML, materialize triples into a Delta or LadybugDB triple store, reason over the graph (OWL 2 RL, SWRL, SHACL), and query it through an auto-generated GraphQL API. The entire pipeline — from metadata import to a queryable knowledge graph — can run in four clicks using LLM-powered automation.
+OntoBricks is a web application that transforms Databricks tables into a materialized knowledge graph. It lets you design ontologies (OWL), map them to Unity Catalog tables via R2RML, materialize triples into a Delta-backed triple store and a Lakebase Postgres graph engine, reason over the graph (OWL 2 RL, SWRL, SHACL), and query it through an auto-generated GraphQL API. The entire pipeline — from metadata import to a queryable knowledge graph — can run in four clicks using LLM-powered automation.
 
 ## Project Support
 
@@ -42,15 +42,25 @@ scripts/setup.sh
 ### Prerequisites
 
 - Python 3.10 or higher
-- Databricks workspace access with a Personal Access Token
-- A SQL Warehouse ID
-- A Unity Catalog Volume for the domain registry
-- *(Optional)* A Databricks Lakebase Postgres database — required only
-  when the admin switches the registry storage backend from
-  **Volume** (default) to **Lakebase** in Settings → Registry.
-  OntoBricks targets **Lakebase Autoscaling** exclusively (Provisioned
-  instances are not supported). Install the optional driver with
-  `uv sync --extra lakebase`.
+- Databricks workspace access (Databricks Apps must be enabled). Local
+  development uses a Personal Access Token; production uses the App's
+  service principal.
+- A SQL Warehouse (you'll need its ID for local dev).
+- **Databricks Lakebase Autoscaling** project + branch + Postgres
+  database — **required since v0.4.0** for the domain registry
+  (domains, versions, permissions, schedules, global config) and the
+  Graph DB triple store. Provisioned Lakebase instances are **not**
+  supported. The Postgres driver (`psycopg[binary]` + `psycopg-pool`)
+  is declared as an optional dependency so volume-only forks can opt
+  out — install with `uv sync --extra lakebase` for any normal
+  deployment.
+- **Unity Catalog Volume** in the catalog/schema that hosts the
+  triplestore VIEWs (`triplestore_<domain>_v<n>`). The volume is
+  reserved for binary artefacts (`documents/` uploads — domain-scoped
+  attachments imported by the ontology designer).
+- `psql` (libpq client) on `PATH` for the Lakebase permission
+  bootstrap scripts (`brew install libpq && brew link --force libpq`
+  on macOS).
 
 ## Deploying / Installing the Project
 
@@ -69,30 +79,48 @@ scripts/start.sh
 ### Deploy to Databricks Apps
 
 ```bash
-# Install and configure the Databricks CLI
-pip install databricks-cli
-databricks configure --token
+# Install and authenticate the Databricks CLI (>= 0.250.0)
+brew install databricks            # or curl -fsSL https://databricks.com/install.sh | sh
+databricks auth login --host https://<workspace>
 
-# Deploy
+# Edit scripts/deploy.config.sh (warehouse, registry catalog/schema,
+# Lakebase project/branch/database — see the file header) and then:
 make deploy
-# Or: scripts/deploy.sh
+# Or directly: scripts/deploy.sh
 ```
 
-After deployment, bind the **sql-warehouse** and **volume** resources in the Databricks Apps UI (**Compute > Apps > ontobricks > Resources**). If the registry volume is empty, open the app and click **Settings > Registry > Initialize**.
+`scripts/deploy.sh` generates `app.yaml` from `app.yaml.template` +
+`scripts/deploy.config.sh`, validates and deploys the DAB bundle on
+target `dev-lakebase`, runs `scripts/bootstrap-app-permissions.sh`
+(app SP `CAN_MANAGE` on itself), then runs
+`scripts/bootstrap-lakebase-perms.sh` on the registry / graph / sync
+schemas. All steps are idempotent.
 
-> **Lakebase backend (optional).** To deploy with the Lakebase Postgres
-> backend instead of (in addition to) the Volume, deploy to the
-> `dev-lakebase` target (`databricks bundle deploy -t dev-lakebase`) and
-> tune the bundle variables `lakebase_project`, `lakebase_branch`,
-> `lakebase_database_resource_segment` (the `db-…` id from
+After the first deploy, bind the **sql-warehouse**, **volume**, and
+**postgres** (Lakebase) resources in the Databricks Apps UI
+(**Compute > Apps > <your-app> > Resources**) if the DAB bind did
+not take. Open the app and click **Settings > Registry > Initialize**
+to create the Lakebase schema; re-run `make bootstrap-lakebase` once
+afterwards so the freshly created schema picks up `USAGE/DML`.
+
+> **Lakebase deploy targets.** Pick a Databricks Lakebase Autoscaling
+> project + branch and a Postgres database, then set the
+> `LAKEBASE_PROJECT`, `LAKEBASE_BRANCH`,
+> `LAKEBASE_DATABASE_RESOURCE_SEGMENT` (the `db-…` id from
 > `databricks postgres list-databases "projects/<id>/branches/<branch>" -o json`,
 > **not** the Postgres database name shown in the SQL UI), and
-> `lakebase_registry_schema` (mirror in `app.yaml` as `LAKEBASE_SCHEMA`).
-> The DAB composes the full Apps `postgres.database` path. The DAB binds a `database` Apps resource so the
-> runtime auto-injects `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER`; the app
-> mints the OAuth token automatically (no user secret required). The
-> default `dev`/`prod` targets stay Volume-only and keep working as
-> before.
+> `LAKEBASE_REGISTRY_SCHEMA` defaults in `scripts/deploy.config.sh`.
+> The DAB composes the full Apps `postgres.database` path and binds a
+> `postgres` Apps resource so the runtime auto-injects
+> `PGHOST` / `PGPORT` / `PGDATABASE` / `PGUSER`; the app mints the
+> Lakebase JWT automatically (no user secret required).
+
+> **Upgrading from a pre-v0.4.0 deployment.** Pre-v0.4.0 stored the
+> entire registry as JSON on the Unity Catalog Volume. Run
+> `scripts/migrate-registry-to-lakebase.sh` once before upgrading to
+> v0.4.0+ to copy every JSON-shaped artefact (domains, versions,
+> permissions, schedules, global config) into Lakebase. Binary
+> artefacts on the Volume are left untouched.
 
 > **First deploy only:** `make deploy` runs `scripts/bootstrap-app-permissions.sh` automatically, which grants each app's service principal `CAN_MANAGE` on itself. Without that grant the middleware cannot read the app's own ACL and every first-time visitor — including the deploying `CAN_MANAGE` user — lands on the access-denied page. If you deploy via `databricks bundle deploy` directly, run `make bootstrap-perms` once afterwards (it is idempotent).
 
@@ -133,9 +161,31 @@ git push origin main --tags
 - **Duplicate names** — **Save to Unity Catalog** is blocked if the sanitized domain name already exists in the registry (inline check + confirmation before POST).
 - **Navbar** — domain name and version in the top bar refresh after load, save, clear, import, and version switches (browser cache invalidated on those actions).
 
+### Graph DB engine (Settings → Graph DB)
+
+The **graph** triple-store backend is pluggable; the abstraction (`GraphDBFactory` / `GraphDBBackend`) is preserved so additional engines can be added in the future. Today only one engine ships:
+
+- **Lakebase (Postgres)** — default; **three Postgres objects per domain version** (`*_sync` bulk-data table, `*__app` companion for reasoning/cohort writes, `g_<dom>_v<n>` UNION view for reads) inside a configurable Postgres schema on the **App-bound** Lakebase database (same connection as the optional Lakebase registry backend). Requires the `lakebase` extra (`uv sync --extra lakebase`) so `psycopg` is installed.
+
+Engine-specific options are stored as global JSON (`graph_engine_config`). For Lakebase the supported keys are **`database`** (optional override of `PGDATABASE`), **`schema`** (optional, default `ontobricks_graph`), **`sync_mode`** (`app_managed` default, or `managed_synced` to delegate bulk ingest to a Databricks Lakeflow snapshot pipeline), **`sync_table_mode`** (`snapshot` / `triggered` / `continuous` — `snapshot` is the recommended mode), **`sync_timeout_s`** (default 600), **`sync_uc_catalog`** (UC catalog the synced table is registered in; defaults to the snapshot Delta catalog when unset), and **`sync_uc_schema`** (UC schema segment for the synced-table FQN; defaults to the registry UC schema so the Lakeflow object lands in the same UC namespace as other registry artefacts). See `docs/lakebase-graphdb.md` for the full reference.
+
+> **Lakebase permission grants (three schemas).** The app service principal needs `USAGE + DML` on up to three Postgres schemas — each covered by one run of `scripts/bootstrap-lakebase-perms.sh`:
+>
+> | Schema | When to run | Deploy config var |
+> |---|---|---|
+> | Registry schema (e.g. `ontobricks_registry`) | After `Settings → Registry → Initialize` | `LAKEBASE_BOOTSTRAP_SCHEMA` |
+> | Graph schema (e.g. `ontobricks_graph`) | After first Digital Twin `Build` | `LAKEBASE_GRAPH_SCHEMA` |
+> | Sync schema (e.g. `ontobricks`) | After first Lakeflow snapshot (`managed_synced` only) | `LAKEBASE_SYNC_SCHEMA` |
+>
+> `scripts/deploy.sh` calls the bootstrap for all three automatically. If the Graph DB is on a **separate Lakebase instance** from the registry, set `LAKEBASE_GRAPH_PROJECT`, `LAKEBASE_GRAPH_BRANCH`, and `LAKEBASE_GRAPH_DATABASE` in `scripts/deploy.config.sh` so the second and third grants target the correct instance.
+
+> **Lakebase build performance.** When the active engine is Lakebase, the Digital Twin build streams warehouse rows in `fetchmany` batches (`SQLWarehouse.iter_rows`) and ingests them via `COPY FROM STDIN` into a per-batch temp table followed by `INSERT … ON CONFLICT DO NOTHING` (and the symmetrical `DELETE … USING` for incremental removes). The FastAPI process never holds the full graph or the full diff: snapshot CTAS and `EXCEPT` execution stay warehouse-side, the app pipes one batch at a time. There is no Volume archive thread — Postgres is the system of record for the graph.
+
+> **Lakebase managed-synced mode.** When `graph_engine_config.sync_mode = "managed_synced"`, the bulk R2RML data movement is moved entirely off the app: a Databricks Lakeflow snapshot pipeline keeps a Postgres synced table in lock-step with the R2RML view, and the FastAPI process only orchestrates (`SyncedTableManager.ensure` + `trigger_and_wait`). Reasoning + cohort writes stay on the direct PG path through a writable companion table; readers see both via a UNION view (back-compat name). PG layout per graph version: `g_<dom>_v<n>_sync` (Lakeflow), `g_<dom>_v<n>__app` (app), `g_<dom>_v<n>` (UNION view). See `docs/graphdb-integration.md §9` for the full architecture.
+
 ### Manual Workflow
 
-1. **Design** an ontology visually using the OntoViz canvas, or import OWL/RDFS/industry standards (FIBO, CDISC, IOF)
+1. **Design** an ontology visually using the OntoViz canvas, or import OWL/RDFS/industry standards (FIBO, CDISC, IOF, HL7 FHIR R4/R4B/R5)
 2. **Map** ontology entities to Databricks tables with column-level precision
 3. **Build** the Digital Twin — materializes triples into the triple store (incremental by default)
 4. **Query** through the GraphQL playground or explore the interactive knowledge graph
@@ -169,14 +219,32 @@ The **Ontology Designer** view (**Ontology → Designer**) includes a floating A
 
 OntoBricks exposes the knowledge graph to LLM agents via the [Model Context Protocol](https://modelcontextprotocol.io/). Deploy the companion `mcp-ontobricks` app and connect from Cursor, Claude Desktop, or the Databricks Playground.
 
+### Registry OBX Export / Import (UI)
+
+Export one or more domains directly from **Registry → Browse** to a portable
+`.obx` file with per-domain version-mode selection (Latest / Active / All /
+Choose). Import with per-domain conflict resolution (Skip / Overwrite / Rename).
+No command line required — ideal for ad-hoc transfers and cross-tenant sharing.
+
 ### Registry Import / Export (CLI)
 
-Promote domains between Databricks environments with the
+For automated promotion pipelines use the
 `scripts/registry_transfer.sh` command-line tool — export a curated subset
 of domains/versions from a source registry into a `.zip`, then preview and
-commit it into the target registry. No UI, no HTTP endpoint. See
-[Registry Import / Export (CLI)](docs/import-export.md) for the full
-reference and examples.
+commit it into the target registry. See
+[Registry Import / Export](docs/import-export.md) for the full reference,
+examples, and a comparison of the OBX UI vs CLI approaches.
+
+### Ontology Pitfalls Detector
+
+Detect 19 structural, logical, and semantic pitfalls (P1.1–P4.7) in your
+ontology from the **Ontology → Pitfalls** sidebar panel. Fast graph-only
+checks run immediately; ML-heavy checks (semantic similarity, NLP naming)
+require installing the optional extra:
+
+```bash
+uv sync --extra pitfalls
+```
 
 ### Documentation
 

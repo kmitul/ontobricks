@@ -9,6 +9,9 @@ from back.core.errors.ValidationError import ValidationError  # noqa: F401
 from back.core.errors.AuthorizationError import AuthorizationError  # noqa: F401
 from back.core.errors.InfrastructureError import InfrastructureError  # noqa: F401
 from back.core.errors.ConflictError import ConflictError  # noqa: F401
+from back.core.errors.OperationCancelledError import (  # noqa: F401
+    OperationCancelledError,
+)
 from back.core.errors.ErrorResponse import ErrorResponse  # noqa: F401
 
 _error_code_from_class = OntoBricksError.error_code_from_class
@@ -28,6 +31,7 @@ __all__ = [
     "AuthorizationError",
     "InfrastructureError",
     "ConflictError",
+    "OperationCancelledError",
     "ErrorResponse",
     "_error_code_from_class",
     "register_exception_handlers",

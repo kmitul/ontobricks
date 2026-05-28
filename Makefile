@@ -52,7 +52,7 @@ help:
 install:
 	@echo "Installing dependencies..."
 	uv venv
-	. .venv/bin/activate && uv pip install -e .
+	uv sync --extra lakebase --extra pitfalls
 
 setup:
 	@echo "Running setup..."
@@ -131,6 +131,7 @@ bootstrap-lakebase:
 	@. ./$(CONFIG) && \
 	  scripts/bootstrap-lakebase-perms.sh \
 	    -i "$$LAKEBASE_BOOTSTRAP_INSTANCE" \
+	    -b "$$LAKEBASE_BOOTSTRAP_BRANCH" \
 	    -d "$$LAKEBASE_BOOTSTRAP_DATABASE" \
 	    -s "$$LAKEBASE_BOOTSTRAP_SCHEMA" \
 	    -a "$$APP_NAME" -a "$$MCP_APP_NAME"
@@ -138,6 +139,8 @@ bootstrap-lakebase:
 bundle-validate:
 	@echo "Validating Databricks Asset Bundle (target: dev-lakebase)..."
 	@. ./$(CONFIG) && databricks bundle validate -t dev-lakebase \
+	    --var=app_name="$$APP_NAME" \
+	    --var=mcp_app_name="$$MCP_APP_NAME" \
 	    --var=warehouse_id="$$WAREHOUSE_ID" \
 	    --var=registry_catalog="$$REGISTRY_CATALOG" \
 	    --var=registry_schema="$$REGISTRY_SCHEMA" \

@@ -35,22 +35,11 @@ class Settings(BaseSettings):
         """Alias used by resolve_warehouse_id()."""
         return self.databricks_sql_warehouse_id
 
-    # Domain Registry — storage backend
-    # ``auto`` (default) prefers Lakebase when the Apps runtime has bound
-    # the Postgres ``database`` resource (PG* env vars present) AND the
-    # optional ``psycopg`` extra is installed; otherwise falls back to
-    # ``volume``. Operators can pin the choice with
-    # ``REGISTRY_BACKEND=volume`` or ``REGISTRY_BACKEND=lakebase``.
-    # ``volume`` keeps the original JSON-on-UC-Volume layout.
-    # ``lakebase`` stores registry-shaped data in a Postgres schema on
-    # Databricks Lakebase; binaries (documents/, *.lbug.tar.gz) stay on
-    # the Volume regardless of this choice. Resolution lives in
-    # :func:`back.objects.registry.resolve_default_backend`.
-    registry_backend: str = "auto"
-
-    # Domain Registry (single Volume for all domains) — used by both
-    # backends for binary artifacts and by the volume backend for
-    # everything else.
+    # Domain Registry (single Volume for all domains) — used solely for
+    # domain-scoped binary artefacts (the documents/ uploads imported
+    # by the ontology designer). Structured registry data (domains,
+    # versions, permissions, schedules, global config) lives in
+    # Lakebase as of v0.4.0.
     registry_volume_path: str = ""
     registry_catalog: str = ""
     registry_schema: str = ""
@@ -72,6 +61,14 @@ class Settings(BaseSettings):
     # target database. The JWT scope is per-instance so no token
     # re-mint is needed.
     lakebase_database: str = ""
+
+    # Lakebase: branch within the project to connect to.
+    # In production the Apps runtime resolves the branch implicitly via
+    # the ``database`` resource binding (PGHOST already encodes the
+    # branch endpoint). In local dev, set this together with
+    # ``LAKEBASE_PROJECT`` so ``LakebaseAuth`` can resolve the
+    # endpoint hostname without requiring the raw URL.
+    lakebase_branch: str = "main"
 
     # Databricks App name (for permission management).
     # Reads ``ONTOBRICKS_APP_NAME`` first (explicit override, e.g. via .env
@@ -97,7 +94,7 @@ class Settings(BaseSettings):
         case_sensitive=False,
         env_file=".env",
         # ``PGHOST``/``PGPORT``/``PGDATABASE``/``PGUSER`` and
-        # ``DATABASE_INSTANCE_NAME`` are consumed directly via
+        # ``LAKEBASE_PROJECT`` are consumed directly via
         # ``os.environ`` by :class:`back.core.databricks.LakebaseAuth`
         # — they don't need to be Pydantic fields. ``ignore`` keeps
         # the .env file tolerant of extra Lakebase-related entries.

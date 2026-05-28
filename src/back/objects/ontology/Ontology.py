@@ -19,6 +19,7 @@ from shared.config.constants import DEFAULT_BASE_URI
 from back.core.industry import (
     fetch_and_parse_cdisc,
     fetch_and_parse_fibo,
+    fetch_and_parse_fhir,
     fetch_and_parse_iof,
 )
 from back.core.w3c import OntologyGenerator, OntologyParser
@@ -31,7 +32,7 @@ if TYPE_CHECKING:
     from agents.agent_owl_generator.engine import AgentResult
     from back.objects.session.DomainSession import DomainSession
 
-IndustryKind = Literal["fibo", "cdisc", "iof"]
+IndustryKind = Literal["fibo", "cdisc", "iof", "fhir"]
 
 logger = get_logger(__name__)
 
@@ -39,18 +40,21 @@ _INDUSTRY_EMPTY_MESSAGE: Dict[IndustryKind, str] = {
     "fibo": "No FIBO domains selected.",
     "cdisc": "No CDISC domains selected.",
     "iof": "No IOF domains selected.",
+    "fhir": "No FHIR domains selected.",
 }
 
 _INDUSTRY_LOG_LABEL: Dict[IndustryKind, str] = {
     "fibo": "FIBO",
     "cdisc": "CDISC",
     "iof": "IOF",
+    "fhir": "FHIR",
 }
 
 _INDUSTRY_FETCH = {
     "fibo": fetch_and_parse_fibo,
     "cdisc": fetch_and_parse_cdisc,
     "iof": fetch_and_parse_iof,
+    "fhir": fetch_and_parse_fhir,
 }
 
 
@@ -410,12 +414,14 @@ class Ontology:
         }
 
     def add_class(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Build a class from *data*, append if unique URI, clear cache and save."""
+        """Build a class from *data*, append if unique URI and name, clear cache and save."""
         s = self._domain
         classes = list(s.get_classes())
         new_class = Ontology.build_class_from_data(data)
         if any(c.get("uri") == new_class["uri"] for c in classes):
             raise ValidationError("Class with this URI already exists")
+        if any(c.get("name") == new_class["name"] for c in classes):
+            raise ValidationError("Class with this name already exists")
         classes.append(new_class)
         s.ontology["classes"] = classes
         s.clear_generated_content()
@@ -427,8 +433,12 @@ class Ontology:
         s = self._domain
         classes = list(s.get_classes())
         class_uri = data.get("uri")
+        new_name = data.get("name")
         for i, cls in enumerate(classes):
             if cls.get("uri") == class_uri:
+                if new_name and new_name != cls.get("name"):
+                    if any(c.get("name") == new_name for j, c in enumerate(classes) if j != i):
+                        raise ValidationError("Class with this name already exists")
                 classes[i] = Ontology.build_class_from_data(data, cls)
                 s.ontology["classes"] = classes
                 s.clear_generated_content()
@@ -437,12 +447,14 @@ class Ontology:
         raise NotFoundError("Class not found")
 
     def add_property(self, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Build a property from *data*, append if unique URI, clear cache and save."""
+        """Build a property from *data*, append if unique URI and name, clear cache and save."""
         s = self._domain
         properties = list(s.get_properties())
         new_property = Ontology.build_property_from_data(data)
         if any(p.get("uri") == new_property["uri"] for p in properties):
             raise ValidationError("Property with this URI already exists")
+        if any(p.get("name") == new_property["name"] for p in properties):
+            raise ValidationError("Property with this name already exists")
         properties.append(new_property)
         s.ontology["properties"] = properties
         s.clear_generated_content()
@@ -454,8 +466,12 @@ class Ontology:
         s = self._domain
         properties = list(s.get_properties())
         property_uri = data.get("uri")
+        new_name = data.get("name")
         for i, prop in enumerate(properties):
             if prop.get("uri") == property_uri:
+                if new_name and new_name != prop.get("name"):
+                    if any(p.get("name") == new_name for j, p in enumerate(properties) if j != i):
+                        raise ValidationError("Property with this name already exists")
                 properties[i] = Ontology.build_property_from_data(data, prop)
                 s.ontology["properties"] = properties
                 s.clear_generated_content()
@@ -908,9 +924,17 @@ class Ontology:
         return ontology_info, classes, properties
 
     def import_industry_ontology(
-        self, kind: IndustryKind, domain_keys: List[str]
+        self,
+        kind: IndustryKind,
+        domain_keys: List[str],
+        version: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Fetch industry modules, merge, parse, persist to project session.
+
+        Args:
+            kind: Industry standard identifier (fibo, cdisc, iof, fhir).
+            domain_keys: Domain bucket keys to import.
+            version: Version string for importers that support it (currently FHIR only).
 
         Returns the same dict shape as the former /import-fibo|cdisc|iof handlers.
         """
@@ -918,7 +942,12 @@ class Ontology:
             raise ValidationError(_INDUSTRY_EMPTY_MESSAGE[kind])
 
         try:
-            result = _INDUSTRY_FETCH[kind](domain_keys)
+            if kind == "fhir":
+                from back.core.industry.fhir import FhirImportService
+                fhir_version = version or FhirImportService.DEFAULT_VERSION
+                result = _INDUSTRY_FETCH[kind](domain_keys, version=fhir_version)
+            else:
+                result = _INDUSTRY_FETCH[kind](domain_keys)
 
             info = result["ontology_info"]
             if kind == "cdisc":
@@ -929,6 +958,11 @@ class Ontology:
                 ont_name = info.get("name", "FIBO")
                 base_uri = info.get("uri", "https://spec.edmcouncil.org/fibo/ontology/")
                 desc_prefix = "Financial Industry Business Ontology (FIBO) – "
+            elif kind == "fhir":
+                fhir_ver = info.get("version", fhir_version)
+                ont_name = info.get("name", f"HL7 FHIR {fhir_ver}")
+                base_uri = info.get("base_uri", "http://hl7.org/fhir/")
+                desc_prefix = f"HL7 FHIR {fhir_ver} – "
             else:
                 ont_name = info.get("name", "IOF")
                 base_uri = info.get(

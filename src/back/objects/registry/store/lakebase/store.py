@@ -104,8 +104,7 @@ def _require_psycopg():
     except ImportError as exc:  # pragma: no cover
         raise InfrastructureError(
             "psycopg is required for the Lakebase backend. Install with "
-            "``uv sync --extra lakebase`` (or ``pip install .[lakebase]``) or "
-            "set REGISTRY_BACKEND=volume."
+            "``uv sync --extra lakebase`` (or ``pip install .[lakebase]``)."
         ) from exc
     return psycopg, dict_row
 
@@ -1295,8 +1294,9 @@ class LakebaseRegistryStore(RegistryStore):
         apps that share a Lakebase resource binding (instance +
         database + schema) naturally see the same registry. The Volume
         triplet (``catalog/schema/volume``) is no longer part of the
-        identity — it's just where binary artifacts (``.lbug.tar.gz``,
-        ``documents/``) live for whichever app is currently reading.
+        identity — it's just where domain-scoped binary artefacts
+        (``documents/`` uploads) live for whichever app is currently
+        reading.
 
         Backward-compat: pre-existing schemas migrated under the legacy
         ``"<catalog>.<schema>.<volume>"`` naming are *adopted* on first
@@ -1385,9 +1385,9 @@ class LakebaseRegistryStore(RegistryStore):
         triple makes them share the registry; pointing them at
         different schemas isolates them. The Volume triplet from
         :class:`RegistryCfg` is intentionally *not* part of the
-        identity here — Volume bindings only matter for binary
-        artifacts (``documents/``, ``.lbug.tar.gz``) and can differ
-        per app without forking the metadata.
+        identity here — Volume bindings only matter for domain-scoped
+        binary artefacts (``documents/`` uploads) and can differ per
+        app without forking the metadata.
         """
         return self._schema
 

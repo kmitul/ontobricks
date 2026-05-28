@@ -24,8 +24,10 @@ from agents.serialization import serialize_agent_steps
 from back.core.industry import (
     get_fibo_catalog,
     get_cdisc_catalog,
+    get_fhir_catalog,
     get_iof_catalog,
 )
+from back.core.industry.fhir import get_fhir_versions
 from back.core.logging import get_logger
 from back.core.w3c import SHACLService
 from shared.config.constants import DEFAULT_BASE_URI, DEFAULT_GRAPH_NAME
@@ -282,6 +284,7 @@ _INDUSTRY_CATALOGS = {
     "fibo": get_fibo_catalog,
     "cdisc": get_cdisc_catalog,
     "iof": get_iof_catalog,
+    "fhir": get_fhir_catalog,
 }
 
 
@@ -294,6 +297,12 @@ async def industry_catalog(kind: str):
     return {"success": True, "catalog": catalog_fn()}
 
 
+@router.get("/fhir-versions")
+async def fhir_versions():
+    """Return the list of supported FHIR release versions."""
+    return {"success": True, "versions": get_fhir_versions()}
+
+
 @router.post("/import-{kind}")
 async def import_industry(
     kind: str,
@@ -302,14 +311,16 @@ async def import_industry(
 ):
     """Fetch industry domain modules, merge, parse, and store in session.
 
-    Expects JSON body: ``{ "domains": ["FND", "BE", ...] }``
+    Expects JSON body: ``{ "domains": ["FND", "BE", ...], "version": "R5" }``
+    The ``version`` field is only used by the FHIR importer; other importers ignore it.
     """
     if kind not in _INDUSTRY_CATALOGS:
         raise ValidationError(f"Unknown industry kind: {kind}")
     data = await request.json()
     domain_keys = data.get("domains", [])
+    version = data.get("version") or None
     domain = get_domain(session_mgr)
-    return Ontology(domain).import_industry_ontology(kind, domain_keys)
+    return Ontology(domain).import_industry_ontology(kind, domain_keys, version=version)
 
 
 # ===========================================
@@ -567,7 +578,7 @@ async def validate_swrl_rule(request: Request):
     data = await request.json()
     errors = Ontology.validate_swrl_rule(data.get("rule", {}))
     if errors:
-        return {"success": False, "valid": False, "errors": errors}
+        raise ValidationError("SWRL rule is invalid", detail="; ".join(str(e) for e in errors))
     return {"success": True, "valid": True, "message": "Rule syntax is valid"}
 
 
@@ -680,7 +691,10 @@ async def validate_rule(rule_type: str, request: Request):
             errors = AggregateRuleEngine.validate_rule(rule)
 
     if errors:
-        return {"success": False, "valid": False, "errors": errors}
+        raise ValidationError(
+            f"{rule_type.replace('_', ' ').title()} rule is invalid",
+            detail="; ".join(str(e) for e in errors),
+        )
     return {"success": True, "valid": True, "message": "Rule is valid"}
 
 
@@ -1487,3 +1501,131 @@ async def ontology_assistant_invoke(
             )
 
         return response.model_dump()
+
+
+# ===========================================
+# Ontology Pitfalls Analysis (D2KLab)
+# ===========================================
+
+
+@router.get("/pitfalls/taxonomy")
+async def get_pitfalls_taxonomy():
+    """Return the 19-pitfall taxonomy (P1.1–P4.7). No session required."""
+    from back.core.external.pitfalls import PitfallsService
+
+    svc = PitfallsService()
+    taxonomy = svc.get_taxonomy()
+    if not taxonomy:
+        return {
+            "success": False,
+            "error": "Pitfall detection dependencies not installed. Run: pip install .[pitfalls]",
+            "taxonomy": [],
+            "available_patterns": [],
+        }
+    return {
+        "success": True,
+        "taxonomy": taxonomy,
+        "available_patterns": svc.get_available_patterns(),
+    }
+
+
+@router.post("/pitfalls/analyze")
+async def analyze_pitfalls(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+):
+    """Start async pitfall analysis against the current ontology.
+
+    Accepts ``{patterns: ["P1.1", "P2.3"]}`` or ``{patterns: ["all"]}``.
+    Returns ``{task_id}`` immediately; poll ``GET /tasks/{task_id}`` for progress
+    and ``GET /ontology/pitfalls/results/{task_id}`` for the full results.
+    """
+    import threading
+
+    from back.core.external.pitfalls import PitfallsService
+    from back.core.w3c.owl import OntologyGenerator
+
+    data = await request.json()
+    patterns = data.get("patterns", ["all"])
+    model_name = data.get("model_name", "all-MiniLM-L6-v2")
+
+    domain = get_domain(session_mgr)
+
+    pattern_label = ", ".join(patterns) if len(patterns) <= 5 else f"{len(patterns)} patterns"
+    tm = get_task_manager()
+    task = tm.create_task(
+        name=f"Pitfalls Analysis ({pattern_label})",
+        task_type="pitfalls_analysis",
+        steps=[
+            {"name": "export", "description": "Exporting ontology to OWL/TTL"},
+            {"name": "analyze", "description": "Running pitfall checks"},
+            {"name": "finalize", "description": "Finalizing results"},
+        ],
+    )
+
+    def run_analysis():
+        try:
+            tm.start_task(task.id, "Exporting ontology…")
+
+            gen = OntologyGenerator(
+                base_uri=domain.ontology.get("base_uri", "http://ontobricks.io/"),
+                ontology_name=domain.ontology.get("name", "Ontology"),
+                classes=domain.get_classes(),
+                properties=domain.get_properties(),
+            )
+            gen.generate()
+            graph = gen.graph
+
+            tm.advance_step(task.id, "Running pitfall checks…")
+
+            svc = PitfallsService()
+            result = svc.run_analysis(graph, patterns=patterns, model_name=model_name)
+
+            tm.advance_step(task.id, "Finalizing…")
+
+            total_issues = sum(
+                r.get("count", 0)
+                for r in result["results"].values()
+                if isinstance(r.get("count"), int)
+            )
+            tm.complete_task(
+                task.id,
+                result=result,
+                message=f"Analysis complete — {total_issues} issues found across {len(result['selected_pitfalls'])} pitfalls",
+            )
+
+        except ImportError as exc:
+            logger.error("Pitfalls: optional deps missing: %s", exc)
+            tm.fail_task(task.id, f"Optional dependencies not installed: {exc}")
+        except Exception as exc:
+            logger.exception("Pitfalls analysis failed: %s", exc)
+            tm.fail_task(task.id, f"Analysis failed: {exc}")
+
+    thread = threading.Thread(target=run_analysis, daemon=True)
+    thread.start()
+
+    return {"success": True, "task_id": task.id, "message": "Pitfalls analysis started"}
+
+
+@router.get("/pitfalls/results/{task_id}")
+async def get_pitfalls_results(task_id: str):
+    """Return status and results for a pitfalls analysis task.
+
+    While running: ``{status: "running", progress: N}``.
+    When done: ``{status: "completed", result: {...}}``.
+    On failure: ``{status: "failed", error: "..."}``.
+    """
+    tm = get_task_manager()
+    task = tm.get_task(task_id)
+    if not task:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail=f"Task {task_id!r} not found")
+
+    return {
+        "task_id": task_id,
+        "status": task.status.value,
+        "progress": task.progress,
+        "message": task.message,
+        "error": task.error,
+        "result": task.result,
+    }

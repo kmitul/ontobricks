@@ -80,11 +80,45 @@ env:
   # Without that resource binding the env vars stay unset and the
   # admin UI keeps the Lakebase backend disabled — the app continues
   # to run normally on the Unity Catalog Volume backend.
+  #
+  # LAKEBASE_SCHEMA must always be set explicitly (it is NOT injected
+  # by the Apps platform).  LAKEBASE_PROJECT, LAKEBASE_DATABASE and LAKEBASE_BRANCH are
+  # only resolved at runtime when PGHOST/PGDATABASE are absent (local
+  # dev without a bound database resource); in production the platform-
+  # injected PG* vars take precedence and these are informational only.
   - name: LAKEBASE_SCHEMA
     value: "${APP_LAKEBASE_SCHEMA}"
+  - name: LAKEBASE_PROJECT
+    value: "${APP_LAKEBASE_PROJECT}"
+  - name: LAKEBASE_DATABASE
+    value: "${APP_LAKEBASE_DATABASE}"
+  - name: LAKEBASE_BRANCH
+    value: "${APP_LAKEBASE_BRANCH}"
+  # Lakebase managed-synced: UC catalog for the Lakeflow synced-table
+  # registration.  Defaults (when empty) to the registry Volume catalog,
+  # which is the personal catalog of the deploying user and may not be
+  # accessible by the app service principal.  Set this to a shared/workspace
+  # catalog (e.g. "main") when the SP does not have CREATE SCHEMA on the
+  # user's personal catalog.
+  - name: ONTOBRICKS_SYNC_UC_CATALOG  # optional
+    value: "${APP_SYNC_UC_CATALOG}"
   # MLflow — ensure traces are persisted to the workspace tracking server.
   - name: MLFLOW_TRACKING_URI
     value: "${APP_MLFLOW_TRACKING_URI}"
+
+# User authorization scopes — declares which Databricks APIs the app is
+# allowed to access on behalf of the logged-in user via the
+# x-forwarded-access-token header injected by the Apps platform.
+# The app uses the user token exclusively for permission checks
+# (SCIM user-group lookup + App ACL read) — all data queries go through
+# the app's service principal (M2M OAuth). These two scopes are the
+# minimum required; they are also the platform defaults when no scopes
+# are declared, but explicit declaration is required for Public Preview.
+authorization:
+  user:
+    scopes:
+      - iam.current-user:read
+      - iam.access-control:read
 
 # Resources that this app uses.
 # Configure these resources in the Databricks Apps UI after deployment.

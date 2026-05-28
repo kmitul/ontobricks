@@ -4,10 +4,15 @@ Reusable request-handling utilities that are used by multiple
 frontend route modules (ontology, mapping, domain, etc.).
 """
 
-import logging
+from __future__ import annotations
+
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 from fastapi import Request
+
+if TYPE_CHECKING:
+    import logging
 
 from shared.config.settings import Settings
 from back.core.errors import InfrastructureError, OntoBricksError, ValidationError

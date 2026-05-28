@@ -15,6 +15,7 @@ from shared.config.constants import (
     AUTO_ASSIGN_CHUNK_COOLDOWN,
     AUTO_ASSIGN_CHUNK_SIZE,
     DEFAULT_BASE_URI,
+    HTTP_USER_AGENT,
 )
 from back.core.databricks import VolumeFileService
 from back.core.logging import get_logger
@@ -737,7 +738,7 @@ class Mapping:
         host_url = host.rstrip("/")
         if not host_url.startswith("http"):
             host_url = f"https://{host_url}"
-        headers = {"Authorization": f"Bearer {token}"}
+        headers = {"Authorization": f"Bearer {token}", "User-Agent": HTTP_USER_AGENT}
         try:
             resp = requests.get(
                 f"{host_url}/api/2.0/fs/directories{base_path}",
@@ -1348,13 +1349,50 @@ class Mapping:
             },
         }
 
+    @staticmethod
+    def _check_query_has_data(sql_query: str, client: Any) -> Dict[str, str]:
+        """Execute *sql_query* with LIMIT 1 and report whether it returns rows.
+
+        Returns a check dict with keys ``check``, ``status``, ``detail``
+        suitable for inclusion in an entity or relationship ``checks`` list.
+        Errors thrown by the warehouse (e.g. syntax errors, missing tables)
+        are surfaced as ``error`` status so the user sees an actionable
+        message rather than a silent failure.
+        """
+        try:
+            probe = re.sub(
+                r"\s+LIMIT\s+\d+\s*$",
+                "",
+                sql_query.strip().rstrip(";"),
+                flags=re.IGNORECASE,
+            ).strip()
+            rows = client.execute_query(f"{probe} LIMIT 1")
+            if rows:
+                return {
+                    "check": "has_data",
+                    "status": "ok",
+                    "detail": "Query returns data",
+                }
+            return {
+                "check": "has_data",
+                "status": "warning",
+                "detail": "Query returns no rows — source table may be empty",
+            }
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "check": "has_data",
+                "status": "error",
+                "detail": f"Query execution failed: {exc}",
+            }
+
     def run_diagnostics(self, *, client: Any = None) -> Dict[str, Any]:
         """Run comprehensive validation on all entity and relationship mappings.
 
         Checks column existence in source SQL, entity-relationship
         cross-references, ontology consistency, and — when *client* is
         provided — verifies that the app's SQL principal has SELECT on
-        every distinct source table referenced by the mapping.
+        every distinct source table referenced by the mapping, and that
+        each SQL query actually returns at least one row.
 
         The body is composed of small, focused helpers (``_diagnose_entity``,
         ``_diagnose_relationship``, ``_build_entity_lookup``,
@@ -1370,16 +1408,32 @@ class Mapping:
         relationships = assignment.get("relationships", [])
         entity_lookup = self._build_entity_lookup(entities)
 
+        active_entities = [e for e in entities if not e.get("excluded")]
+        active_rels = [r for r in relationships if not r.get("excluded")]
+
         entity_results = [
-            self._diagnose_entity(ent, ont_index)
-            for ent in entities
-            if not ent.get("excluded")
+            self._diagnose_entity(ent, ont_index) for ent in active_entities
         ]
         rel_results = [
             self._diagnose_relationship(rel, entity_lookup, ont_index)
-            for rel in relationships
-            if not rel.get("excluded")
+            for rel in active_rels
         ]
+
+        # When a warehouse client is available, probe each SQL query for data.
+        if client is not None:
+            for ent, result in zip(active_entities, entity_results):
+                sql = (ent.get("sql_query") or "").strip()
+                if sql:
+                    data_check = self._check_query_has_data(sql, client)
+                    result["checks"].append(data_check)
+                    result["status"] = self._aggregate_status(result["checks"])
+
+            for rel, result in zip(active_rels, rel_results):
+                sql = (rel.get("sql_query") or "").strip()
+                if sql:
+                    data_check = self._check_query_has_data(sql, client)
+                    result["checks"].append(data_check)
+                    result["status"] = self._aggregate_status(result["checks"])
 
         permission_section = self._run_permission_checks(client)
         perm_checks = permission_section["checks"]

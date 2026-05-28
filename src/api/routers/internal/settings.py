@@ -4,21 +4,26 @@ Internal API -- Settings / configuration JSON endpoints.
 Moved from app/frontend/settings/routes.py during the front/back split.
 """
 
+import json
+
 from fastapi import APIRouter, Request, Depends
 
 from shared.config.settings import get_settings, Settings
 from shared.config.constants import DEFAULT_BASE_URI
 from back.core.errors import ValidationError
 from back.objects.session import SessionManager, get_session_manager
-from back.core.helpers import resolve_default_base_uri, resolve_default_emoji
+from back.core.helpers import resolve_default_base_uri, resolve_default_emoji, run_blocking
 from back.objects.session import get_domain
 from back.objects.registry import ROLE_ADMIN, require
 
 from api.routers.internal._permissions import filter_visible_domains
+from api.routers.internal._helpers import map_route_errors
+from back.core.logging import get_logger
 
-from back.objects.domain.SettingsService import SettingsService as config_service
+from back.objects.domain import SettingsService as config_service
 
 router = APIRouter(prefix="/settings", tags=["Settings"])
+logger = get_logger(__name__)
 
 
 def _settings_request_identity(request: Request) -> tuple[str, str, str, str, str]:
@@ -194,41 +199,7 @@ async def get_registry(
     settings: Settings = Depends(get_settings),
 ):
     """Return current domain-registry configuration and initialization status."""
-    return config_service.build_registry_get_payload(session_mgr, settings)
-
-
-@router.post("/registry")
-async def save_registry(
-    request: Request,
-    session_mgr: SessionManager = Depends(get_session_manager),
-    settings: Settings = Depends(get_settings),
-):
-    """Persist registry catalog / schema / volume in settings.registry.
-
-    When the registry is "locked" (i.e. the Volume is supplied by a
-    Databricks App resource), the bound triplet
-    ``catalog/schema/volume`` is read-only — those fields come from
-    the platform and editing them in-app would silently desync from
-    the actual binding. The **backend choice** (Volume ↔ Lakebase)
-    and the Lakebase-side knobs (``lakebase_schema``,
-    ``lakebase_database``) remain editable, since toggling the
-    backend only changes which storage layer the registry writes
-    JSON into; it does not move the bound resource around.
-    """
-    data = await request.json()
-
-    if config_service.is_registry_locked(settings):
-        locked_keys = {"catalog", "schema", "volume"}
-        attempted = locked_keys.intersection(k for k, v in data.items() if v)
-        if attempted:
-            raise ValidationError(
-                "Registry catalog/schema/volume are configured via Databricks "
-                "App resources and cannot be changed here. You can still switch "
-                "between Volume and Lakebase backends.",
-            )
-        data = {k: v for k, v in data.items() if k not in locked_keys}
-
-    return config_service.apply_registry_save(data, session_mgr)
+    return await run_blocking(config_service.build_registry_get_payload, session_mgr, settings)
 
 
 @router.post("/registry/initialize")
@@ -238,42 +209,6 @@ async def initialize_registry(
 ):
     """Create the registry Volume (and root marker) if they do not exist."""
     return config_service.initialize_registry_result(session_mgr, settings)
-
-
-@router.get(
-    "/registry/lakebase-databases",
-    dependencies=[Depends(require(ROLE_ADMIN))],
-)
-async def list_lakebase_databases(
-    session_mgr: SessionManager = Depends(get_session_manager),
-    settings: Settings = Depends(get_settings),
-):
-    """List Postgres databases on the bound Lakebase instance (admin only).
-
-    Lets the Registry Location modal populate a "Lakebase Database"
-    picker so the admin can switch the registry to a different
-    database on the same instance without redeploying. ``connectable``
-    flags databases the service principal does not have ``CONNECT``
-    on, so the UI can disable them. Returns ``success=False`` (with a
-    ``message``) when Lakebase is not bound or psycopg is missing.
-    """
-    return config_service.list_lakebase_databases_result(session_mgr, settings)
-
-
-@router.post(
-    "/registry/migrate-to-lakebase",
-    dependencies=[Depends(require(ROLE_ADMIN))],
-)
-async def migrate_registry_to_lakebase(
-    session_mgr: SessionManager = Depends(get_session_manager),
-    settings: Settings = Depends(get_settings),
-):
-    """Copy Volume registry data into Lakebase tables (admin only).
-
-    Binaries (``documents/``, ``*.lbug.tar.gz``) stay on the Unity
-    Catalog Volume. Idempotent at the Lakebase side.
-    """
-    return config_service.migrate_to_lakebase_result(session_mgr, settings)
 
 
 @router.get(
@@ -287,11 +222,13 @@ async def get_lakebase_stats(
     """Return per-table row counts for the Lakebase registry schema.
 
     Powers the read-only inventory grid in the Registry Location
-    panel. Returns ``success=False`` with a human-readable
-    ``message`` when the Lakebase resource is not bound or the
-    backend is not installed.
+    panel. Raises :class:`~back.core.errors.ValidationError` or
+    :class:`~back.core.errors.InfrastructureError` when the Lakebase
+    resource is not bound, the backend is not installed, or the store
+    cannot be queried.
     """
-    return config_service.lakebase_stats_result(session_mgr, settings)
+    with map_route_errors("registry lakebase stats", logger):
+        return config_service.lakebase_stats_result(session_mgr, settings)
 
 
 @router.get("/registry/domains")
@@ -369,6 +306,130 @@ async def set_registry_version_active(
 
 
 # ===========================================
+# Registry OBX export / import
+# ===========================================
+
+
+@router.post("/registry/export")
+async def export_registry_obx(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Export one or several registry domains as a `.obx` (JSON) file.
+
+    Body shape::
+
+        {
+            "domains": [
+                {"name": "claims", "mode": "all" | "active" | "latest" | "selected",
+                 "versions": ["1", "2"]}
+            ]
+        }
+
+    The response is a streamed JSON body with a ``Content-Disposition``
+    attachment header so the browser saves it as ``ontobricks-YYYY-MM-DD.obx``.
+    Domains the caller cannot see (per :func:`filter_visible_domains`) are
+    silently dropped before the export runs.
+    """
+    from fastapi.responses import StreamingResponse
+    import io
+
+    spec = await request.json()
+    requested = spec.get("domains") or []
+    if requested:
+        visible = filter_visible_domains(
+            request, session_mgr, settings, requested
+        )
+        visible_names = {
+            (e.get("name") if isinstance(e, dict) else str(e)) for e in visible
+        }
+        spec = {
+            **spec,
+            "domains": [d for d in requested if d.get("name") in visible_names],
+        }
+
+    email, _, _, _, _ = _settings_request_identity(request)
+    result = config_service.export_registry_obx_result(
+        spec, session_mgr, settings, exported_by=email
+    )
+
+    envelope = result["envelope"]
+    body = json.dumps(envelope, indent=2).encode("utf-8")
+    headers = {
+        "Content-Disposition": f'attachment; filename="{result["filename"]}"',
+        "X-OBX-Format-Version": str(envelope.get("format_version", "")),
+        "X-OBX-Ontobricks-Version": envelope.get("ontobricks_version", ""),
+        "X-OBX-Domain-Count": str(result.get("domain_count", 0)),
+    }
+    return StreamingResponse(
+        io.BytesIO(body), media_type="application/json", headers=headers
+    )
+
+
+@router.post("/registry/import/preview")
+async def preview_registry_obx_import(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Inspect an uploaded `.obx` file and report per-domain conflicts.
+
+    Accepts multipart/form-data with a ``file`` field. Returns the envelope
+    metadata (``format_version``, ``ontobricks_version``, …) plus a list of
+    incoming domains annotated with ``exists``, ``conflicting_versions``,
+    and a ``suggested_new_name`` for the rename action.
+    """
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None:
+        raise ValidationError("No file provided")
+    file_bytes = await upload.read()
+    return config_service.preview_obx_import_result(
+        file_bytes, session_mgr, settings
+    )
+
+
+@router.post(
+    "/registry/import",
+    dependencies=[Depends(require(ROLE_ADMIN))],
+)
+async def import_registry_obx(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Import a `.obx` file into the registry (admin only).
+
+    Multipart fields:
+
+    * ``file`` -- the uploaded `.obx` JSON body.
+    * ``decisions`` -- JSON string ``[{"name": <folder>,
+      "action": "skip"|"overwrite"|"rename", "new_name": <str>}]``.
+      Missing entries default to ``"skip"``.
+    """
+    form = await request.form()
+    upload = form.get("file")
+    if upload is None:
+        raise ValidationError("No file provided")
+    file_bytes = await upload.read()
+
+    decisions_raw = form.get("decisions") or "[]"
+    try:
+        decisions = json.loads(decisions_raw)
+    except json.JSONDecodeError as exc:
+        raise ValidationError(
+            f"Invalid 'decisions' field: not valid JSON ({exc})"
+        ) from exc
+    if not isinstance(decisions, list):
+        raise ValidationError("'decisions' must be a JSON array")
+
+    return config_service.import_registry_obx_result(
+        file_bytes, decisions, session_mgr, settings
+    )
+
+
+# ===========================================
 # Emoji & Base URI Settings
 # ===========================================
 
@@ -426,31 +487,6 @@ async def save_base_uri(
         base_uri, email, user_token, session_mgr, settings
     )
 
-
-@router.get("/get-cloud-fetch")
-async def get_cloud_fetch(
-    session_mgr: SessionManager = Depends(get_session_manager),
-    settings: Settings = Depends(get_settings),
-):
-    """Get global CloudFetch toggle (instance-global)."""
-    return config_service.get_cloud_fetch_result(session_mgr, settings)
-
-
-@router.post("/save-cloud-fetch")
-async def save_cloud_fetch(
-    request: Request,
-    session_mgr: SessionManager = Depends(get_session_manager),
-    settings: Settings = Depends(get_settings),
-):
-    """Save global CloudFetch toggle (admin only, stored globally)."""
-    data = await request.json()
-    enabled = bool(data.get("use_cloud_fetch", True))
-    email, _display_name, user_token, _user_role, _user_domain_role = (
-        _settings_request_identity(request)
-    )
-    return config_service.save_cloud_fetch_result(
-        enabled, email, user_token, session_mgr, settings
-    )
 
 
 # ===========================================
@@ -742,7 +778,7 @@ async def set_graph_engine(
 ):
     """Set the graph DB engine (admin only, stored globally)."""
     data = await request.json()
-    engine = data.get("graph_engine", "ladybug")
+    engine = data.get("graph_engine", "lakebase")
     email, _display_name, user_token, _user_role, _user_domain_role = (
         _settings_request_identity(request)
     )
@@ -760,6 +796,125 @@ async def get_graph_engine_config(
     return config_service.get_graph_engine_config_result(session_mgr, settings)
 
 
+@router.get("/graph-engine/lakebase-health")
+async def get_graph_engine_lakebase_health(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Probe Lakebase connectivity and graph schema (saved global config)."""
+    with map_route_errors("graph engine Lakebase health", logger):
+        return config_service.graph_engine_lakebase_health_result(session_mgr, settings)
+
+
+@router.get("/graph-engine/uc-catalogs")
+async def get_graph_engine_uc_catalogs(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Unity Catalog names for the Lakebase managed-sync UC catalog picker (read-only)."""
+    with map_route_errors("graph engine UC catalogs", logger):
+        return config_service.graph_engine_uc_catalogs_result(session_mgr, settings)
+
+
+@router.get("/graph-engine/uc-schemas")
+async def get_graph_engine_uc_schemas(
+    catalog: str = "",
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Unity Catalog schemas within a catalog for the managed-sync UC schema picker."""
+    with map_route_errors("graph engine UC schemas", logger):
+        return config_service.graph_engine_uc_schemas_result(catalog, session_mgr, settings)
+
+
+@router.get("/graph-engine/lakebase-projects")
+async def get_graph_engine_lakebase_projects(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """List Lakebase Autoscaling projects visible in the workspace."""
+    with map_route_errors("graph engine Lakebase projects", logger):
+        return config_service.graph_engine_lakebase_projects_result(session_mgr, settings)
+
+
+@router.get("/graph-engine/lakebase-branches")
+async def get_graph_engine_lakebase_branches(
+    project: str = "",
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """List branches for a Lakebase Autoscaling project."""
+    with map_route_errors("graph engine Lakebase branches", logger):
+        return config_service.graph_engine_lakebase_branches_result(
+            project, session_mgr, settings
+        )
+
+
+@router.get("/graph-engine/lakebase-pg-databases")
+async def get_graph_engine_lakebase_pg_databases(
+    branch: str = "",
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """List Postgres databases on a Lakebase branch."""
+    with map_route_errors("graph engine Lakebase PG databases", logger):
+        return config_service.graph_engine_lakebase_pg_databases_result(
+            branch, session_mgr, settings
+        )
+
+
+@router.get("/graph-engine/lakebase-pg-schemas")
+async def get_graph_engine_lakebase_pg_schemas(
+    database: str = "",
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """List Postgres schemas in a Lakebase database."""
+    with map_route_errors("graph engine Lakebase PG schemas", logger):
+        return config_service.graph_engine_lakebase_pg_schemas_result(
+            database, session_mgr, settings
+        )
+
+
+@router.get("/graph-engine/lakebase-objects")
+async def get_graph_engine_lakebase_objects(
+    database: str = "",
+    branch_path: str = "",
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """List all user-owned schemas, tables and views in a Lakebase database (admin only).
+
+    ``branch_path`` (full resource path, e.g. ``projects/…/branches/…``) is
+    the form's current branch selection; when supplied the connection targets
+    that branch directly rather than the saved/bound config.
+    """
+    with map_route_errors("graph engine Lakebase objects", logger):
+        return config_service.graph_engine_lakebase_objects_result(
+            database, branch_path, session_mgr, settings
+        )
+
+
+@router.post("/graph-engine/lakebase-drop-object")
+async def post_graph_engine_lakebase_drop_object(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Drop a Postgres schema, table or view in the connected Lakebase database (admin only)."""
+    data = await request.json()
+    with map_route_errors("graph engine Lakebase drop object", logger):
+        return config_service.graph_engine_lakebase_drop_object_result(
+            kind=data.get("kind", ""),
+            schema=data.get("schema", ""),
+            name=data.get("name", ""),
+            database=data.get("database", ""),
+            branch_path=data.get("branch_path", ""),
+            session_mgr=session_mgr,
+            settings=settings,
+        )
+
+
 @router.post("/graph-engine-config")
 async def set_graph_engine_config(
     request: Request,
@@ -773,23 +928,6 @@ async def set_graph_engine_config(
     return config_service.set_graph_engine_config_result(
         config, email, user_token, session_mgr, settings
     )
-
-
-# ===========================================
-# LadybugDB Local Files
-# ===========================================
-
-
-@router.get("/ladybugdb/files")
-async def list_ladybugdb_files():
-    """List files and directories stored in the LadybugDB local directory."""
-    return config_service.list_ladybugdb_files()
-
-
-@router.delete("/ladybugdb/files/{filename:path}")
-async def delete_ladybugdb_file(filename: str):
-    """Delete a file or directory from the LadybugDB local directory."""
-    return config_service.delete_ladybugdb_file(filename)
 
 
 # ===========================================

@@ -8,6 +8,7 @@
 - **OWL Constraints**: Define cardinality, value restrictions, and property characteristics (functional, transitive, symmetric).
 - **SHACL Data Quality Shapes**: Define data quality rules using W3C SHACL — six categories (completeness, cardinality, uniqueness, consistency, conformance, structural), Turtle round-trip (generate/import), PySHACL in-memory validation, and SQL compilation for triple store execution.
 - **OWL Axioms**: Express class relationships, property chains, and complex expressions (equivalent, disjoint, union, intersection).
+- **Ontology Pitfalls Detector**: Detect 19 structural, logical, and semantic pitfalls (P1.1–P4.7) in four categories via the **Ontology → Pitfalls** sidebar panel. Fast/graph-only checks run immediately; ML-heavy checks (semantic similarity, NLP naming) require the optional `[pitfalls]` extra (`uv sync --extra pitfalls`). Each check shows a description tooltip and ⚡/💻 speed indicator. Results group by category with an accordion display.
 - **OWL Generation**: Automatic generation of W3C-compliant OWL/Turtle from visual design.
 - **LLM-Powered Auto-Map Icons**: Automatically assign emoji icons to entities based on their names using the project's configured LLM serving endpoint (Ontology Designer toolbar).
 - **Dashboard Mapping**: Assign Databricks dashboards to entity types with parameter mapping for embedded display in the Knowledge Graph.
@@ -27,7 +28,7 @@
 - **R2RML Generation**: Automatic generation of W3C-compliant R2RML mappings from visual configuration.
 
 ## Digital Twin (Sync & Explore)
-- **Two Backends**: Choose between **Delta Lake** (SQL Warehouse) and **LadybugDB** (embedded Cypher-based graph database) as the triple store backend per project.
+- **Two Layers**: Every build materializes a Delta view (Unity Catalog, governance) and a Graph DB engine (Lakebase Postgres today; pluggable behind `GraphDBFactory`).
 - **Readiness Status**: Validates ontology, entity mappings, relationship mappings, and attribute mapping completeness before enabling sync and explore actions.
 - **Triple Store Sync**: Synchronize generated triples to a Unity Catalog table — SQL is generated automatically from R2RML mappings (no manual query writing required).
 - **Last Updated Timestamp**: Triple store status displays the last modification date and time retrieved from Unity Catalog Delta table metadata (`DESCRIBE DETAIL`).
@@ -45,10 +46,11 @@
 - **Version Control**: Create, list, and load multiple versions of a project with automatic versioning. Which version is **Active** (exposed via API / MCP) is managed from **Registry → Browse**; the Domain → Versions page shows that status as a read-only badge.
 - **Domain Cockpit (Validation)**: Readiness tiles including **Active Version** — the version currently exposed via API/MCP (from the registry), with a *(not loaded)* hint when it differs from the version open in the session. Distinct from “latest on disk” vs read-only UI gating (still driven by whether the loaded version is the latest).
 - **New-domain loading**: After **New Domain** from the navbar, a full-page spinner runs until Domain Information has finished its initial fetches (LLM endpoints, version status, domain info).
-- **Domain Information — Digital Twin fields**: Triple-store FQN, snapshot table name, and local Ladybug path refresh when the domain name is **committed** (blur / `change`) or the version changes, so previews match naming rules before save.
+- **Domain Information — Digital Twin fields**: Triple-store FQN and Graph DB table name (e.g. Lakebase `g_<domain>_v<version>`) refresh when the domain name is **committed** (blur / `change`) or the version changes, so previews match naming rules before save.
 - **Duplicate domain names**: Save to registry is blocked when the sanitized name already exists (`/domain/check-name` + guard on **Save to UC**); inline validation clears when the name is cleared or the check errors.
 - **Navbar domain identity**: Top bar name/version invalidate cached `/navbar/state` (and related caches) after domain mutations so reloads and navigations do not show stale labels for up to 15 seconds.
-- **Import/Export**: Import OWL and RDFS ontologies, import industry-standard ontologies (FIBO, CDISC, IOF), import/export R2RML mappings, and export OWL files.
+- **Import/Export**: Import OWL and RDFS ontologies, import industry-standard ontologies (FIBO, CDISC, IOF, HL7 FHIR R4/R4B/R5), import/export R2RML mappings, and export OWL files.
+- **Registry OBX Export/Import**: Export one or more registry domains to a portable `.obx` file directly from **Registry → Browse** with per-domain version-mode selection (Latest / Active / All / Choose). Import with per-domain conflict resolution (Skip / Overwrite / Rename). An integer `format_version` field ensures backward compatibility as the format evolves.
 - **Project Save/Load**: Save and load projects as JSON for backup or sharing.
 
 ## Databricks Integration

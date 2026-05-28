@@ -3,7 +3,6 @@
 from back.objects.registry.RegistryService import (
     RegistryCfg,
     RegistryService,
-    resolve_default_backend,
 )
 from back.objects.registry.PermissionService import (
     PermissionService,
@@ -26,11 +25,12 @@ from back.objects.registry.registry_cache import (
     get_registry_cache_ttl,
     set_registry_cache_ttl,
 )
+from back.objects.registry import obx_format
+from back.objects.registry.obx_format import CURRENT_OBX_FORMAT_VERSION
 
 __all__ = [
     "RegistryCfg",
     "RegistryService",
-    "resolve_default_backend",
     "PermissionService",
     "permission_service",
     "ROLE_ADMIN",
@@ -50,6 +50,8 @@ __all__ = [
     "get_registry_cache_snapshot",
     "get_registry_cache_ttl",
     "set_registry_cache_ttl",
+    "obx_format",
+    "CURRENT_OBX_FORMAT_VERSION",
 ]
 
 

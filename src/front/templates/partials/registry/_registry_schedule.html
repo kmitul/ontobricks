@@ -101,21 +101,13 @@
                     <div class="input-group input-group-sm">
                         <span class="input-group-text">Every</span>
                         <input type="number" class="form-control" id="scheduleIntervalValue" min="1" max="999" value="1">
-                        <select class="form-select" id="scheduleIntervalUnit" style="max-width: 110px;">
+                        <select class="form-select registry-schedule-interval-select" id="scheduleIntervalUnit">
                             <option value="minutes">minute(s)</option>
                             <option value="hours" selected>hour(s)</option>
                             <option value="days">day(s)</option>
                         </select>
                     </div>
                     <small class="text-muted">Minimum 2 minutes</small>
-                </div>
-
-                <div class="mb-3 schedule-build-only">
-                    <label class="form-label fw-semibold small mb-1">Build Mode</label>
-                    <select class="form-select form-select-sm" id="scheduleBuildMode">
-                        <option value="full">Full Refresh — drop and rebuild</option>
-                        <option value="incremental">Incremental — apply diff only</option>
-                    </select>
                 </div>
 
                 <div class="form-check form-switch">

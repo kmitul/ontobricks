@@ -49,6 +49,8 @@
     function clearBtn()    { return el('chatClearBtn'); }
     function clearBtnTop() { return el('chatClearBtnTop'); }
     function limitEl()     { return el('chatHistoryLimit'); }
+    function depthEl()     { return el('chatDepth'); }
+    function getDepth()    { return parseInt(depthEl()?.value || '1', 10); }
 
     // =====================================================
     // Markdown rendering
@@ -322,6 +324,7 @@
                 body: JSON.stringify({
                     message: text,
                     history: priorHistory,
+                    depth: getDepth(),
                 }),
                 credentials: 'same-origin',
             });

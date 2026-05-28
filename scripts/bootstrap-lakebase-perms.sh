@@ -4,47 +4,73 @@ set -euo pipefail
 # ── OntoBricks — Lakebase Schema Permission Bootstrap ───────────────
 # A Databricks Apps service principal is created without any privileges
 # on Lakebase Postgres objects, even when the app's ``postgres:`` resource
-# binding is wired correctly. The first time the app tries to read the
-# ``ontobricks_registry`` schema (or whatever ``--schema`` you pass), it
-# silently sees an empty information_schema and the admin Registry
-# Location panel reports "not initialized — 0 rows everywhere", which is
-# the canonical false negative for this missing-USAGE state.
+# binding is wired correctly. The first time the app tries to read a schema
+# it silently sees an empty information_schema — the canonical false negative
+# for a missing USAGE grant.
 #
 # This script connects to the Lakebase instance with your *human*
 # credentials (as the schema owner), looks up each app's service
 # principal client id, and grants it the privileges OntoBricks needs:
 #
-#   - USAGE + CREATE on the schema
+#   - CAN_USE on the Lakebase project (control-plane, both API endpoints)
+#   - USAGE + CREATE on the Postgres schema (data-plane)
 #   - SELECT/INSERT/UPDATE/DELETE on every existing table
 #   - USAGE/SELECT/UPDATE on every existing sequence (bigserial PKs)
 #   - The same set as ALTER DEFAULT PRIVILEGES so future tables inherit
+#   - (managed_synced only) ALL PRIVILEGES on the UC catalog so the SP
+#     can read back synced tables it created or that were pre-created by
+#     another principal.  Pass -c/--catalog to enable this grant.
 #
 # Idempotent — re-running is a no-op for objects that already carry the
 # privileges.
 #
-# Defaults match the **dev sandbox** described in ``databricks.yml``:
-# Lakebase Autoscaling project ``ontobricks-app``, Postgres database
-# ``ontobricks_registry`` (the dedicated ``datname`` bound by the Apps
-# ``postgres`` resource when the bundle targets that DB — see
-# ``lakebase_database_resource_segment`` in ``databricks.yml``), schema
-# ``ontobricks_registry``, and grantees ``ontobricks-030`` +
-# ``mcp-ontobricks``. If your instance still uses the shared default DB
-# ``databricks_postgres`` with a registry **schema** named
-# ``ontobricks_registry`` inside it, pass ``-d databricks_postgres``.
-# Pass ``-i`` / ``-b`` / ``-d`` / ``-s`` / ``-a`` to retarget any of those when
-# you migrate to a different project, database, schema, or app.
-# Defaults can also be set via env (``INSTANCE`` / ``BRANCH`` /
-# ``DATABASE`` / ``SCHEMA``) — ``scripts/deploy.sh`` does this from
-# ``scripts/deploy.config.sh``.
+# ── OntoBricks uses up to THREE Postgres schemas that each need this grant ──
 #
-# Usage:
-#   scripts/bootstrap-lakebase-perms.sh                # default: dev sandbox
-#                                                       (ontobricks-app → ontobricks_registry DB → ontobricks_registry schema → apps)
-#   scripts/bootstrap-lakebase-perms.sh -a ontobricks  # production app on the same instance
-#   scripts/bootstrap-lakebase-perms.sh -i ontobricks-app -b production -d databricks_postgres -s ontobricks_registry \
-#                                       -a ontobricks-030   # shared default Postgres database
-#   scripts/bootstrap-lakebase-perms.sh -i ontobricks-app -b production -d ontobricks_registry -s ontobricks_registry \
-#                                       -a ontobricks -a ontobricks-dev  # legacy multi-grantee layout
+#   1. Registry schema  (e.g. ontobricks_registry)
+#      Instance : deploy.config.sh → LAKEBASE_BOOTSTRAP_INSTANCE
+#      Database : deploy.config.sh → LAKEBASE_BOOTSTRAP_DATABASE
+#      Schema   : deploy.config.sh → LAKEBASE_BOOTSTRAP_SCHEMA
+#      → Run once after "Settings > Registry > Initialize"
+#
+#   2. Graph schema  (e.g. ontobricks_graph)
+#      Instance : deploy.config.sh → LAKEBASE_GRAPH_PROJECT  (defaults to registry instance)
+#      Database : deploy.config.sh → LAKEBASE_GRAPH_DATABASE (defaults to registry database)
+#      Schema   : deploy.config.sh → LAKEBASE_GRAPH_SCHEMA
+#      → Run once after the first "Build" in Digital Twin
+#      → If the Graph DB is on a DIFFERENT Lakebase instance, set
+#        LAKEBASE_GRAPH_PROJECT / LAKEBASE_GRAPH_BRANCH / LAKEBASE_GRAPH_DATABASE
+#        in deploy.config.sh and pass them here via -i / -b / -d.
+#
+#   3. Sync schema  (e.g. ontobricks — mirrors the UC registry schema segment)
+#      Same instance/database as the Graph DB (Lakebase creates it there).
+#      Schema   : deploy.config.sh → LAKEBASE_SYNC_SCHEMA
+#      → Only needed when sync_mode = managed_synced.
+#      → Run after the first Lakeflow snapshot has completed (Lakebase
+#        creates the schema automatically; this script grants USAGE + DML).
+#
+#   ``scripts/deploy.sh`` calls this script three times automatically when
+#   LAKEBASE_GRAPH_SCHEMA and LAKEBASE_SYNC_SCHEMA are set. You can also
+#   run it manually:
+#
+#     # Registry
+#     scripts/bootstrap-lakebase-perms.sh \
+#       -i ontobricks-app -b production -d ontobricks_registry \
+#       -s ontobricks_registry -a ontobricks-030 -a mcp-ontobricks
+#
+#     # Graph DB on SAME instance
+#     scripts/bootstrap-lakebase-perms.sh \
+#       -i ontobricks-app -b production -d ontobricks_registry \
+#       -s ontobricks_graph -a ontobricks-030 -a mcp-ontobricks
+#
+#     # Graph DB on DIFFERENT instance
+#     scripts/bootstrap-lakebase-perms.sh \
+#       -i ontobricks-graph-instance -b production -d ontobricks_graph_db \
+#       -s ontobricks_graph -a ontobricks-030 -a mcp-ontobricks
+#
+#     # Sync schema (managed_synced mode only, same instance as Graph DB)
+#     scripts/bootstrap-lakebase-perms.sh \
+#       -i ontobricks-app -b production -d ontobricks_registry \
+#       -s ontobricks -a ontobricks-030 -a mcp-ontobricks
 #
 # Prerequisites:
 #   - Databricks CLI authenticated against the same workspace as the apps
@@ -58,6 +84,10 @@ INSTANCE="${INSTANCE:-ontobricks-app}"
 BRANCH="${BRANCH:-${LAKEBASE_BRANCH:-production}}"
 DATABASE="${DATABASE:-ontobricks_registry}"
 SCHEMA="${SCHEMA:-ontobricks_registry}"
+# Unity Catalog catalog name — when set the SP receives ALL PRIVILEGES on
+# the catalog so it can read back synced tables regardless of who created them.
+# Required for managed_synced mode.  Pass -c/--catalog or set the env var.
+UC_CATALOG="${UC_CATALOG:-}"
 APPS=()
 
 while [[ $# -gt 0 ]]; do
@@ -66,6 +96,7 @@ while [[ $# -gt 0 ]]; do
         -b|--branch)   BRANCH="$2"; shift 2 ;;
         -d|--database) DATABASE="$2"; shift 2 ;;
         -s|--schema)   SCHEMA="$2"; shift 2 ;;
+        -c|--catalog)  UC_CATALOG="$2"; shift 2 ;;
         -a|--app)      APPS+=("$2"); shift 2 ;;
         -h|--help)
             sed -n '2,32p' "$0"
@@ -183,15 +214,10 @@ export PGPASSWORD
 
 PGCONN="host=${PGHOST} port=5432 user=${PGUSER} dbname=${DATABASE} sslmode=require"
 
-# Ensure the target schema actually exists. If not, the operator
-# probably ran the script before deploying / initialising the app.
-if ! psql "$PGCONN" -tAc "SELECT 1 FROM information_schema.schemata WHERE schema_name='${SCHEMA}'" \
-        | grep -q 1; then
-    echo "ERROR: Schema '${SCHEMA}' does not exist in database '${DATABASE}'." >&2
-    echo "       Initialise the registry from the OntoBricks Settings UI first." >&2
-    exit 1
-fi
-
+# ── Step 1: Instance-level CAN_USE (runs even on a fresh DB before init) ────
+# Must happen BEFORE the schema guard so the SP can call the synced-tables
+# API immediately after the first "Build" — even if the registry schema
+# doesn't exist yet (e.g. between deploy and Settings → Registry → Initialize).
 FAILED=0
 for app in "${APPS[@]}"; do
     sp_id="$(databricks apps get "$app" -o json 2>/dev/null \
@@ -209,7 +235,57 @@ print(d.get("service_principal_client_id") or "")' 2>/dev/null || true)"
     fi
 
     echo "  [$app] service principal: $sp_id"
+    echo "  [$app] granting CAN_USE on Lakebase project '${INSTANCE}'..."
+    _can_use_ok=false
+    if databricks api patch "/api/2.0/permissions/database-projects/${INSTANCE}" \
+        --json "{\"access_control_list\": [{\"service_principal_name\": \"${sp_id}\", \"permission_level\": \"CAN_USE\"}]}" \
+        >/dev/null 2>&1; then
+        echo "  [$app] ✓ CAN_USE granted via database-projects (Autoscaling)"
+        _can_use_ok=true
+    fi
+    if databricks api patch "/api/2.0/permissions/database-instances/${INSTANCE}" \
+        --json "{\"access_control_list\": [{\"service_principal_name\": \"${sp_id}\", \"permission_level\": \"CAN_USE\"}]}" \
+        >/dev/null 2>&1; then
+        echo "  [$app] ✓ CAN_USE granted via database-instances (Provisioned / fallback)"
+        _can_use_ok=true
+    fi
+    if ! $_can_use_ok; then
+        echo "  [$app] ✗ Both CAN_USE grant attempts failed."
+        FAILED=$((FAILED+1))
+    fi
+done
 
+# ── Step 2: Postgres schema grants (requires the schema to exist) ────────────
+# Ensure the target schema actually exists. If not, the operator
+# probably ran the script before initialising the registry.
+if ! psql "$PGCONN" -tAc "SELECT 1 FROM information_schema.schemata WHERE schema_name='${SCHEMA}'" \
+        | grep -q 1; then
+    echo "ERROR: Schema '${SCHEMA}' does not exist in database '${DATABASE}'." >&2
+    echo "       Initialise the registry from the OntoBricks Settings UI first." >&2
+    echo "       CAN_USE grants above were applied — re-run after initialisation" >&2
+    echo "       to apply the Postgres schema grants." >&2
+    exit 1
+fi
+
+for app in "${APPS[@]}"; do
+    sp_id="$(databricks apps get "$app" -o json 2>/dev/null \
+        | python3 -c 'import sys,json
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    sys.exit(2)
+print(d.get("service_principal_client_id") or "")' 2>/dev/null || true)"
+
+    if [[ -z "$sp_id" || "$sp_id" == "None" ]]; then
+        echo "  [$app] SKIP — could not resolve service principal (app may not exist yet)"
+        FAILED=$((FAILED+1))
+        continue
+    fi
+
+    echo "  [$app] service principal: $sp_id"
+
+    # ── Postgres schema: USAGE + DML ─────────────────────────────────────────
+    # CAN_USE (instance-level) was already granted in Step 1 above.
     if ! psql "$PGCONN" -v ON_ERROR_STOP=1 -q <<SQL
 GRANT USAGE, CREATE ON SCHEMA "${SCHEMA}" TO "${sp_id}";
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA "${SCHEMA}" TO "${sp_id}";
@@ -220,7 +296,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA "${SCHEMA}"
     GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO "${sp_id}";
 SQL
     then
-        echo "  [$app] ✗ GRANT failed (need ownership of schema '${SCHEMA}' or GRANT OPTION)"
+        echo "  [$app] ✗ Postgres GRANT failed (need ownership of schema '${SCHEMA}' or GRANT OPTION)"
         FAILED=$((FAILED+1))
         continue
     fi
@@ -228,14 +304,47 @@ SQL
     has_usage="$(psql "$PGCONN" -tAc \
         "SELECT has_schema_privilege('${sp_id}', '${SCHEMA}', 'USAGE')" \
         | tr -d '[:space:]')"
-    has_select="$(psql "$PGCONN" -tAc \
-        "SELECT has_table_privilege('${sp_id}', '${SCHEMA}.registries', 'SELECT')" \
+    # Check table-level SELECT on the first available table in the schema
+    # (the `registries` table only exists in the registry schema, not the graph schema).
+    first_table="$(psql "$PGCONN" -tAc \
+        "SELECT tablename FROM pg_tables WHERE schemaname='${SCHEMA}' LIMIT 1" \
         | tr -d '[:space:]')"
+    if [[ -n "$first_table" ]]; then
+        has_select="$(psql "$PGCONN" -tAc \
+            "SELECT has_table_privilege('${sp_id}', '${SCHEMA}.${first_table}', 'SELECT')" \
+            | tr -d '[:space:]')"
+    else
+        # No tables yet (schema exists but is empty) — USAGE is enough to verify.
+        has_select="t"
+    fi
     if [[ "$has_usage" == "t" && "$has_select" == "t" ]]; then
         echo "  [$app] ✓ granted USAGE + DML on schema '${SCHEMA}'"
     else
-        echo "  [$app] ✗ verify failed (USAGE=$has_usage, SELECT registries=$has_select)"
+        echo "  [$app] ✗ verify failed (USAGE=$has_usage, SELECT=${first_table:-<no tables>}=$has_select)"
         FAILED=$((FAILED+1))
+    fi
+
+    # ── 3. Unity Catalog: ALL PRIVILEGES on catalog (managed_synced only) ───
+    # The Lakebase synced-table API (GET /api/2.0/database/synced_tables/{fqn})
+    # returns 404 when the caller lacks SELECT on the resulting UC table — even
+    # when it created the table.  This happens when:
+    #   a) The table was created by a different principal (local dev run) and
+    #      the SP is not the owner.
+    #   b) The SP has UC CAN_USE but the catalog-level SELECT has not been
+    #      explicitly applied.
+    # Granting ALL PRIVILEGES on the catalog covers both cases and is idempotent.
+    # Only done when -c/--catalog (or UC_CATALOG env var) is provided.
+    if [[ -n "${UC_CATALOG:-}" ]]; then
+        echo "  [$app] granting ALL PRIVILEGES on UC catalog '${UC_CATALOG}'..."
+        if databricks grants update CATALOG "${UC_CATALOG}" \
+            --json "{\"changes\": [{\"principal\": \"${sp_id}\", \"add\": [\"ALL_PRIVILEGES\"]}]}" \
+            >/dev/null 2>&1; then
+            echo "  [$app] ✓ UC ALL_PRIVILEGES granted on catalog '${UC_CATALOG}'"
+        else
+            echo "  [$app] ⚠ UC catalog grant failed (you may lack MANAGE on catalog '${UC_CATALOG}')"
+            echo "          Run manually: databricks grants update CATALOG ${UC_CATALOG} \\"
+            echo "            --json '{\"changes\":[{\"principal\":\"${sp_id}\",\"add\":[\"ALL_PRIVILEGES\"]}]}'"
+        fi
     fi
 done
 
