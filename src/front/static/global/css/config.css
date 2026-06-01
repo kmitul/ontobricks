@@ -2,54 +2,14 @@
    Config Page Specific Styles
    ========================================================================== */
 
-/* Settings page: override sidebar-layout flex-fill defaults.
-   Most tabs have short content; only Databricks needs full-height. */
-.sidebar-content:has(#settings-section.active) {
-    overflow: hidden;
-    display: flex;
-    flex-direction: column;
-}
-
-#settings-section.active {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-
-/* By default the card does NOT stretch — short-content tabs stay compact */
-#settings-section > .content-section > .card {
-    flex: 0 1 auto;
-    overflow: visible;
-}
-
-/* Databricks tab needs the card to fill remaining height */
-#settings-section > .content-section > .card:has(#pane-databricks.active.show) {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-}
-
-#settings-section > .content-section > .card:has(#pane-databricks.active.show) > .card-body {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    overflow: hidden;
-}
-
-#settings-section > .content-section > .card:has(#pane-databricks.active.show) #settingsTabContent {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-}
-
-#pane-databricks.active.show {
-    flex: 1;
-    min-height: 0;
+/* Settings sections — each section scrolls independently within the sidebar content */
+#databricks-section.active,
+#ts-global-section.active,
+#lakebase-section.active,
+#global-section.active,
+#permissions-section.active,
+#registry-section.active,
+#health-section.active {
     overflow-y: auto;
 }
 

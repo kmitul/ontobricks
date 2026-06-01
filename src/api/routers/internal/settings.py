@@ -910,8 +910,8 @@ async def post_graph_engine_lakebase_drop_object(
             name=data.get("name", ""),
             database=data.get("database", ""),
             branch_path=data.get("branch_path", ""),
-            session_mgr=session_mgr,
-            settings=settings,
+            _session_mgr=session_mgr,
+            _settings=settings,
         )
 
 

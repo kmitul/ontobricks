@@ -429,6 +429,92 @@
         },
 
         {
+            "id": "settings",
+            "label": "Settings",
+            "icon": "bi-gear",
+            "route": "/settings",
+            "requires_domain_saved": false,
+            "navbar_hidden": true,
+            "status_indicator": null,
+            "navbar_actions": [],
+            "groups": [
+                {
+                    "id": "settings-config",
+                    "title": "Configuration",
+                    "icon": "bi-sliders",
+                    "items": [
+                        {
+                            "id": "databricks",
+                            "label": "Databricks",
+                            "icon": "bi-database",
+                            "default": true,
+                            "requires": null
+                        },
+                        {
+                            "id": "global",
+                            "label": "Global",
+                            "icon": "bi-sliders",
+                            "default": false,
+                            "requires": null
+                        }
+                    ]
+                },
+                {
+                    "id": "settings-triplestore",
+                    "title": "Triple store",
+                    "icon": "bi-diagram-3",
+                    "items": [
+                        {
+                            "id": "ts-global",
+                            "label": "Global",
+                            "icon": "bi-sliders",
+                            "default": false,
+                            "requires": null
+                        },
+                        {
+                            "id": "lakebase",
+                            "label": "Lakebase",
+                            "icon": "bi-diagram-3",
+                            "default": false,
+                            "requires": null
+                        }
+                    ]
+                },
+                {
+                    "id": "settings-admin",
+                    "title": "Admin",
+                    "icon": "bi-shield-lock",
+                    "items": [
+                        {
+                            "id": "permissions",
+                            "label": "Permissions",
+                            "icon": "bi-shield-lock",
+                            "default": false,
+                            "requires": null,
+                            "admin_only": true
+                        },
+                        {
+                            "id": "registry",
+                            "label": "Registry",
+                            "icon": "bi-archive",
+                            "default": false,
+                            "requires": null,
+                            "admin_only": true
+                        },
+                        {
+                            "id": "health",
+                            "label": "Health",
+                            "icon": "bi-heart-pulse",
+                            "default": false,
+                            "requires": null,
+                            "admin_only": true
+                        }
+                    ]
+                }
+            ]
+        },
+
+        {
             "id": "digitaltwin",
             "label": "Digital Twin",
             "icon": "bi-box-fill",

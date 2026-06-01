@@ -68,17 +68,14 @@ class TestSettingsRoutes:
         response = client.get("/settings")
         assert response.status_code == 200
 
-    def test_settings_page_includes_health_tab(self, client):
+    def test_settings_page_includes_health_section(self, client):
         # In tests the request is treated as ``user_role == 'admin'`` (the
         # PermissionMiddleware short-circuit for non-Apps mode), so the
-        # admin-only Health tab must be rendered.  Asserting on the nav-
-        # link and the include's KPI container catches both the tab
-        # registration and the partial wiring.
+        # admin-only Health section must be rendered as a sidebar section.
         response = client.get("/settings")
         assert response.status_code == 200
         body = response.text
-        assert 'id="tab-health"' in body
-        assert 'id="pane-health"' in body
+        assert 'id="health-section"' in body
         assert 'id="healthKpiTiles"' in body
         assert "settings-health.js" in body
 

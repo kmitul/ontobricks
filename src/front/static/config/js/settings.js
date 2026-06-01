@@ -1,12 +1,16 @@
 /**
  * OntoBricks - settings.js
- * Settings page JavaScript – tabbed layout; global Save persists all sections including Graph DB
+ * Settings page JavaScript – sidebar layout; global Save persists all sections including triple store
  */
 
 document.addEventListener('DOMContentLoaded', function () {
 
     let currentWarehouseId = null;
     let warehouseLocked = false;
+    let graphDbLoaded = false;
+    // Registry rebuilt on every loadLakebaseObjects call; keyed by domain base name.
+    // Avoids embedding JSON in onclick HTML attributes (double quotes break the attribute).
+    let _lkDomainRegistry = {};
 
     function escapeHtmlSettings(str) { return escapeHtml(str); }
 
@@ -800,13 +804,15 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     function setGraphDbTabLoading(loading) {
-        const banner  = document.getElementById('graphDbTabLoadingBanner');
-        const content = document.getElementById('graphDbTabContent');
-        if (banner) {
-            banner.classList.toggle('d-none', !loading);
-            banner.classList.toggle('d-flex', loading);
+        // Only the Lakebase section shows a spinner (ts-global/Global has no spinner).
+        const lkBanner = document.getElementById('lakebaseSectionBanner');
+        const lkPanel  = document.getElementById('lakebaseGraphPanel');
+        if (lkBanner) {
+            lkBanner.classList.toggle('d-none', !loading);
+            lkBanner.classList.toggle('d-flex', loading);
         }
-        if (content) content.classList.toggle('d-none', loading);
+        // Hide lakebase panel during load; applyGraphDbEnginePanels() restores it after
+        if (loading && lkPanel) lkPanel.style.display = 'none';
     }
 
     /** Reload engine + JSON from server so the tab matches persisted settings after every visit. */
@@ -941,49 +947,141 @@ document.addEventListener('DOMContentLoaded', function () {
             }
 
             const cu = data.current_user || '';
-            const schemas = data.schemas || [];
-            const tables  = data.tables  || [];
-            const views   = data.views   || [];
+            const regSchema = data.registry_schema || 'ontobricks_registry';
+            const schemas = (data.schemas || []).filter(o => o.name   !== regSchema);
+            const tables  = (data.tables  || []).filter(o => o.schema !== regSchema);
+            const views   = (data.views   || []).filter(o => o.schema !== regSchema);
 
             if (schemas.length === 0 && tables.length === 0 && views.length === 0) {
                 result.innerHTML = '<p class="small text-muted mt-2">No objects owned by you in this database.</p>';
                 return;
             }
 
+            // ── helpers ─────────────────────────────────────────────────────
             function mkDropBtn(kind, schema, name) {
-                return '<button type="button" class="btn btn-danger btn-sm py-0 px-2"'
-                    + ' onclick="window._lkDropObject(' + JSON.stringify(kind) + ','
-                    + JSON.stringify(schema) + ',' + JSON.stringify(name) + ','
-                    + JSON.stringify(database) + ',' + JSON.stringify(branchPath) + ')">'
-                    + '<i class="bi bi-trash"></i></button>';
+                return '<button type="button" class="btn btn-outline-danger btn-sm py-0 px-2 lk-drop-obj-btn"'
+                    + ' data-lk-kind="'   + escapeHtmlSettings(kind)   + '"'
+                    + ' data-lk-schema="' + escapeHtmlSettings(schema) + '"'
+                    + ' data-lk-name="'   + escapeHtmlSettings(name)   + '"'
+                    + ' title="Drop ' + escapeHtmlSettings(kind) + '">'
+                    + '<i class="bi bi-trash3"></i></button>';
             }
 
-            function mkRows(items, kindLabel, schemaKey, nameKey) {
-                return items.map(function (o) {
-                    const schema  = o[schemaKey] || '';
-                    const name    = o[nameKey]   || '';
-                    const kindVal = kindLabel.toLowerCase();
-                    return '<tr>'
-                        + '<td><span class="badge bg-secondary-subtle text-secondary-emphasis border">'
-                        + escapeHtmlSettings(kindLabel) + '</span></td>'
-                        + '<td class="font-monospace small">' + escapeHtmlSettings(schema) + '</td>'
-                        + '<td class="font-monospace small">' + escapeHtmlSettings(name) + '</td>'
-                        + '<td class="text-center">' + mkDropBtn(kindVal, schema, name) + '</td>'
-                        + '</tr>';
-                }).join('');
+            // Strip _sync / __app suffix to get the common base name shared by all
+            // three objects belonging to a graph version (view, sync table, companion).
+            // Tables: "{base}_sync" and "{base}__app"  →  base = "{domain}_v{version}"
+            // Views:  "{base}"                          →  base = "{domain}_v{version}"
+            function objectBase(name, kind) {
+                if (kind === 'table') {
+                    if (name.endsWith('_sync')) return name.slice(0, -5);
+                    if (name.endsWith('__app')) return name.slice(0, -5);
+                }
+                return name;
             }
 
-            const html = '<p class="small text-muted mt-2 mb-1">Connected as: <code>'
-                + escapeHtmlSettings(cu) + '</code> — showing only objects you own.</p>'
-                + '<table class="table table-sm table-bordered small mt-2 mb-0">'
-                + '<thead class="table-light"><tr>'
-                + '<th>Type</th><th>Schema</th><th>Name</th><th>Action</th>'
-                + '</tr></thead><tbody>'
-                + mkRows(schemas, 'Schema', 'name',   'name')
-                + mkRows(tables,  'Table',  'schema',  'name')
-                + mkRows(views,   'View',   'schema',  'name')
-                + '</tbody></table>';
+            function kindBadge(kind) {
+                const map = { view: 'bg-info-subtle text-info-emphasis', table: 'bg-primary-subtle text-primary-emphasis', schema: 'bg-secondary-subtle text-secondary-emphasis' };
+                return '<span class="badge border ' + (map[kind] || 'bg-secondary-subtle text-secondary-emphasis') + '">'
+                    + kind.charAt(0).toUpperCase() + kind.slice(1) + '</span>';
+            }
+
+            function mkObjectRow(kind, schemaName, name) {
+                return '<tr>'
+                    + '<td>' + kindBadge(kind) + '</td>'
+                    + '<td class="font-monospace small">' + escapeHtmlSettings(name) + '</td>'
+                    + '<td class="text-end">' + mkDropBtn(kind, schemaName, name) + '</td>'
+                    + '</tr>';
+            }
+
+            // ── group tables + views by base (= domain label) ────────────────
+            // Store in the module-level registry so onclick handlers can look
+            // up items by key without embedding JSON in HTML attributes
+            // (embedded JSON with " quotes breaks onclick="..." delimiters).
+            _lkDomainRegistry = {};   // reset for this load
+
+            [...tables.map(o => ({ kind: 'table', schemaName: o.schema, name: o.name })),
+             ...views.map(o => ({ kind: 'view',  schemaName: o.schema, name: o.name }))]
+            .forEach(o => {
+                const base = objectBase(o.name, o.kind);
+                if (!_lkDomainRegistry[base]) {
+                    _lkDomainRegistry[base] = { base, schema: o.schemaName, items: [] };
+                }
+                _lkDomainRegistry[base].items.push(o);
+            });
+
+            // ── render ───────────────────────────────────────────────────────
+            let html = '<p class="small text-muted mt-2 mb-3">Connected as: <code>'
+                + escapeHtmlSettings(cu) + '</code>.'
+                + ' <span><i class="bi bi-eye-slash me-1"></i>Registry schema'
+                + ' (<code>' + escapeHtmlSettings(regSchema) + '</code>) hidden.</span></p>';
+
+            // Schemas (containers — drop only when dropping everything)
+            if (schemas.length > 0) {
+                html += '<div class="mb-3">';
+                html += '<div class="d-flex align-items-center gap-2 mb-1">'
+                    + '<span class="fw-semibold small text-muted text-uppercase" style="letter-spacing:.05em">Schemas</span></div>';
+                html += '<table class="table table-sm table-bordered small mb-0"><thead class="table-light"><tr>'
+                    + '<th>Type</th><th>Name</th><th class="text-end">Action</th>'
+                    + '</tr></thead><tbody>';
+                schemas.forEach(o => {
+                    html += mkObjectRow('schema', o.name, o.name);
+                });
+                html += '</tbody></table></div>';
+            }
+
+            // Domain groups
+            const domainKeys = Object.keys(_lkDomainRegistry).sort();
+            domainKeys.forEach(key => {
+                const grp = _lkDomainRegistry[key];
+                // views first (drop order: views before tables)
+                const sorted = [...grp.items].sort((a, b) => {
+                    if (a.kind === b.kind) return 0;
+                    return a.kind === 'view' ? -1 : 1;
+                });
+                // Store sorted order back so dropDomainObjects picks it up
+                grp.sortedItems = sorted;
+
+                html += '<div class="mb-3 border rounded">';
+                html += '<div class="d-flex align-items-center justify-content-between px-3 py-2 bg-body-secondary rounded-top">';
+                html += '<span class="fw-semibold small"><i class="bi bi-folder2 me-1 text-muted"></i>'
+                    + escapeHtmlSettings(key)
+                    + ' <span class="badge bg-secondary-subtle text-secondary-emphasis border ms-1">'
+                    + grp.items.length + '</span></span>';
+                // data-lk-domain carries the key; click is wired after innerHTML is set
+                html += '<button type="button" class="btn btn-sm btn-outline-danger py-0 lk-drop-domain-btn"'
+                    + ' data-lk-domain="' + escapeHtmlSettings(key) + '"'
+                    + ' title="Delete all objects for this domain">'
+                    + '<i class="bi bi-trash3 me-1"></i>Delete domain\'s objects</button>';
+                html += '</div>';
+                html += '<table class="table table-sm small mb-0"><thead class="table-light"><tr>'
+                    + '<th>Type</th><th>Name</th><th class="text-end">Action</th>'
+                    + '</tr></thead><tbody>';
+                sorted.forEach(o => {
+                    html += mkObjectRow(o.kind, o.schemaName, o.name);
+                });
+                html += '</tbody></table></div>';
+            });
+
+
             result.innerHTML = html;
+
+            // Wire buttons after DOM is ready — avoids JSON in HTML attributes
+            result.querySelectorAll('.lk-drop-domain-btn').forEach(btn => {
+                btn.addEventListener('click', function () {
+                    dropDomainObjects(this.dataset.lkDomain);
+                });
+            });
+            result.querySelectorAll('.lk-drop-obj-btn').forEach(btn => {
+                btn.addEventListener('click', function () {
+                    dropLakebaseObject(
+                        this.dataset.lkKind,
+                        this.dataset.lkSchema,
+                        this.dataset.lkName,
+                        database,
+                        branchPath,
+                    );
+                });
+            });
         } catch (e) {
             result.innerHTML = '<div class="alert alert-danger small py-2 mt-2">'
                 + escapeHtmlSettings(e.message || 'Network error') + '</div>';
@@ -995,9 +1093,18 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    function _showDropSpinner(result, msg) {
+        if (result) {
+            result.innerHTML = '<div class="d-flex align-items-center gap-2 py-3 text-muted small">'
+                + '<span class="spinner-border spinner-border-sm" aria-hidden="true"></span>'
+                + '<span>' + escapeHtmlSettings(msg) + '</span></div>';
+        }
+    }
+
     async function _execDrop(kind, schema, name, database, branchPath) {
         const label = kind === 'schema' ? '"' + name + '"' : '"' + schema + '"."' + name + '"';
         const result = document.getElementById('lakebaseObjectsResult');
+        _showDropSpinner(result, 'Dropping ' + kind + ' ' + label + '…');
         try {
             const resp = await fetch('/settings/graph-engine/lakebase-drop-object', {
                 method: 'POST',
@@ -1005,12 +1112,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 credentials: 'same-origin',
                 body: JSON.stringify({ kind, schema, name, database: database || '', branch_path: branchPath || '' }),
             });
-            const data = resp.ok ? await resp.json() : {};
+            let data = {};
+            try { data = await resp.json(); } catch (_) {}
             if (data.success) {
                 showNotification('Dropped ' + kind + ' ' + label, 'success');
                 await loadLakebaseObjects();
             } else {
-                const msg = data.message || 'Drop failed';
+                const msg = data.detail || data.message || ('HTTP ' + resp.status);
                 if (result) {
                     result.insertAdjacentHTML('afterbegin',
                         '<div class="alert alert-danger small py-2 mb-2">'
@@ -1048,8 +1156,90 @@ document.addEventListener('DOMContentLoaded', function () {
         modal.show();
     }
 
-    // expose to inline onclick handlers inside the dynamically rendered table
-    window._lkDropObject = dropLakebaseObject;
+    /** Drop all objects for a domain (views first, then tables).
+     *  Takes only the registry key — items are looked up from _lkDomainRegistry
+     *  to avoid embedding JSON in HTML onclick attributes. */
+    function dropDomainObjects(domainKey) {
+        const entry = _lkDomainRegistry[domainKey];
+        if (!entry) {
+            showNotification('Domain not found: ' + domainKey, 'danger');
+            return;
+        }
+        const { schema, sortedItems: items } = entry;
+        const database   = document.getElementById('lakebaseGraphDb')?.value  || '';
+        const branchPath = document.getElementById('lakebaseBranch')?.value   || '';
+        const count = items.length;
+
+        const listHtml = items.map(o =>
+            '<li class="font-monospace small">' + escapeHtmlSettings(o.kind) + ': '
+            + escapeHtmlSettings(o.name) + '</li>'
+        ).join('');
+
+        const bodyContent = 'Drop all <strong>' + count + ' object' + (count !== 1 ? 's' : '')
+            + '</strong> for domain <code>' + escapeHtmlSettings(domainKey) + '</code>?'
+            + '<ul class="mt-2 mb-0 ps-3">' + listHtml + '</ul>';
+
+        const modalEl  = document.getElementById('lkDropConfirmModal');
+        const bodyEl   = document.getElementById('lkDropConfirmModalBody');
+        const confirmBtn = document.getElementById('lkDropConfirmBtn');
+
+        if (!modalEl || !bodyEl || !confirmBtn) {
+            if (window.confirm('Drop all ' + count + ' objects for domain ' + domainKey + '?')) {
+                _execDropAll(items, schema, database, branchPath);
+            }
+            return;
+        }
+
+        bodyEl.innerHTML = bodyContent;
+        const newBtn = confirmBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newBtn, confirmBtn);
+        const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+        newBtn.addEventListener('click', function () {
+            modal.hide();
+            _execDropAll(items, schema, database, branchPath);
+        });
+        modal.show();
+    }
+
+    /** Execute sequential drops for a list of {kind, name} items. */
+    async function _execDropAll(items, schema, database, branchPath) {
+        const result = document.getElementById('lakebaseObjectsResult');
+        const errors = [];
+        _showDropSpinner(result, 'Deleting ' + items.length + ' object' + (items.length !== 1 ? 's' : '') + '…');
+        for (let i = 0; i < items.length; i++) {
+            const o = items[i];
+            _showDropSpinner(result, 'Dropping ' + o.kind + ' ' + o.name + ' (' + (i + 1) + '/' + items.length + ')…');
+            try {
+                const resp = await fetch('/settings/graph-engine/lakebase-drop-object', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    credentials: 'same-origin',
+                    body: JSON.stringify({ kind: o.kind, schema, name: o.name, database: database || '', branch_path: branchPath || '' }),
+                });
+                let data = {};
+                try { data = await resp.json(); } catch (_) { /* non-JSON body */ }
+                if (!data.success) {
+                    const detail = data.detail || data.message || (resp.ok ? 'server returned failure' : 'HTTP ' + resp.status);
+                    errors.push(o.kind + ' ' + o.name + ': ' + detail);
+                }
+            } catch (e) {
+                errors.push(o.kind + ' ' + o.name + ': ' + (e.message || 'network error'));
+            }
+        }
+        if (errors.length) {
+            showNotification('Drops failed:\n' + errors.join('\n'), 'danger');
+            if (result) {
+                result.innerHTML = '<div class="alert alert-danger small py-2 mb-2"><strong>Drop errors:</strong><ul class="mb-0 mt-1 ps-3">'
+                    + errors.map(e => '<li>' + escapeHtmlSettings(e) + '</li>').join('')
+                    + '</ul></div>';
+            }
+        } else {
+            showNotification('All domain objects dropped', 'success');
+        }
+        _showDropSpinner(result, 'Reloading objects…');
+        await loadLakebaseObjects();
+    }
+
 
     document.getElementById('btnLoadLakebaseObjects')?.addEventListener('click', loadLakebaseObjects);
 
@@ -1121,15 +1311,19 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // =====================================================================
-    //  GRAPH DB TAB – tab activation
+    //  TRIPLE STORE SECTIONS – lazy-load on first visit to ts-global or lakebase
     // =====================================================================
 
-    document.getElementById('tab-graphdb')?.addEventListener('shown.bs.tab', async () => {
-        setGraphDbTabLoading(true);
-        try {
-            await refreshGraphDbTabFromServer();
-        } finally {
-            setGraphDbTabLoading(false);
+    document.addEventListener('sidebarSectionChanged', async (e) => {
+        const s = e.detail?.section;
+        if ((s === 'ts-global' || s === 'lakebase') && !graphDbLoaded) {
+            graphDbLoaded = true;
+            setGraphDbTabLoading(true);
+            try {
+                await refreshGraphDbTabFromServer();
+            } finally {
+                setGraphDbTabLoading(false);
+            }
         }
     });
 
@@ -1137,7 +1331,7 @@ document.addEventListener('DOMContentLoaded', function () {
     //  GLOBAL SAVE BUTTON – warehouse, global prefs, CloudFetch, Graph DB
     // =====================================================================
 
-    document.getElementById('btnSaveAllSettings')?.addEventListener('click', async function () {
+    document.querySelectorAll('.btn-save-settings').forEach(saveBtn => saveBtn.addEventListener('click', async function () {
         const btn = this;
         btn.disabled = true;
         btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Saving...';
@@ -1204,5 +1398,5 @@ document.addEventListener('DOMContentLoaded', function () {
         } else {
             showNotification('All settings saved', 'success', 2000);
         }
-    });
+    }));
 });

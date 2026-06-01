@@ -213,12 +213,32 @@
                             <i class="bi bi-question-circle"></i>
                         </a>
                     </li>
-                    {% for link in menu_config.utility_links %}
-                    {% if link.id == 'settings' %}
-                    <li class="nav-item" data-requires-app="admin">
-                        <a class="nav-link" href="{{ link.route }}" title="{{ link.label }}">
-                            <i class="bi {{ link.icon }}"></i>
+                    {% for menu in menu_config.menus %}
+                    {% if menu.id == 'settings' %}
+                    <li class="nav-item dropdown" data-requires-app="admin">
+                        <a class="nav-link dropdown-toggle" href="#" id="settingsGearDropdown" role="button"
+                           data-bs-toggle="dropdown" aria-expanded="false" title="Settings">
+                            <i class="bi bi-gear"></i>
                         </a>
+                        <ul class="dropdown-menu dropdown-menu-end" aria-labelledby="settingsGearDropdown">
+                            {% set vis = namespace(any=false) %}
+                            {% for group in menu.groups %}
+                            {% if vis.any %}<li><hr class="dropdown-divider"></li>{% endif %}
+                            {% set vis.any = true %}
+                            <li><h6 class="dropdown-header"><i class="bi {{ group.icon }}"></i> {{ group.title }}</h6></li>
+                            {% for item in group['items'] %}
+                            <li>
+                                <a class="dropdown-item"
+                                   href="{{ menu.route }}?section={{ item.id }}"
+                                   {% if item.admin_only|default(false) %}data-requires-app="admin"{% endif %}>
+                                    <i class="bi {{ item.icon }} me-1"></i> {{ item.label }}
+                                </a>
+                            </li>
+                            {% endfor %}
+                            {% endfor %}
+                            <li><hr class="dropdown-divider"></li>
+                            <li><a class="dropdown-item" href="{{ menu.route }}"><i class="bi bi-arrow-right-circle me-1"></i> Open full settings</a></li>
+                        </ul>
                     </li>
                     {% endif %}
                     {% endfor %}

@@ -1634,53 +1634,64 @@ class SettingsService:
                     )
                     schemas = [{"name": r[0], "owner": r[1]} for r in cur.fetchall()]
 
-                    cur.execute(
-                        """
-                        SELECT t.schemaname,
-                               t.tablename,
-                               pg_catalog.pg_get_userbyid(c.relowner) AS owner
-                        FROM pg_catalog.pg_tables t
-                        JOIN pg_catalog.pg_class c
-                             ON c.relname = t.tablename
-                        JOIN pg_catalog.pg_namespace n
-                             ON n.oid = c.relnamespace
-                            AND n.nspname = t.schemaname
-                        WHERE t.schemaname NOT LIKE 'pg_%%'
-                          AND t.schemaname NOT IN ('information_schema')
-                          AND pg_catalog.pg_get_userbyid(c.relowner) = current_user
-                        ORDER BY t.schemaname, t.tablename
-                        """
-                    )
+                    # Filter by schemas owned by the current user rather than
+                    # by table/view owner, because _sync tables are created by
+                    # Lakeflow under a different Postgres role but still live in
+                    # our schema.
+                    owned_schema_names = tuple(s["name"] for s in schemas)
+                    if owned_schema_names:
+                        cur.execute(
+                            """
+                            SELECT t.schemaname,
+                                   t.tablename,
+                                   pg_catalog.pg_get_userbyid(c.relowner) AS owner
+                            FROM pg_catalog.pg_tables t
+                            JOIN pg_catalog.pg_class c
+                                 ON c.relname = t.tablename
+                            JOIN pg_catalog.pg_namespace n
+                                 ON n.oid = c.relnamespace
+                                AND n.nspname = t.schemaname
+                            WHERE t.schemaname = ANY(%s)
+                            ORDER BY t.schemaname, t.tablename
+                            """,
+                            (list(owned_schema_names),),
+                        )
+                    else:
+                        cur.execute("SELECT NULL, NULL, NULL WHERE FALSE")
                     tables = [
                         {"schema": r[0], "name": r[1], "owner": r[2]}
                         for r in cur.fetchall()
                     ]
 
-                    cur.execute(
-                        """
-                        SELECT v.schemaname,
-                               v.viewname,
-                               pg_catalog.pg_get_userbyid(c.relowner) AS owner
-                        FROM pg_catalog.pg_views v
-                        JOIN pg_catalog.pg_class c
-                             ON c.relname = v.viewname
-                        JOIN pg_catalog.pg_namespace n
-                             ON n.oid = c.relnamespace
-                            AND n.nspname = v.schemaname
-                        WHERE v.schemaname NOT LIKE 'pg_%%'
-                          AND v.schemaname NOT IN ('information_schema')
-                          AND pg_catalog.pg_get_userbyid(c.relowner) = current_user
-                        ORDER BY v.schemaname, v.viewname
-                        """
-                    )
+                    if owned_schema_names:
+                        cur.execute(
+                            """
+                            SELECT v.schemaname,
+                                   v.viewname,
+                                   pg_catalog.pg_get_userbyid(c.relowner) AS owner
+                            FROM pg_catalog.pg_views v
+                            JOIN pg_catalog.pg_class c
+                                 ON c.relname = v.viewname
+                            JOIN pg_catalog.pg_namespace n
+                                 ON n.oid = c.relnamespace
+                                AND n.nspname = v.schemaname
+                            WHERE v.schemaname = ANY(%s)
+                            ORDER BY v.schemaname, v.viewname
+                            """,
+                            (list(owned_schema_names),),
+                        )
+                    else:
+                        cur.execute("SELECT NULL, NULL, NULL WHERE FALSE")
                     views = [
                         {"schema": r[0], "name": r[1], "owner": r[2]}
                         for r in cur.fetchall()
                     ]
 
+            rcfg = RegistryCfg.from_session(_session_mgr, _settings)
             return {
                 "success": True,
                 "current_user": current_user,
+                "registry_schema": rcfg.lakebase_schema or "ontobricks_registry",
                 "schemas": schemas,
                 "tables": tables,
                 "views": views,
@@ -1724,15 +1735,15 @@ class SettingsService:
             return '"' + ident.replace('"', '""') + '"'
 
         if kind == "schema":
-            ddl = f"DROP SCHEMA {_q(name)} CASCADE"
+            ddl = f"DROP SCHEMA IF EXISTS {_q(name)} CASCADE"
         elif kind == "table":
             if not schema:
                 raise ValidationError("schema is required for kind=table")
-            ddl = f"DROP TABLE {_q(schema)}.{_q(name)}"
+            ddl = f"DROP TABLE IF EXISTS {_q(schema)}.{_q(name)} CASCADE"
         else:
             if not schema:
                 raise ValidationError("schema is required for kind=view")
-            ddl = f"DROP VIEW {_q(schema)}.{_q(name)}"
+            ddl = f"DROP VIEW IF EXISTS {_q(schema)}.{_q(name)} CASCADE"
 
         try:
             from back.core.graphdb.lakebase.pool import _require_psycopg

@@ -204,11 +204,10 @@ class TestSettingsPage:
         html = _html(client, "/settings")
         assert "Settings" in _title_text(html)
 
-    def test_tabs_present(self, client):
+    def test_sidebar_sections_present(self, client):
         html = _html(client, "/settings")
-        tags = _tags(html)
-        assert _find(tags, id_="tab-databricks") is not None
-        assert _find(tags, id_="tab-global") is not None
+        assert 'id="databricks-section"' in html
+        assert 'id="global-section"' in html
 
     def test_host_display(self, client):
         html = _html(client, "/settings")
@@ -230,7 +229,7 @@ class TestSettingsPage:
 
     def test_save_all_button(self, client):
         html = _html(client, "/settings")
-        assert _find(_tags(html), id_="btnSaveAllSettings") is not None
+        assert 'btn-save-settings' in html
 
     def test_graph_db_lakebase_health_block_present(self, client):
         html = _html(client, "/settings")

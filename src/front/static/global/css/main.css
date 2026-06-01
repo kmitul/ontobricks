@@ -381,6 +381,13 @@ body {
     margin-right: 12px;
 }
 
+/* Inside a card the card already provides the outer border — reset the margin */
+.card-body > .ob-tab-content,
+.card-header > .ob-tab-content,
+.card > .ob-tab-content {
+    margin-right: 0;
+}
+
 /* ==========================================================================
    Page Layout
    ========================================================================== */
