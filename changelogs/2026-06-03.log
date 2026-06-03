@@ -97,3 +97,45 @@ DATABRICKS_CONFIG_PROFILE=fevm-ontobricks-int \
 uv run pytest tests/e2e/ -q --no-cov
 # 258 passed
 ```
+
+---
+
+## Fix the 2 pre-existing TestDomainVersions failures
+
+**Root cause:** It wasn't actually about psycopg being missing (although that was a contributing factor). The route `GET /api/v1/domain/versions` was refactored to do an early `RegistryCfg.from_session(...).is_configured` check and return `400 "Registry not configured"` before reaching the mocked `RegistryService`. The 2 failing tests (`test_versions_not_found`, `test_versions_success`) only mocked `DigitalTwin` and `RegistryService`, not the cfg-resolution path — so they bailed at the new guard.
+
+**Fix:**
+
+1. **`pyproject.toml`** — added `psycopg[binary]>=3.2.0` and `psycopg-pool>=3.2.0` to `[dependency-groups].dev` so a plain `uv sync` installs them (mirrors `[project.optional-dependencies].lakebase`). Means the registry-config gate doesn't fire the optional-extra import error in the test env.
+2. **`tests/units/api/test_external_api.py`** — both `TestDomainVersions::test_versions_not_found` and `::test_versions_success` now pass `registry_catalog=c&registry_schema=s&registry_volume=v` as query-string overrides. The route honours those over the unconfigured session cfg, so `cfg.is_configured` returns True and the mocked `RegistryService` is reached as intended. Removed two unused `mock_dt.resolve_registry.return_value` lines that the route no longer calls.
+3. **`uv.lock`** — regenerated.
+
+**Verification:**
+
+```
+uv run pytest tests/units/api/test_external_api.py::TestDomainVersions -q --no-cov
+# 4 passed in 5.37s
+
+# Full re-run after the fix:
+uv run pytest -q --ignore=tests/e2e --ignore=tests/property --ignore=tests/live_integration --no-cov
+# 2373 passed, 11 skipped, 0 failed   (was 2329 passed, 2 failed)
+
+uv run pytest tests/property/ -q --no-cov
+# 12 passed
+
+ONTOBRICKS_LIVE_BASE=... ONTOBRICKS_LIVE_MCP_BASE=... DATABRICKS_CONFIG_PROFILE=fevm-ontobricks-int \
+  uv run pytest tests/live_integration/ -q -m live_integration --no-cov
+# 17 passed
+
+uv run pytest tests/e2e/ -q --no-cov
+# 258 passed in 284.76s
+```
+
+**Grand total: 2660 tests pass, 0 failures.**
+
+## Files modified
+
+- `pyproject.toml` — psycopg + psycopg-pool added to `[dependency-groups].dev`.
+- `uv.lock` — regenerated.
+- `tests/units/api/test_external_api.py` — `TestDomainVersions` registry-cfg fix.
+- `changelogs/2026-06-03.log` — this entry.

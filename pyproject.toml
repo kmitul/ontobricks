@@ -68,6 +68,12 @@ dev = [
     # M3.P1 quality enforcement
     "ruff>=0.7.4",                # supersedes flake8 once the baseline is clean
     "mypy>=1.13.0",               # type checker; runs against `mypy_baseline.txt`
+    # Lakebase backend is the production registry path since v0.4.0; the
+    # tests that exercise the registry-config gate need psycopg present so
+    # the import-time short-circuit in SettingsService doesn't fire.
+    # Mirrors `[project.optional-dependencies].lakebase` — kept in sync.
+    "psycopg[binary]>=3.2.0",
+    "psycopg-pool>=3.2.0",
 ]
 
 [tool.hatch.build.targets.wheel]
