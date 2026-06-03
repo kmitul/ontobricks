@@ -2608,6 +2608,65 @@ class SettingsService:
             ) from e
 
     @staticmethod
+    def get_build_runs_result(
+        domain_name: str,
+        session_mgr: SessionManager,
+        settings: Settings,
+        *,
+        version: Optional[str] = None,
+        limit: int = 100,
+    ) -> Dict[str, Any]:
+        """Return the build-run trace for *domain_name* (newest-first)."""
+        try:
+            domain = get_domain(session_mgr)
+            svc = RegistryService.from_context(domain, settings)
+            if not svc.cfg.is_configured:
+                raise ValidationError("Registry not configured")
+            runs = svc.load_build_runs(domain_name, version=version, limit=limit)
+            return {
+                "success": True,
+                "domain_name": domain_name,
+                "version": version,
+                "runs": runs,
+            }
+        except OntoBricksError:
+            raise
+        except Exception as e:
+            logger.exception("get_build_runs failed for '%s': %s", domain_name, e)
+            raise InfrastructureError(
+                "Failed to load build runs", detail=str(e)
+            ) from e
+
+    @staticmethod
+    def get_build_analytics_result(
+        domain_name: str,
+        session_mgr: SessionManager,
+        settings: Settings,
+        *,
+        version: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Return aggregate build statistics for *domain_name*."""
+        try:
+            domain = get_domain(session_mgr)
+            svc = RegistryService.from_context(domain, settings)
+            if not svc.cfg.is_configured:
+                raise ValidationError("Registry not configured")
+            analytics = svc.build_analytics(domain_name, version=version)
+            return {
+                "success": True,
+                "domain_name": domain_name,
+                "version": version,
+                "analytics": analytics,
+            }
+        except OntoBricksError:
+            raise
+        except Exception as e:
+            logger.exception("get_build_analytics failed for '%s': %s", domain_name, e)
+            raise InfrastructureError(
+                "Failed to load build analytics", detail=str(e)
+            ) from e
+
+    @staticmethod
     def scheduler_status_payload() -> Dict[str, Any]:
         scheduler = SettingsService._get_scheduler()
         return {"success": True, **scheduler.status()}

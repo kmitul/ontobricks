@@ -57,6 +57,38 @@ class ScheduleHistoryEntry(TypedDict, total=False):
     triple_count: int
 
 
+class BuildRunEntry(TypedDict, total=False):
+    """One row in a domain's build-run trace (``build_runs`` table).
+
+    Captures the full statistics of a single Digital Twin build,
+    regardless of which path triggered it (``session`` / ``api`` /
+    ``scheduled``). The grain is the tuple ``(folder, version)``; many
+    entries per tuple are expected and the most recent successful one
+    is considered the "active" build (derived at read time).
+    """
+
+    id: int                  # row id (0 for stores without a serial PK)
+    version: str
+    build_kind: str          # 'session' | 'api' | 'scheduled'
+    status: str              # 'success' | 'error' | 'cancelled'
+    message: str
+    error: str
+    started_at: str          # ISO timestamp
+    finished_at: str         # ISO timestamp
+    duration_s: float
+    triple_count: int
+    entity_count: int
+    relationship_count: int
+    sql_chars: int
+    graph_engine: str
+    sync_mode: str
+    view_table: str
+    graph_name: str
+    task_id: str
+    phase_times: Dict[str, Any]
+    stats: Dict[str, Any]
+
+
 class RegistryStore(ABC):
     """Single seam in front of all registry-shaped JSON storage."""
 
@@ -172,6 +204,64 @@ class RegistryStore(ABC):
         self, folder: str, entry: ScheduleHistoryEntry, *, max_entries: int = 50
     ) -> None:
         """Append *entry* and trim to the last *max_entries* rows."""
+
+    # ------------------------------------------------------------------
+    # Build-run trace (analytics)
+    #
+    # One immutable row per Digital Twin build — across every path
+    # (UI session / external API / scheduler). Linked to the domain
+    # row; grain is the tuple ``(folder, version)``. Unlike
+    # ``schedule_runs`` this is *not* capped — the whole point is a
+    # full history for analytics. All methods are best-effort: a build
+    # must never fail because tracing could not be written.
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def record_build_run(self, folder: str, entry: BuildRunEntry) -> None:
+        """Append a build-run trace row for *folder*. Best-effort; must
+        NOT raise (log + swallow on failure).
+        """
+
+    @abstractmethod
+    def load_build_runs(
+        self,
+        folder: str,
+        *,
+        version: Optional[str] = None,
+        limit: int = 100,
+    ) -> List[BuildRunEntry]:
+        """Newest-first build runs for *folder* (optionally a single
+        *version*), capped at *limit* rows. Empty list on any error.
+        """
+
+    @abstractmethod
+    def build_analytics(
+        self, folder: str, *, version: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Aggregate build statistics for *folder* (optionally scoped to
+        a single *version*).
+
+        Returns a dict with at least::
+
+            {
+              "total_runs": int,
+              "success_runs": int,
+              "failed_runs": int,
+              "success_rate": float,        # 0..1
+              "avg_duration_s": float,
+              "min_duration_s": float,
+              "max_duration_s": float,
+              "last_triple_count": int,
+              "active_build": BuildRunEntry | None,  # latest success
+              "per_version": [               # newest version first
+                {"version": str, "total_runs": int,
+                 "success_runs": int, "last_status": str,
+                 "last_triple_count": int, "last_run": str}
+              ],
+            }
+
+        Empty/zeroed dict on any error.
+        """
 
     # ------------------------------------------------------------------
     # Cohort schedules + history

@@ -395,6 +395,35 @@ class Domain:
         """Build a RegistryService from the current domain session."""
         return RegistryService.from_context(self._s, self._require_settings())
 
+    def list_build_runs_result(
+        self,
+        svc: RegistryService,
+        *,
+        version: Optional[str] = None,
+        limit: int = 200,
+    ) -> Dict[str, Any]:
+        """List recorded build runs for the loaded domain (newest-first)."""
+        try:
+            if not svc.cfg.is_configured:
+                raise ValidationError("Registry not configured")
+            folder = self._s.uc_domain_folder
+            if not folder:
+                raise ValidationError("Domain not saved to registry")
+            runs = svc.load_build_runs(folder, version=version, limit=limit)
+            return {
+                "success": True,
+                "domain_folder": folder,
+                "version": version,
+                "runs": runs,
+            }
+        except OntoBricksError:
+            raise
+        except Exception as e:
+            logger.exception("List build runs failed: %s", e)
+            raise InfrastructureError(
+                "Failed to load build runs", detail=str(e)
+            ) from e
+
     async def _bridge_domain_for_entity_uri(self, entity_uri: str) -> Optional[str]:
         """Resolve which registry domain folder owns *entity_uri* (async)."""
         svc = self.build_registry_service()

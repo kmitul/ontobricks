@@ -7,9 +7,9 @@ Moved from app/frontend/project/routes.py during the front/back split.
 import io
 import json
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Request, Depends
+from fastapi import APIRouter, Request, Depends, Query
 from fastapi.responses import StreamingResponse
 
 from shared.config.settings import get_settings, Settings
@@ -492,6 +492,19 @@ async def list_version_details(
     domain = get_domain(session_mgr)
     p = Domain(domain, settings)
     return p.list_version_details(p.build_registry_service())
+
+
+@router.get("/build-runs")
+async def list_build_runs(
+    version: Optional[str] = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """List build runs recorded for the loaded domain (newest-first)."""
+    domain = get_domain(session_mgr)
+    p = Domain(domain, settings)
+    return p.list_build_runs_result(p.build_registry_service(), version=version, limit=limit)
 
 
 @router.post("/set-version-mcp")

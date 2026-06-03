@@ -6,7 +6,9 @@ Moved from app/frontend/settings/routes.py during the front/back split.
 
 import json
 
-from fastapi import APIRouter, Request, Depends
+from typing import Optional
+
+from fastapi import APIRouter, Request, Depends, Query
 
 from shared.config.settings import get_settings, Settings
 from shared.config.constants import DEFAULT_BASE_URI
@@ -1009,6 +1011,33 @@ async def get_schedule_history(
 async def scheduler_status():
     """Diagnostic: return the APScheduler internal state (running, jobs, next-run times)."""
     return config_service.scheduler_status_payload()
+
+
+@router.get("/build-runs/{domain_name}")
+async def get_build_runs(
+    domain_name: str,
+    version: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=1000),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Return the build-run trace for a domain (newest-first, optional version)."""
+    return config_service.get_build_runs_result(
+        domain_name, session_mgr, settings, version=version, limit=limit
+    )
+
+
+@router.get("/build-analytics/{domain_name}")
+async def get_build_analytics(
+    domain_name: str,
+    version: Optional[str] = Query(default=None),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Return aggregate build statistics for a domain (optional version)."""
+    return config_service.get_build_analytics_result(
+        domain_name, session_mgr, settings, version=version
+    )
 
 
 @router.delete("/schedules/{domain_name}")

@@ -54,6 +54,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (section === 'versions' && typeof loadVersionsList === 'function') {
                 loadVersionsList();
             }
+            // Load build runs when switching to runs section
+            if (section === 'runs' && typeof loadDomainRuns === 'function') {
+                loadDomainRuns();
+            }
             // Load OWL content when switching to owl-content section
             if (section === 'owl-content' && typeof window.loadOwlContent === 'function') {
                 window.loadOwlContent();

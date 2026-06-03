@@ -771,6 +771,31 @@ class RegistryService:
         invalidate_registry_cache(self.cache_key)
         return True, ""
 
+    # -- build-run trace (analytics) ---------------------------------
+
+    def record_build_run(self, folder: str, entry: dict) -> None:
+        """Persist a build-run trace row for *folder* (best-effort).
+
+        Never raises — a failed trace must not break a build. See
+        :meth:`RegistryStore.record_build_run`.
+        """
+        try:
+            self._store.record_build_run(folder, entry)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("record_build_run(%s) raised: %s", folder, exc)
+
+    def load_build_runs(
+        self, folder: str, *, version: Optional[str] = None, limit: int = 100
+    ) -> list:
+        """Newest-first build runs for *folder* (optionally one version)."""
+        return self._store.load_build_runs(folder, version=version, limit=limit)
+
+    def build_analytics(
+        self, folder: str, *, version: Optional[str] = None
+    ) -> dict:
+        """Aggregate build statistics for *folder* (optionally one version)."""
+        return self._store.build_analytics(folder, version=version)
+
     # -- load domain from registry (stateless) -----------------------
 
     def load_latest_domain_data(self, folder: str) -> Tuple[bool, dict, str, str]:

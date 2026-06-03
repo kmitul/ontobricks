@@ -51,6 +51,7 @@ class _InMemoryStore(RegistryStore):
         self._perms: Dict[str, Dict[str, Any]] = {}
         self._schedules: Dict[str, Dict[str, Any]] = {}
         self._history: Dict[str, List[ScheduleHistoryEntry]] = {}
+        self._build_runs: Dict[str, List[Dict[str, Any]]] = {}
         self._global: Dict[str, Any] = {}
         self._initialized = False
 
@@ -137,6 +138,46 @@ class _InMemoryStore(RegistryStore):
         bucket.append(dict(entry))
         if len(bucket) > max_entries:
             del bucket[: len(bucket) - max_entries]
+
+    def record_build_run(self, folder: str, entry: Dict[str, Any]) -> None:
+        runs = self._build_runs.setdefault(folder, [])
+        row = dict(entry)
+        row.setdefault("id", len(runs) + 1)
+        runs.append(row)
+
+    def load_build_runs(
+        self, folder: str, *, version=None, limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        runs = [
+            dict(r)
+            for r in self._build_runs.get(folder, [])
+            if version is None or r.get("version") == version
+        ]
+        runs.reverse()  # newest-first
+        return runs[:limit]
+
+    def build_analytics(self, folder: str, *, version=None) -> Dict[str, Any]:
+        runs = [
+            r
+            for r in self._build_runs.get(folder, [])
+            if version is None or r.get("version") == version
+        ]
+        total = len(runs)
+        successes = [r for r in runs if r.get("status") == "success"]
+        durations = [float(r.get("duration_s", 0) or 0) for r in successes]
+        active = successes[-1] if successes else None
+        return {
+            "total_runs": total,
+            "success_runs": len(successes),
+            "failed_runs": total - len(successes),
+            "success_rate": (len(successes) / total) if total else 0.0,
+            "avg_duration_s": (sum(durations) / len(durations)) if durations else 0.0,
+            "min_duration_s": min(durations) if durations else 0.0,
+            "max_duration_s": max(durations) if durations else 0.0,
+            "last_triple_count": int(active.get("triple_count", 0)) if active else 0,
+            "active_build": dict(active) if active else None,
+            "per_version": [],
+        }
 
     def load_global_config(self) -> Dict[str, Any]:
         return dict(self._global)
@@ -288,6 +329,64 @@ class TestStoreContract:
         history = store.load_schedule_history("a")
         assert len(history) == 3
         assert [h["timestamp"] for h in history] == ["2", "3", "4"]
+
+    def test_build_runs_round_trip_newest_first(self, store):
+        for i in range(3):
+            store.record_build_run(
+                "demo",
+                {
+                    "version": "1",
+                    "build_kind": "session",
+                    "status": "success",
+                    "started_at": str(i),
+                    "duration_s": float(i),
+                    "triple_count": i * 10,
+                },
+            )
+        runs = store.load_build_runs("demo")
+        assert len(runs) == 3
+        # Newest-first (last recorded comes back first).
+        assert [r["started_at"] for r in runs] == ["2", "1", "0"]
+
+    def test_build_runs_filter_by_version(self, store):
+        store.record_build_run("demo", {"version": "1", "status": "success"})
+        store.record_build_run("demo", {"version": "2", "status": "success"})
+        store.record_build_run("demo", {"version": "2", "status": "error"})
+        v2 = store.load_build_runs("demo", version="2")
+        assert len(v2) == 2
+        assert all(r["version"] == "2" for r in v2)
+
+    def test_build_analytics_aggregates_and_active(self, store):
+        store.record_build_run(
+            "demo",
+            {"version": "1", "status": "success", "duration_s": 2.0,
+             "triple_count": 100, "started_at": "1"},
+        )
+        store.record_build_run(
+            "demo",
+            {"version": "1", "status": "error", "duration_s": 0.0,
+             "started_at": "2"},
+        )
+        store.record_build_run(
+            "demo",
+            {"version": "1", "status": "success", "duration_s": 4.0,
+             "triple_count": 200, "started_at": "3"},
+        )
+        a = store.build_analytics("demo")
+        assert a["total_runs"] == 3
+        assert a["success_runs"] == 2
+        assert a["failed_runs"] == 1
+        assert abs(a["success_rate"] - (2 / 3)) < 1e-9
+        assert abs(a["avg_duration_s"] - 3.0) < 1e-9
+        # Active build = latest successful run (triple_count=200).
+        assert a["active_build"] is not None
+        assert a["last_triple_count"] == 200
+
+    def test_build_analytics_empty_domain(self, store):
+        a = store.build_analytics("ghost")
+        assert a["total_runs"] == 0
+        assert a["active_build"] is None
+        assert a["success_rate"] == 0.0
 
     def test_table_row_counts_defaults_to_zero(self, store):
         # The base class returns zero for every requested table — only

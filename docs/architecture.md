@@ -695,7 +695,7 @@ Unity Catalog
 
 ### Lakebase layout
 
-The Postgres schema (default `ontobricks_registry`) holds seven
+The Postgres schema (default `ontobricks_registry`) holds eight
 relational tables:
 
 | Table | Purpose |
@@ -707,6 +707,7 @@ relational tables:
 | `domain_permissions` | Per-domain ACL (replaces `.domain_permissions.json`) |
 | `schedules` | Active scheduled-build configuration |
 | `schedule_runs` | Ring-buffered run history per domain |
+| `build_runs` | Append-only build-run trace (all paths) keyed by `(domain_id, version)` for analytics; active build = latest successful run |
 
 Authentication is fully app-managed: the Databricks Apps runtime
 injects `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER` and OntoBricks mints a

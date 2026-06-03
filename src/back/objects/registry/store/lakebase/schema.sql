@@ -132,3 +132,40 @@ CREATE TABLE IF NOT EXISTS schedule_runs (
 
 CREATE INDEX IF NOT EXISTS idx_schedule_runs_domain
     ON schedule_runs(registry_id, domain_name, run_ts DESC);
+
+-- ----------------------------------------------------------------
+-- Build-run trace (one immutable row per Digital Twin build, all
+-- paths: UI session / external API / scheduler). Linked to the
+-- domain row; grain is the tuple (domain_id, version). Many rows per
+-- tuple are expected — the "active" build for a (domain, version) is
+-- the most recent successful row by ``started_at`` (derived, no flag).
+-- Powers the registry Build Analytics panel.
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS build_runs (
+    id                  bigserial PRIMARY KEY,
+    domain_id           uuid NOT NULL
+                        REFERENCES domains(id) ON DELETE CASCADE,
+    version             text NOT NULL,
+    build_kind          text NOT NULL DEFAULT 'session',  -- session|api|scheduled
+    status              text NOT NULL,                    -- success|error|cancelled
+    message             text NOT NULL DEFAULT '',
+    error               text NOT NULL DEFAULT '',
+    started_at          timestamptz NOT NULL DEFAULT now(),
+    finished_at         timestamptz,
+    duration_s          double precision NOT NULL DEFAULT 0,
+    triple_count        bigint NOT NULL DEFAULT 0,
+    entity_count        integer NOT NULL DEFAULT 0,
+    relationship_count  integer NOT NULL DEFAULT 0,
+    sql_chars           integer NOT NULL DEFAULT 0,
+    graph_engine        text NOT NULL DEFAULT '',
+    sync_mode           text NOT NULL DEFAULT '',
+    view_table          text NOT NULL DEFAULT '',
+    graph_name          text NOT NULL DEFAULT '',
+    task_id             text NOT NULL DEFAULT '',
+    phase_times         jsonb NOT NULL DEFAULT '{}'::jsonb,
+    stats               jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at          timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_build_runs_domain_version
+    ON build_runs(domain_id, version, started_at DESC);
