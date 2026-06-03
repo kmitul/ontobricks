@@ -854,20 +854,18 @@ async def sync_info(
         )
         return out
 
-    async def _dt_exist():
-        t_s = _t.monotonic()
-        # Build section must reflect the live state of Lakebase: never serve a
-        # stale `lakebase_table_exists=False` left behind by a previous timeout.
-        out = await dt.get_or_fetch_dt_existence(settings, force_refresh=True)
-        logger.debug(
-            "sync_info: dt existence took %.0fms", (_t.monotonic() - t_s) * 1000
-        )
-        return out
+    # DT existence is served cache-first so the Build page paints instantly.
+    # The live probe is a cold SQL-warehouse / Lakebase wake-up that used to
+    # block this endpoint for tens of seconds; it now runs off the request path.
+    # The frontend confirms the live state with a non-blocking follow-up to
+    # `/dtwin/sync/dt-existence` whenever `dt_existence_pending` is set.
+    cached_existence = dt.get_ts_cache("dt_existence")
+    dt_exist = cached_existence or dt.pending_dt_existence(settings)
+    dt_existence_pending = True
 
-    _, ts_status, dt_exist = await asyncio.gather(
+    _, ts_status = await asyncio.gather(
         _schedule_sync(),
         _graph_status(),
-        _dt_exist(),
     )
 
     if domain.last_build and domain.last_build != last_build:
@@ -889,6 +887,7 @@ async def sync_info(
         "triplestore_status": ts_status,
         "domain_info": domain_info_data,
         "dt_existence": dt_exist,
+        "dt_existence_pending": dt_existence_pending,
         "changes": {"needs_rebuild": needs_rebuild},
     }
 
