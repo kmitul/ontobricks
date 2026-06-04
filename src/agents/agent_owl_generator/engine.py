@@ -308,6 +308,7 @@ def run_agent(
     domain_version: Optional[str] = None,
     selected_tables: Optional[List[str]] = None,
     selected_docs: Optional[List[str]] = None,
+    warehouse_id: Optional[str] = None,
     on_step: Optional[Callable[[str], None]] = None,
 ) -> AgentResult:
     """Run the ontology-generation agent.
@@ -338,6 +339,7 @@ def run_agent(
         domain_name=domain_name or "",
         domain_folder=domain_folder or "",
         domain_version=domain_version or "1",
+        warehouse_id=warehouse_id or "",
         metadata=metadata or {},
     )
     logger.info("Agent context created — host=%s, registry=%s", ctx.host, ctx.registry)

@@ -268,8 +268,20 @@ Click **Wizard** in the sidebar to generate an ontology automatically from your 
 
 1. Select the **LLM Endpoint** (a Databricks Model Serving endpoint)
 2. Choose which **catalog/schema** metadata to include
-3. Write custom **Guidelines** or pick a **Quick Template**
-4. Click **Generate** to create the ontology
+3. (Optional) Select uploaded **Documents** to enrich the generation
+4. Write custom **Guidelines** or pick a **Quick Template**
+5. Click **Generate** to create the ontology
+
+#### Documents (PDF and other formats)
+
+Documents uploaded under **Domain → Documents** feed the Wizard. Plain-text
+files (`.txt`, `.md`, `.json`, `.csv`, `.xml`) are read directly. Binary
+documents (`.pdf`, `.docx`, `.pptx`, images) are automatically converted to
+markdown using the Databricks `ai_parse_document` function, which runs on your
+configured **SQL warehouse** — so a warehouse must be configured and its
+identity must have read access to the documents volume. Without a SQL warehouse,
+binary documents are skipped and generation uses metadata, guidelines, and text
+documents only.
 
 #### Quick Templates
 

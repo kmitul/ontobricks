@@ -78,6 +78,7 @@ class Ontology:
         guidelines: str = "",
         options: Optional[Dict[str, Any]] = None,
         selected_docs: Optional[List[str]] = None,
+        warehouse_id: str = "",
         on_step: Optional[Callable[[str], None]] = None,
     ) -> "AgentResult":
         """Run ``agent_owl_generator`` for this project (blocking).
@@ -114,6 +115,7 @@ class Ontology:
             domain_version=s.current_version,
             selected_tables=selected_tables,
             selected_docs=list(selected_docs or []),
+            warehouse_id=warehouse_id or "",
             on_step=on_step,
         )
 
@@ -126,6 +128,7 @@ class Ontology:
         options: Optional[Dict[str, Any]] = None,
         guidelines: str = "",
         selected_docs: Optional[List[str]] = None,
+        warehouse_id: str = "",
         on_step: Optional[Callable[[str], None]] = None,
     ) -> "BusinessRulesAgentResult":
         """Run ``agent_business_rules_generator`` for this project (blocking).
@@ -158,6 +161,7 @@ class Ontology:
             domain_folder=s.domain_folder,
             domain_version=s.current_version,
             selected_docs=list(selected_docs or []),
+            warehouse_id=warehouse_id or "",
             on_step=on_step,
         )
 

@@ -13,6 +13,7 @@ from back.core.databricks.WorkspaceService import WorkspaceService  # noqa: F401
 from back.core.databricks.DashboardService import DashboardService  # noqa: F401
 from back.core.databricks.MetadataService import MetadataService  # noqa: F401
 from back.core.databricks.UCDomainIO import UCDomainIO  # noqa: F401
+from back.core.databricks.DocumentExtractor import DocumentExtractor  # noqa: F401
 
 # Backward-compatible wrappers for previously module-level functions
 is_databricks_app = DatabricksAuth.is_databricks_app
@@ -40,6 +41,7 @@ __all__ = [
     "DashboardService",
     "MetadataService",
     "UCDomainIO",
+    "DocumentExtractor",
     "is_databricks_app",
     "normalize_host",
     "get_workspace_host",

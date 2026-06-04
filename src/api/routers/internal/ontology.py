@@ -21,6 +21,7 @@ from back.core.helpers import (
     get_databricks_host_and_token,
     make_volume_file_service,
     require_serving_llm,
+    resolve_warehouse_id,
 )
 from agents.serialization import serialize_agent_steps
 from back.core.industry import (
@@ -1013,6 +1014,7 @@ async def generate_business_rules_async(
 
     domain = get_domain(session_mgr)
     host, token, llm_endpoint = require_serving_llm(domain, settings)
+    warehouse_id = resolve_warehouse_id(domain, settings)
 
     tm = get_task_manager()
     task = tm.create_task(
@@ -1040,6 +1042,7 @@ async def generate_business_rules_async(
                 options=options,
                 guidelines=guidelines,
                 selected_docs=documents,
+                warehouse_id=warehouse_id,
                 on_step=on_step,
             )
 
@@ -1614,6 +1617,7 @@ async def generate_ontology_async(
 
     domain = get_domain(session_mgr)
     host, token, llm_endpoint = require_serving_llm(domain, settings)
+    warehouse_id = resolve_warehouse_id(domain, settings)
 
     tm = get_task_manager()
     task = tm.create_task(
@@ -1650,6 +1654,7 @@ async def generate_ontology_async(
                 guidelines=guidelines,
                 options=options,
                 selected_docs=documents,
+                warehouse_id=warehouse_id,
                 on_step=on_step,
             )
 

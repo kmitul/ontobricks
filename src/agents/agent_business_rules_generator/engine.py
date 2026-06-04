@@ -354,6 +354,7 @@ def run_agent(
     domain_folder: Optional[str] = None,
     domain_version: Optional[str] = None,
     selected_docs: Optional[List[str]] = None,
+    warehouse_id: Optional[str] = None,
     on_step: Optional[Callable[[str], None]] = None,
 ) -> AgentResult:
     """Run the business-rules generation agent.
@@ -377,6 +378,7 @@ def run_agent(
         domain_name=domain_name or "",
         domain_folder=domain_folder or "",
         domain_version=domain_version or "1",
+        warehouse_id=warehouse_id or "",
         ontology=ontology_design or {},
     )
 

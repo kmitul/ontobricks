@@ -218,6 +218,33 @@ These agents do not query the triple store at runtime; they operate on the
 | `agent_ontology_assistant` | Conversational ontology editing | Dozens of tools mutating the in-session ontology | REST | Python ontology object model |
 | `agent_dtwin_chat` | Conversational graph querying | See §6 | REST + **GraphQL** + **SPARQL** | **Spark SQL** + **Cypher** (engine-side) |
 
+### Document reading (`documents.read` / `read_document`)
+
+Both `agent_owl_generator` and `agent_business_rules_generator` read uploaded
+domain documents from the UC Volume via `read_document`:
+
+- **Plain text** (`.txt`, `.md`, `.json`, `.csv`, `.xml`) is fetched through the
+  Files API and decoded as UTF-8.
+- **Binary documents** (`.pdf`, `.docx`, `.pptx`, images) are converted to
+  markdown on the fly using the Databricks **`ai_parse_document`** SQL function
+  (output schema pinned to v2.0):
+  `SELECT to_json(ai_parse_document(content, map('version', '2.0'))) FROM READ_FILES(<volume path>, format => 'binaryFile')`.
+  This runs on the configured **SQL warehouse**, so the warehouse identity (app
+  service principal or user) must have `READ VOLUME` on the documents volume.
+  The function returns a `VARIANT` (output schema **v2.0**, verified live): text
+  is read from `document.elements[].content` (figures expose an AI-generated
+  `description`); `document.pages[]` only carries `id`/`image_uri`. The extractor
+  prefers elements and keeps page-content / markdown-blob fallbacks for other
+  schema versions. The extraction engine is a generic, reusable class —
+  `back.core.databricks.DocumentExtractor` (`src/back/core/databricks/DocumentExtractor.py`,
+  exposing `supports()` / `is_available()` / `extract()` /
+  `extract_text_from_parsed()`) — so it can be used outside the agents and
+  swapped for a different parser without changing callers.
+- When no SQL warehouse is configured, binary documents are skipped (the tool
+  returns an explanatory message) and generation proceeds from metadata + text
+  documents only. Parsed text is cached per file for the duration of an agent
+  run and truncated to the per-document character cap.
+
 ---
 
 ## 8. Reasoning engine — engine map
