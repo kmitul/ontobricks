@@ -138,6 +138,36 @@ The script:
 | `--wait N` | `120` | Seconds to wait for `AVAILABLE` |
 | `--dry-run` | — | Print plan without executing |
 
+### 3.1b — One-click provisioning from Settings (in-app alternative)
+
+Admins can provision a graph DB end-to-end from the UI instead of running the
+two scripts by hand. In **Settings → Lakebase → Connection** tab there is a
+**"Create graph DB from scratch"** card: fill in the instance/project name,
+compute capacity, branch, Postgres database, graph schema, and the MCP app
+name, then click **Create graph DB**. The action runs as an async job (a
+progress bar + per-step log update live, polling `GET /tasks/{id}` like a
+Digital Twin build) and performs the same flow as
+`scripts/setup-lakebase.sh` + `scripts/bootstrap-lakebase-perms.sh`:
+
+1. Create the Lakebase instance (via the synced-tables-compatible
+   `/api/2.0/database/instances` API) and wait for `AVAILABLE`.
+2. Create the Postgres database and the graph schema.
+3. Grant `CAN_USE` on the project and `USAGE/CREATE/DML` on the schema to the
+   app **and** MCP service principals; optionally grant `ALL_PRIVILEGES` on the
+   configured UC catalog (managed-sync only).
+
+On success the chosen project/branch/database/schema are written into
+`graph_engine_config`, so the Connection pickers reflect the new target.
+
+> **Permission model (unchanged — only automated).** The button runs as the
+> app's **own service principal**, not a human. It therefore needs the SP to be
+> allowed to create Lakebase instances; if it is not, the job fails on the first
+> step with a clear message. Schema grants to the MCP SP are best-effort and
+> surfaced as warnings when the MCP Postgres role does not exist yet. In those
+> cases the shell scripts (`POST /api/2.0/database/instances` as a human owner)
+> remain the documented fallback — re-run `scripts/bootstrap-lakebase-perms.sh`
+> after the apps have connected once.
+
 ### 3.2 — After the script
 
 Copy the printed `db-…` segment into `scripts/deploy.config.sh`:

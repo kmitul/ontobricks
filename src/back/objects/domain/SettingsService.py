@@ -1282,10 +1282,22 @@ class SettingsService:
                         row2 = cur.fetchone()
                         table_count = int(row2[0]) if row2 else 0
         except Exception as exc:
+            # A failed connection / missing database is a configuration
+            # condition, not a server error — return a graceful result the UI
+            # renders as a warning instead of surfacing a scary 502.
             logger.warning("graph_engine_lakebase_health probe failed: %s", exc)
-            raise InfrastructureError(
-                "Lakebase health probe failed", detail=str(exc)
-            ) from exc
+            return {
+                "success": False,
+                "reason": "probe_failed",
+                "message": f"Lakebase health probe failed: {exc}",
+                "host": host_display,
+                "port": port,
+                "bound_database": base_db,
+                "effective_database": effective_db,
+                "graph_schema": schema,
+                "schema_exists": False,
+                "tables_in_schema": 0,
+            }
 
         out: Dict[str, Any] = {
             "success": True,
@@ -1511,6 +1523,141 @@ class SettingsService:
             raise InfrastructureError(
                 "list Lakebase Postgres schemas failed", detail=str(exc)
             ) from exc
+
+    @staticmethod
+    def graph_engine_lakebase_provision_result(
+        params: Dict[str, Any],
+        email: str,
+        user_token: str,
+        session_mgr: SessionManager,
+        settings: Settings,
+    ) -> Dict[str, Any]:
+        """Provision a brand-new Lakebase graph DB end-to-end (admin only).
+
+        Creates the Lakebase instance/project + Postgres database + graph
+        schema and grants ``CAN_USE`` on the project plus schema privileges
+        to the app + MCP service principals — the in-app equivalent of
+        ``scripts/setup-lakebase.sh`` + ``scripts/bootstrap-lakebase-perms.sh``.
+
+        Runs in a worker thread tracked by the shared :class:`TaskManager`;
+        the route returns a ``task_id`` the UI polls via ``GET /tasks/{id}``.
+        """
+        import threading
+
+        from back.core.graphdb.lakebase.LakebaseBase import (
+            default_schema,
+            validate_graph_schema,
+        )
+        from back.core.graphdb.lakebase.provisioner import (
+            DEFAULT_BRANCH,
+            DEFAULT_CAPACITY,
+            LakebaseGraphProvisioner,
+            provision_steps,
+        )
+        from back.core.task_manager import get_task_manager
+
+        SettingsService.require_admin_error(email, user_token, session_mgr, settings)
+
+        name = (params.get("name") or "").strip()
+        if not name:
+            raise ValidationError("A Lakebase instance/project name is required.")
+        database = (params.get("database") or "").strip()
+        if not database:
+            raise ValidationError("A Postgres database name is required.")
+        capacity = (params.get("capacity") or DEFAULT_CAPACITY).strip()
+        branch = (params.get("branch") or DEFAULT_BRANCH).strip()
+        try:
+            schema = validate_graph_schema(
+                (params.get("schema") or "").strip() or default_schema()
+            )
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+
+        pg_user = os.environ.get("PGUSER", "").strip()
+        if not pg_user:
+            raise ValidationError(
+                "PGUSER is not set — the provisioning button only works when the "
+                "app is bound to Lakebase (Databricks App mode)."
+            )
+
+        # Apps whose service principals receive the grants: the running app
+        # first, then the MCP app (UI override -> MCP_APP_NAME env -> default).
+        app_name = (settings.ontobricks_app_name or "").strip()
+        mcp_app_name = (
+            (params.get("mcp_app_name") or "").strip()
+            or os.environ.get("MCP_APP_NAME", "").strip()
+            or "mcp-ontobricks"
+        )
+        app_names: List[str] = []
+        for candidate in (app_name, mcp_app_name):
+            if candidate and candidate not in app_names:
+                app_names.append(candidate)
+        if not app_names:
+            raise ValidationError(
+                "Could not determine the app name to grant — set ONTOBRICKS_APP_NAME."
+            )
+
+        # Resolve sync mode + UC catalog from the saved engine config so the
+        # managed_synced UC grant targets the right catalog.
+        _, host, token, registry_cfg = SettingsService._resolve_context(
+            session_mgr, settings
+        )
+        global_config_service.load(host, token, registry_cfg, force=True)
+        saved_cfg = global_config_service.get_graph_engine_config(
+            host, token, registry_cfg
+        )
+        saved_cfg = dict(saved_cfg) if isinstance(saved_cfg, dict) else {}
+        sync_mode = (saved_cfg.get("sync_mode") or "app_managed").strip()
+        uc_catalog = ""
+        if bool(params.get("grant_uc_catalog")) and sync_mode == "managed_synced":
+            uc_catalog = (saved_cfg.get("sync_uc_catalog") or "").strip()
+
+        def _persist_cfg(result: Dict[str, Any]) -> None:
+            merged = dict(saved_cfg)
+            merged["database"] = result.get("database", database)
+            merged["schema"] = result.get("schema", schema)
+            merged["lakebase_project"] = result.get("instance", name)
+            merged["lakebase_branch"] = result.get("branch", branch)
+            ok, msg = global_config_service.set_graph_engine_config(
+                host, token, registry_cfg, merged
+            )
+            if not ok:
+                raise InfrastructureError(msg)
+            SettingsService._mirror_graph_engine_to_domain_registry(
+                session_mgr, config=merged
+            )
+
+        tm = get_task_manager()
+        task = tm.create_task(
+            name="Lakebase Graph DB Provision",
+            task_type="lakebase_provision",
+            steps=provision_steps(grant_uc=bool(uc_catalog)),
+        )
+
+        def run_provision() -> None:
+            LakebaseGraphProvisioner(
+                tm=tm,
+                task_id=task.id,
+                name=name,
+                capacity=capacity,
+                branch=branch,
+                database=database,
+                schema=schema,
+                app_names=app_names,
+                sync_mode=sync_mode,
+                uc_catalog=uc_catalog,
+                pg_user=pg_user,
+                on_success=_persist_cfg,
+            ).run()
+
+        thread = threading.Thread(target=run_provision, daemon=True)
+        thread.start()
+
+        return {
+            "success": True,
+            "task_id": task.id,
+            "message": "Lakebase graph DB provisioning started",
+        }
 
     @staticmethod
     def _lakebase_kwargs_for_branch(

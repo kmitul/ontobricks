@@ -726,6 +726,46 @@ document.addEventListener('DOMContentLoaded', function () {
         }
     }
 
+    /**
+     * Ensure `sel` has `value` selected, matching an existing option by exact
+     * value or by short segment (last path component) so we reuse a real
+     * cascade-loaded option when present, and only inject a synthetic option
+     * when the value is genuinely absent. Keeps the field non-empty.
+     */
+    function _ensureSelectedOption(sel, value, label) {
+        if (!sel || !value) return;
+        const short = value.indexOf('/') >= 0 ? value.split('/').pop() : value;
+        let opt = Array.from(sel.options).find((op) =>
+            op.value === value ||
+            op.value === short ||
+            (op.value.indexOf('/') >= 0 && op.value.split('/').pop() === short)
+        );
+        if (!opt) {
+            opt = document.createElement('option');
+            opt.value = value;
+            opt.textContent = label || short;
+            sel.appendChild(opt);
+        }
+        sel.value = opt.value;
+        sel.disabled = false;
+    }
+
+    /**
+     * Guarantee the 4 Connection-tab fields (project, branch, database,
+     * schema) always reflect the saved registry config — even when the live
+     * workspace cascade can't list/match them (stale or unreachable project).
+     */
+    function prefillLakebaseConnectionFromConfig() {
+        let o = {};
+        try { o = JSON.parse(document.getElementById('graphEngineConfig')?.value || '{}'); } catch (_) {}
+        _ensureSelectedOption(document.getElementById('lakebaseProject'),    o.lakebase_project || '');
+        _ensureSelectedOption(document.getElementById('lakebaseBranch'),     o.lakebase_branch  || '');
+        _ensureSelectedOption(document.getElementById('lakebaseGraphDb'),    o.database         || '');
+        _ensureSelectedOption(document.getElementById('lakebaseGraphSchema'), o.schema          || '');
+        const schIn = document.getElementById('lakebaseGraphSchemaInput');
+        if (schIn && o.schema) schIn.value = o.schema;
+    }
+
     function applyLakebaseFormFromConfigTextarea() {
         const ta         = document.getElementById('graphEngineConfig');
         const syncModeEl = document.getElementById('lakebaseSyncMode');
@@ -847,6 +887,9 @@ document.addEventListener('DOMContentLoaded', function () {
             if (sel.value === 'lakebase') {
                 // auto-load the cascading chain if a project is already configured
                 await loadLakebaseProjects();
+                // guarantee the 4 fields always show the saved registry config,
+                // even when the cascade couldn't list/match a stale project
+                prefillLakebaseConnectionFromConfig();
                 await loadLakebaseGraphHealth();
                 // restore UC catalog/schema dropdowns when managed_synced was persisted
                 const syncModeEl = document.getElementById('lakebaseSyncMode');
@@ -866,6 +909,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (this.value === 'lakebase') {
             applyLakebaseFormFromConfigTextarea();
             await loadLakebaseProjects();
+            prefillLakebaseConnectionFromConfig();
             await loadLakebaseGraphHealth();
         }
     });
@@ -1506,6 +1550,195 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     document.getElementById('btnLoadLakebaseObjects')?.addEventListener('click', loadLakebaseObjects);
+
+    // ── Provision new graph DB from scratch ──────────────────────────────────
+    const PROVISION_TASK_KEY = 'ontobricks_lakebase_provision_task';
+
+    function updateProvProgress(percent, text) {
+        const bar = document.getElementById('provProgressBar');
+        const status = document.getElementById('provStatusText');
+        if (bar) {
+            const pct = Math.max(0, Math.min(100, percent || 0));
+            bar.style.width = pct + '%';
+            bar.textContent = pct + '%';
+        }
+        if (status && text) status.textContent = text;
+    }
+
+    function renderProvStepLog(task) {
+        const list = document.getElementById('provStepLog');
+        if (!list || !task || !Array.isArray(task.steps)) return;
+        const icon = (s) => {
+            if (s === 'completed') return '<i class="bi bi-check-circle-fill text-success me-2"></i>';
+            if (s === 'running')   return '<span class="spinner-border spinner-border-sm text-primary me-2"></span>';
+            if (s === 'failed')    return '<i class="bi bi-x-circle-fill text-danger me-2"></i>';
+            if (s === 'skipped')   return '<i class="bi bi-dash-circle text-muted me-2"></i>';
+            return '<i class="bi bi-circle text-muted me-2"></i>';
+        };
+        const rows = task.steps.map(s => {
+            // Surface the live message under the running step and the error
+            // under the failed step so each step has a visible log line.
+            let detail = '';
+            if (s.status === 'running' && task.message) {
+                detail = '<div class="small text-muted ms-4">' +
+                    escapeHtmlSettings(task.message) + '</div>';
+            } else if (s.status === 'failed' && task.error) {
+                detail = '<div class="small text-danger ms-4">' +
+                    escapeHtmlSettings(task.error) + '</div>';
+            }
+            return '<li class="list-group-item bg-transparent px-0 py-1">' +
+                '<div class="d-flex align-items-center">' +
+                icon(s.status) + '<span>' +
+                escapeHtmlSettings(s.description || s.name) + '</span></div>' +
+                detail + '</li>';
+        });
+        list.innerHTML = rows.join('');
+    }
+
+    function _provDone() {
+        const btn = document.getElementById('btnProvisionLakebaseGraph');
+        if (btn) btn.disabled = false;
+    }
+
+    async function monitorProvisionTask(taskId) {
+        const pollInterval = 1500;
+        const area = document.getElementById('provProgressArea');
+        if (area) area.classList.remove('d-none');
+        while (true) {
+            try {
+                await new Promise(r => setTimeout(r, pollInterval));
+                const resp = await fetch('/tasks/' + encodeURIComponent(taskId), { credentials: 'same-origin' });
+                const data = await resp.json();
+                if (!data.success) throw new Error('Task not found');
+                const task = data.task;
+                updateProvProgress(task.progress || 0, task.message || '');
+                renderProvStepLog(task);
+
+                if (task.status === 'completed') {
+                    sessionStorage.removeItem(PROVISION_TASK_KEY);
+                    const warnings = (task.result && task.result.warnings) || [];
+                    if (warnings.length) {
+                        showNotification('Graph DB created with ' + warnings.length +
+                            ' warning(s): ' + warnings.join(' | '), 'warning', 8000);
+                    } else {
+                        showNotification('Lakebase graph DB created successfully!', 'success', 4000);
+                    }
+                    _provDone();
+                    // Refresh the connection pickers so the new project shows up.
+                    if (typeof loadLakebaseProjects === 'function') loadLakebaseProjects();
+                    if (typeof refreshTasks === 'function') refreshTasks();
+                    break;
+                } else if (task.status === 'failed') {
+                    sessionStorage.removeItem(PROVISION_TASK_KEY);
+                    showNotification('Provisioning failed: ' + (task.error || 'Unknown error'), 'error', 8000);
+                    _provDone();
+                    break;
+                } else if (task.status === 'cancelled') {
+                    sessionStorage.removeItem(PROVISION_TASK_KEY);
+                    showNotification('Provisioning was cancelled', 'warning');
+                    _provDone();
+                    break;
+                }
+            } catch (err) {
+                sessionStorage.removeItem(PROVISION_TASK_KEY);
+                showNotification('Provisioning monitoring failed: ' + (err.message || 'unknown'), 'error');
+                _provDone();
+                break;
+            }
+        }
+    }
+
+    // Lowercase + restrict to [a-z0-9_-]; mirrors the backend normaliser so
+    // the value the operator sees matches what gets created.
+    function normalizeProvName(raw) {
+        return (raw || '').trim().toLowerCase()
+            .replace(/[^a-z0-9_-]+/g, '_')
+            .replace(/^[-_]+|[-_]+$/g, '');
+    }
+
+    // Per-keystroke variant: 1:1 char replacement (preserves caret position)
+    // and no edge trimming so the operator can still type a leading "_".
+    function normalizeProvNameLive(raw) {
+        return (raw || '').toLowerCase().replace(/[^a-z0-9_-]/g, '_');
+    }
+
+    async function provisionLakebaseGraph() {
+        const btn = document.getElementById('btnProvisionLakebaseGraph');
+        const name = normalizeProvName(document.getElementById('provInstanceName')?.value);
+        const database = normalizeProvName(document.getElementById('provDatabase')?.value);
+        if (!name || !database) {
+            showNotification('Instance name and Postgres database are required.', 'warning');
+            return;
+        }
+        const payload = {
+            name: name,
+            capacity: document.getElementById('provCapacity')?.value || 'CU_2',
+            branch: normalizeProvName(document.getElementById('provBranch')?.value) || 'production',
+            database: database,
+            schema: normalizeProvName(document.getElementById('provSchema')?.value) || 'ontobricks_graph',
+            mcp_app_name: (document.getElementById('provMcpAppName')?.value || '').trim(),
+            grant_uc_catalog: !!document.getElementById('provGrantUcCatalog')?.checked,
+        };
+        if (btn) btn.disabled = true;
+        const list = document.getElementById('provStepLog');
+        if (list) list.innerHTML = '';
+        updateProvProgress(0, 'Starting…');
+        const area = document.getElementById('provProgressArea');
+        if (area) area.classList.remove('d-none');
+
+        try {
+            const resp = await fetch('/settings/graph-engine/lakebase-provision', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin',
+                body: JSON.stringify(payload),
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) {
+                showNotification('Error: ' + (data.message || data.detail || 'Failed to start provisioning'), 'error', 6000);
+                _provDone();
+                return;
+            }
+            sessionStorage.setItem(PROVISION_TASK_KEY, data.task_id);
+            monitorProvisionTask(data.task_id);
+        } catch (err) {
+            showNotification('Error: ' + err.message, 'error', 6000);
+            _provDone();
+        }
+    }
+
+    document.getElementById('btnProvisionLakebaseGraph')?.addEventListener('click', provisionLakebaseGraph);
+
+    // Live-normalise the name fields on every keystroke so the operator always
+    // sees a value that matches what the backend will create (lowercase,
+    // [a-z0-9_-] only). The caret is restored since the replacement is 1:1.
+    ['provInstanceName', 'provDatabase', 'provSchema'].forEach((id) => {
+        document.getElementById(id)?.addEventListener('input', (e) => {
+            const el = e.target;
+            const start = el.selectionStart;
+            const end = el.selectionEnd;
+            const next = normalizeProvNameLive(el.value);
+            if (next !== el.value) {
+                el.value = next;
+                try { el.setSelectionRange(start, end); } catch (_) { /* ignore */ }
+            }
+        });
+    });
+
+    // Resume a provisioning task across reloads (reopen the modal so the
+    // live progress is visible again).
+    (function _resumeProvisionTask() {
+        const taskId = sessionStorage.getItem(PROVISION_TASK_KEY);
+        if (taskId) {
+            const btn = document.getElementById('btnProvisionLakebaseGraph');
+            if (btn) btn.disabled = true;
+            const modalEl = document.getElementById('lakebaseProvisionModal');
+            if (modalEl && window.bootstrap) {
+                bootstrap.Modal.getOrCreateInstance(modalEl).show();
+            }
+            monitorProvisionTask(taskId);
+        }
+    })();
 
     _initSchemaToggle();
 

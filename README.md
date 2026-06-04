@@ -103,6 +103,15 @@ not take. Open the app and click **Settings > Registry > Initialize**
 to create the Lakebase schema; re-run `make bootstrap-lakebase` once
 afterwards so the freshly created schema picks up `USAGE/DML`.
 
+> **One-click graph DB provisioning.** Admins can stand up a brand-new graph
+> store without the shell scripts: **Settings > Lakebase > Connection** has a
+> **"Create graph DB from scratch"** button that provisions the Lakebase
+> instance + database + schema and applies all grants (app + MCP service
+> principals) as an async job with live progress. It automates
+> `scripts/setup-lakebase.sh` + `scripts/bootstrap-lakebase-perms.sh` (which
+> remain the fallback when the app SP lacks instance-creation rights). See
+> `docs/lakebase-graphdb.md` §3.1b.
+
 > **Lakebase deploy targets.** Pick a Databricks Lakebase Autoscaling
 > project + branch and a Postgres database, then set the
 > `LAKEBASE_PROJECT`, `LAKEBASE_BRANCH`,

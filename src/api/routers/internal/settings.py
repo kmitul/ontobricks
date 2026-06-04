@@ -955,6 +955,32 @@ async def post_graph_engine_lakebase_drop_object(
         )
 
 
+@router.post(
+    "/graph-engine/lakebase-provision",
+    dependencies=[Depends(require(ROLE_ADMIN))],
+)
+async def post_graph_engine_lakebase_provision(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Provision a new Lakebase graph DB from scratch (admin only, async).
+
+    Creates the Lakebase instance/project + Postgres database + graph schema
+    and grants the app + MCP service principals. Returns a ``task_id`` the UI
+    polls via ``GET /tasks/{id}``.
+
+    Body: ``{ name, capacity, branch, database, schema, mcp_app_name,
+    grant_uc_catalog }``.
+    """
+    data = await request.json()
+    email, _dn, user_token, _ur, _udr = _settings_request_identity(request)
+    with map_route_errors("provision Lakebase graph DB", logger):
+        return config_service.graph_engine_lakebase_provision_result(
+            data, email, user_token, session_mgr, settings
+        )
+
+
 @router.post("/graph-engine-config")
 async def set_graph_engine_config(
     request: Request,
