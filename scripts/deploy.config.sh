@@ -59,7 +59,7 @@
 # matching `FOO` from the environment instead (see header).
 
 # 1. Apps
-DEFAULT_APP_NAME="ontobricks-030"
+DEFAULT_APP_NAME="ontobricks-050"
 DEFAULT_MCP_APP_NAME="mcp-ontobricks"
 DEFAULT_APP_RESOURCE_KEY="ontobricks_dev_app"
 DEFAULT_MCP_APP_RESOURCE_KEY="mcp_ontobricks_app"

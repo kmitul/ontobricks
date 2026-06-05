@@ -170,13 +170,16 @@ body:is(.read-only-version, .role-viewer) .iof-domain-cb,
 /* --- Mapping > Import: R2RML imports. */
 body:is(.read-only-version, .role-viewer) #importR2rmlLocalBtn,
 body:is(.read-only-version, .role-viewer) #importR2rmlFileInput,
-/* --- Mapping > Designer / Manual: reset, auto-map, save. */
+/* --- Mapping > Designer / Manual: reset, auto-map, save, bulk
+       exclude/include. */
 body:is(.read-only-version, .role-viewer) #resetPanelBtn,
 body:is(.read-only-version, .role-viewer) #autoMapPanelBtn,
 body:is(.read-only-version, .role-viewer) #savePanelBtn,
 body:is(.read-only-version, .role-viewer) #manualResetBtn,
 body:is(.read-only-version, .role-viewer) #manualAutoMapBtn,
 body:is(.read-only-version, .role-viewer) #manualSavePanelBtn,
+body:is(.read-only-version, .role-viewer) #mappingAutoExclude,
+body:is(.read-only-version, .role-viewer) #mappingIncludeExcluded,
 /* --- Ontology > Business Views: CRUD buttons (top toolbar) + the
        empty-state "Create View" CTA shown when no view exists. */
 body:is(.read-only-version, .role-viewer) #createViewBtn,
@@ -191,6 +194,35 @@ body:is(.read-only-version, .role-viewer) #newGroupBtn,
 body:is(.read-only-version, .role-viewer) .dq-shape-card .btn-group button,
 /* --- Save Domain navbar item: still rendered, but neutralised. */
 body:is(.read-only-version, .role-viewer) #menuSaveDomain {
+    pointer-events: none !important;
+    opacity: 0.5 !important;
+    cursor: not-allowed !important;
+}
+
+/* --- Cohorts: a read-only domain blocks creating, editing and
+       materialising cohort rules. Unlike most write surfaces these gates
+       must also fire on the Digital Twin run page (which is otherwise
+       exempt from the generic form-field rule below), because the
+       Materialise / Configure-outputs actions persist into the domain.
+       The saved-rules picker and the read-only Preview / Trace / Explain
+       actions stay interactive so a locked version remains inspectable.
+       Several of these controls are rendered dynamically by
+       ``query-cohorts.js`` (``.cohort-*`` classes) — class gates cover
+       them regardless of when they are inserted. */
+body:is(.read-only-version, .role-viewer) #cohortNewBtn,
+body:is(.read-only-version, .role-viewer) #cohortSaveBtn,
+body:is(.read-only-version, .role-viewer) #cohortAddPathBtn,
+body:is(.read-only-version, .role-viewer) #cohortAddConstraintBtn,
+body:is(.read-only-version, .role-viewer) #cohortOutputsBtn,
+body:is(.read-only-version, .role-viewer) #cohortMaterializeBtn,
+body:is(.read-only-version, .role-viewer) .cohort-link-del,
+body:is(.read-only-version, .role-viewer) .cohort-hop-add,
+body:is(.read-only-version, .role-viewer) .cohort-hop-del,
+body:is(.read-only-version, .role-viewer) .cohort-hop-where-add,
+body:is(.read-only-version, .role-viewer) .cohort-hop-where-del,
+body:is(.read-only-version, .role-viewer) .cohort-hop-where-sample,
+body:is(.read-only-version, .role-viewer) .cohort-row-del,
+body:is(.read-only-version, .role-viewer) .cohort-sample {
     pointer-events: none !important;
     opacity: 0.5 !important;
     cursor: not-allowed !important;
@@ -227,8 +259,14 @@ body:is(.read-only-version, .role-viewer) .view-mode-hidden {
    that the per-input exemptions above can't reliably catch, and a
    PUBLISHED/IN-REVIEW domain (now ``read-only-version``) must stay fully
    queryable. Real mutations are still enforced server-side by
-   ``PermissionMiddleware``. */
-body:is(.read-only-version, .role-viewer):not([data-page="digitaltwin"]) input:not([type="search"]):not([id*="search"]):not([id*="filter"]):not([id*="query"]):not(#domainVersionSelect),
+   ``PermissionMiddleware``.
+
+   ``.pitfall-chk`` (Ontology > Pitfalls pattern checkboxes) are exempt:
+   running a pitfalls analysis is a read-only operation (the backend
+   ``/ontology/pitfalls/analyze`` endpoint is status-open), so a reader on
+   a PUBLISHED/IN-REVIEW version must still be able to pick which patterns
+   to check and run the analysis. */
+body:is(.read-only-version, .role-viewer):not([data-page="digitaltwin"]) input:not([type="search"]):not([id*="search"]):not([id*="filter"]):not([id*="query"]):not(#domainVersionSelect):not(.pitfall-chk),
 body:is(.read-only-version, .role-viewer):not([data-page="digitaltwin"]) textarea,
 body:is(.read-only-version, .role-viewer):not([data-page="digitaltwin"]) select:not(#domainVersionSelect):not(#loadDomainSelect):not(#loadVersionSelect) {
     pointer-events: none !important;
