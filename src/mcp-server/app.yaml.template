@@ -23,7 +23,7 @@ env:
   # Set DEFAULT_APP_ONTOBRICKS_URL in scripts/deploy.config.sh.
   # Defaults to localhost:8000 when empty (local dev only).
   - name: ONTOBRICKS_URL  # optional
-    value: "https://ontobricks-050-2508734981122804.aws.databricksapps.com"
+    value: "${APP_ONTOBRICKS_URL}"
 
   # ── SQL Warehouse ─────────────────────────────────────────────────
   # Injected from the sql-warehouse resource binding. Passed to the
@@ -32,7 +32,7 @@ env:
   - name: DATABRICKS_SQL_WAREHOUSE_ID
     valueFrom: sql-warehouse
   - name: DATABRICKS_SQL_WAREHOUSE_ID_DEFAULT
-    value: "66e8366e84d57752"
+    value: "${APP_SQL_WAREHOUSE_FALLBACK}"
 
   # ── Lakebase ──────────────────────────────────────────────────────
   # When deployed to a *-lakebase target the DAB binds a ``database``
@@ -40,13 +40,13 @@ env:
   # PGHOST/PGPORT/PGDATABASE/PGUSER/PGAPPNAME/PGSSLMODE — no explicit
   # valueFrom mapping needed. The schema must still be set explicitly.
   - name: LAKEBASE_SCHEMA
-    value: "ontobricks_demo"
+    value: "${APP_LAKEBASE_SCHEMA}"
   - name: LAKEBASE_PROJECT
-    value: "ontobricks-demo2"
+    value: "${APP_LAKEBASE_PROJECT}"
   - name: LAKEBASE_DATABASE
-    value: "ontobricks_demo"
+    value: "${APP_LAKEBASE_DATABASE}"
   - name: LAKEBASE_BRANCH
-    value: "production"
+    value: "${APP_LAKEBASE_BRANCH}"
 
 # Resources that this app uses.
 resources:

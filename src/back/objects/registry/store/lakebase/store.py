@@ -1208,6 +1208,23 @@ class LakebaseRegistryStore(RegistryStore):
         try:
             sch = self._q(self._schema)
             with self._connect() as conn, conn.cursor() as cur:
+                # Check first: if the column already exists (created by
+                # bootstrap as the schema owner), skip all DDL.  Both
+                # ALTER TABLE and CREATE INDEX require table ownership in
+                # Postgres — attempting them as the SP (who doesn't own
+                # domain_versions) raises "must be owner of table …"
+                # even with IF NOT EXISTS / ADD COLUMN IF NOT EXISTS.
+                cur.execute(
+                    "SELECT 1 FROM information_schema.columns "
+                    "WHERE table_schema = %s AND table_name = 'domain_versions' "
+                    "AND column_name = 'status'",
+                    (self._schema,),
+                )
+                if cur.fetchone():
+                    self._status_column_ready = True
+                    return True
+                # Column absent — attempt DDL (requires schema owner to
+                # have not yet run bootstrap-lakebase-perms.sh).
                 cur.execute(
                     f"""
                     ALTER TABLE {sch}.domain_versions
@@ -1224,7 +1241,12 @@ class LakebaseRegistryStore(RegistryStore):
             self._status_column_ready = True
             return True
         except Exception as exc:  # noqa: BLE001
-            logger.warning("could not ensure domain_versions.status column: %s", exc)
+            logger.error(
+                "could not add domain_versions.status column — "
+                "run `make bootstrap-lakebase` (or scripts/bootstrap-lakebase-perms.sh) "
+                "as the schema owner to apply the migration: %s",
+                exc,
+            )
             return False
 
     # ------------------------------------------------------------------
@@ -1248,6 +1270,21 @@ class LakebaseRegistryStore(RegistryStore):
         try:
             sch = self._q(self._schema)
             with self._connect() as conn, conn.cursor() as cur:
+                # Check first: if the table already exists (created by
+                # bootstrap as the schema owner), skip all DDL.  CREATE
+                # INDEX requires table ownership in Postgres — running it
+                # when we don't own the table raises "must be owner of
+                # table build_runs" even with IF NOT EXISTS.
+                cur.execute(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = %s AND table_name = 'build_runs'",
+                    (self._schema,),
+                )
+                if cur.fetchone():
+                    self._build_runs_ready = True
+                    return True
+                # Table is absent — SP has CREATE ON SCHEMA so it can
+                # create the table (and will own it, allowing the index).
                 cur.execute(
                     f"""
                     CREATE TABLE IF NOT EXISTS {sch}.build_runs (
@@ -1287,7 +1324,11 @@ class LakebaseRegistryStore(RegistryStore):
             self._build_runs_ready = True
             return True
         except Exception as exc:  # noqa: BLE001
-            logger.warning("could not ensure build_runs table: %s", exc)
+            logger.error(
+                "could not create build_runs table — "
+                "run `make bootstrap-lakebase` as the schema owner to apply the migration: %s",
+                exc,
+            )
             return False
 
     def record_build_run(self, folder: str, entry: BuildRunEntry) -> None:

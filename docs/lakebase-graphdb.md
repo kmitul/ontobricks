@@ -254,9 +254,12 @@ These drive the DAB deployment (edit before `make deploy`):
 | `DEFAULT_LAKEBASE_PROJECT` | Lakebase project name (final segment of `projects/<id>`) |
 | `DEFAULT_LAKEBASE_BRANCH` | Branch (e.g. `production`) |
 | `DEFAULT_LAKEBASE_DATABASE_RESOURCE_SEGMENT` | `db-…` resource id from `list-databases` |
+| `DEFAULT_LAKEBASE_REGISTRY_DATABASE` | Postgres datname the registry schema lives in |
 | `DEFAULT_LAKEBASE_REGISTRY_SCHEMA` | Postgres schema for the registry (mirrors `LAKEBASE_SCHEMA` in `app.yaml`) |
-| `LAKEBASE_GRAPH_SCHEMA` | Graph DB Postgres schema (default `ontobricks_graph`) |
-| `LAKEBASE_SYNC_SCHEMA` | Sync Postgres schema — only required for `managed_synced` |
+
+> `deploy.config.sh` is **registry-scoped**. The graph DB schema/database
+> are configured in-app (`Settings → Graph DB` → `graph_engine_config`)
+> and may live in a different Lakebase project — they are not deploy vars.
 
 ---
 
@@ -403,8 +406,11 @@ scripts/bootstrap-lakebase-perms.sh \
   -a ontobricks-030 -a mcp-ontobricks
 ```
 
-`make deploy` (via `scripts/deploy.sh`) runs all three automatically when
-`LAKEBASE_GRAPH_SCHEMA` and `LAKEBASE_SYNC_SCHEMA` are set in `deploy.config.sh`.
+`make deploy` (via `scripts/deploy.sh`) grants the **registry** schema
+automatically. The graph and sync schemas are granted by the in-app
+"Create graph DB" flow or by running the commands above manually — they
+are not deploy vars, since the graph DB may live in a different Lakebase
+project.
 
 **What each run grants:**
 

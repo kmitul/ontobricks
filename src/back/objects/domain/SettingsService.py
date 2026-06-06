@@ -1834,17 +1834,19 @@ class SettingsService:
                                pg_catalog.pg_get_userbyid(nspowner) AS owner
                         FROM pg_catalog.pg_namespace
                         WHERE nspname NOT LIKE 'pg_%%'
-                          AND nspname NOT IN ('information_schema')
-                          AND pg_catalog.pg_get_userbyid(nspowner) = current_user
+                          AND nspname NOT IN ('information_schema', 'public')
+                          AND (
+                              pg_catalog.pg_get_userbyid(nspowner) = current_user
+                              OR has_schema_privilege(current_user, nspname, 'USAGE')
+                          )
                         ORDER BY nspname
                         """
                     )
                     schemas = [{"name": r[0], "owner": r[1]} for r in cur.fetchall()]
 
-                    # Filter by schemas owned by the current user rather than
-                    # by table/view owner, because _sync tables are created by
-                    # Lakeflow under a different Postgres role but still live in
-                    # our schema.
+                    # Include all schemas where the SP has USAGE (covers schemas
+                    # created by the human deployer via bootstrap, where _sync and
+                    # __app tables land during builds).
                     owned_schema_names = tuple(s["name"] for s in schemas)
                     if owned_schema_names:
                         cur.execute(
