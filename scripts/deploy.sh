@@ -392,8 +392,13 @@ if ! $NO_RUN; then
     databricks bundle run "$APP_RESOURCE_KEY" -t "$TARGET" "${_dab_var_overrides[@]}" \
         || die "failed to start app '${APP_NAME}'. Inspect the logs: databricks apps logs ${APP_NAME}"
     ok "app start requested"
+
+    begin_step "Start $MCP_APP_NAME"
+    databricks bundle run "$MCP_APP_RESOURCE_KEY" -t "$TARGET" "${_dab_var_overrides[@]}" \
+        || die "failed to start app '${MCP_APP_NAME}'. Inspect the logs: databricks apps logs ${MCP_APP_NAME}"
+    ok "MCP app start requested"
 else
-    begin_step "Start app (skipped)"
+    begin_step "Start apps (skipped)"
     info "skipped per --no-run"
 fi
 
@@ -407,6 +412,15 @@ url   = d.get('url','')
 print(f'{state}  {url}')
 " 2>/dev/null || echo "NOT DEPLOYED")
 printf "  %-20s %s\n" "$APP_NAME" "$STATUS"
+
+MCP_STATUS=$(databricks apps get "$MCP_APP_NAME" -o json 2>/dev/null | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+state = d.get('app_status',{}).get('state','UNKNOWN')
+url   = d.get('url','')
+print(f'{state}  {url}')
+" 2>/dev/null || echo "NOT DEPLOYED")
+printf "  %-20s %s\n" "$MCP_APP_NAME" "$MCP_STATUS"
 
 verify_app_resources() {
     local app_name="$1"
