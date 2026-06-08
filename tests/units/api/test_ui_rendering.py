@@ -122,6 +122,13 @@ class TestBaseTemplate:
         html = _html(client, path)
         assert any("utils.js" in src for src in _script_srcs(html))
 
+    @pytest.mark.parametrize("path", ["/", "/domain"])
+    def test_review_modals_assets_loaded(self, client, path):
+        """Shared review comment/chat popups must be available on every page."""
+        html = _html(client, path)
+        assert any("review-modals.js" in src for src in _script_srcs(html))
+        assert "review-modals.css" in html
+
     def test_navbar_has_domain_dropdown(self, client):
         html = _html(client, "/")
         assert _find(_tags(html), id_="domainDropdown") is not None
@@ -381,11 +388,19 @@ class TestDomainPage:
         assert found, f"Sidebar link for section '{section}' not found"
 
     @pytest.mark.parametrize(
-        "section_id", ["information-section", "metadata-section", "validation-section"]
+        "section_id",
+        ["information-section", "metadata-section", "validation-section",
+         "runs-section", "audit-section"],
     )
     def test_section_div_exists(self, client, section_id):
         html = _html(client, "/domain")
         assert _find(_tags(html), id_=section_id) is not None
+
+    def test_audit_section_link_and_script(self, client):
+        html = _html(client, "/domain")
+        tags = _tags(html)
+        assert any(t == "a" and a.get("data-section") == "audit" for t, a in tags)
+        assert any("domain-audit.js" in src for src in _script_srcs(html))
 
 
 # =====================================================

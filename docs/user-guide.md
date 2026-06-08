@@ -690,6 +690,34 @@ Every domain version carries a **lifecycle status**, shown as a colour-coded bad
 Transitions are made from **Registry → Browse** (or Domain → Information):
 DRAFT → IN-REVIEW → PUBLISHED (admin or builder), IN-REVIEW → DRAFT (admin or builder), and PUBLISHED → DRAFT (admin only). While a version is **not DRAFT**, the ontology/mapping editors, metadata/document writes, and the Build/sync action are read-only — set it back to **DRAFT** to make changes.
 
+#### Validation & Review workflow (My Tasks + Domain → Validation)
+
+For a guided, business-user-oriented review on top of the raw lifecycle, OntoBricks adds a
+review workflow that collects reviewer sign-offs and keeps a durable audit trail.
+
+- **Registry → My Tasks** — a cross-domain worklist of the versions that need *you*. Each row
+  shows the domain, version, status, sign-off progress, and the action available to you:
+  **Submit for review** (builders/admins, on a built DRAFT), **Review & sign off** (any
+  domain member, on an IN-REVIEW version), or **Publish** (builders/admins, once the quorum
+  is met). "Review & sign off" loads the domain and opens its Validation workspace.
+- **Domain → Validation** — the per-version review workspace:
+  - **Consistency checks** — a soft readiness summary (ontology valid, mapping complete,
+    warehouse configured, Digital Twin built) with shortcuts to the Cockpit and Pitfalls.
+    These checks are advisory and never block publishing.
+  - **Your actions** — context-aware buttons: Submit for review, **Approve** / **Request
+    changes** (with an optional comment for the audit trail), Publish, or Reopen.
+  - **Audit trail** — a timeline of every decision (submitted, approved, changes requested,
+    published, reopened) with the actor, timestamp, comment, and the `from → to` status
+    snapshot for lifecycle transitions.
+- **Roles & quorum** — Submit and Publish stay builder/admin. **Publish** unlocks only once
+  the configured **sign-off quorum** is reached (registry global-config key `review_quorum`,
+  default `1`). **Sign-off** (approve / request changes) is open to any principal with a role
+  on the domain; **request changes** sends the version back to DRAFT for editing. **Reopen**
+  (PUBLISHED → DRAFT) is admin-only.
+- **Persistence** — every decision is stored append-only in the `domain_review_events`
+  registry table, so the full "who validated what, when" history survives restarts and is
+  queryable.
+
 ### Version Management (Domain → Versions)
 
 1. Open **Domain** in the sidebar and go to the **Versions** section.

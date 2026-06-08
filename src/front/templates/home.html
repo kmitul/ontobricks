@@ -2,6 +2,10 @@
 
 {% block title %}OntoBricks - Home{% endblock %}
 
+{% block extra_css %}
+<link rel="stylesheet" href="{{ url_for('static', filename='registry/css/registry-my-tasks.css') }}?v={{ asset_version }}">
+{% endblock %}
+
 {% block content %}
 <!-- JS: /static/home/js/home.js -->
 <!-- Hero Section -->
@@ -68,6 +72,14 @@
         </button>
     </div>
     <div id="domainStatus" class="domain-status hidden-initial"></div>
+</div>
+
+<!-- My Tasks (review worklist) -->
+<div class="workflow-section" id="homeTasksSection" style="display:none;">
+    <h5><i class="bi bi-inbox"></i> My Tasks</h5>
+    <div class="domain-panel">
+        <div id="homeTasksContainer"></div>
+    </div>
 </div>
 
 <!-- Workflow Steps -->
@@ -148,4 +160,5 @@
 
 <!-- Home page JavaScript (extracted from template) -->
 <script src="{{ url_for('static', filename='home/js/home.js') }}?v={{ asset_version }}"></script>
+<script src="{{ url_for('static', filename='home/js/home-tasks.js') }}?v={{ asset_version }}"></script>
 {% endblock %}

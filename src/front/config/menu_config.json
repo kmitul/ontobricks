@@ -28,6 +28,20 @@
             ],
             "groups": [
                 {
+                    "id": "registry-review",
+                    "title": "Review",
+                    "icon": "bi-inbox",
+                    "items": [
+                        {
+                            "id": "my-tasks",
+                            "label": "My Tasks",
+                            "icon": "bi-inbox",
+                            "default": false,
+                            "requires": null
+                        }
+                    ]
+                },
+                {
                     "id": "registry-domains",
                     "title": "Domains",
                     "icon": "bi-folder2-open",
@@ -137,6 +151,13 @@
                             "requires": "domain_saved"
                         },
                         {
+                            "id": "review",
+                            "label": "Validation",
+                            "icon": "bi-patch-check",
+                            "default": false,
+                            "requires": "domain_saved"
+                        },
+                        {
                             "id": "metadata",
                             "label": "Data Sources",
                             "icon": "bi-database",
@@ -189,6 +210,13 @@
                             "id": "runs",
                             "label": "Runs",
                             "icon": "bi-list-check",
+                            "default": false,
+                            "requires": "domain_saved"
+                        },
+                        {
+                            "id": "audit",
+                            "label": "Audit trail",
+                            "icon": "bi-journal-text",
                             "default": false,
                             "requires": "domain_saved"
                         }

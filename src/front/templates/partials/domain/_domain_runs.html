@@ -56,23 +56,6 @@
         </div>
     </div>
 </div>
-
-<!-- Run details modal -->
-<div class="modal fade" id="runDetailsModal" tabindex="-1" aria-labelledby="runDetailsModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title" id="runDetailsModalLabel">
-                    <i class="bi bi-info-circle me-2"></i>Build Run Details
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body" id="runDetailsBody">
-                <!-- Populated by JS -->
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- NOTE: the run-details modal is rendered at page level in domain.html so it
+     works from any section (it must not live inside a hidden .sidebar-section,
+     otherwise the backdrop shows but the dialog stays invisible). -->

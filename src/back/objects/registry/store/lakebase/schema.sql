@@ -174,3 +174,34 @@ CREATE TABLE IF NOT EXISTS build_runs (
 
 CREATE INDEX IF NOT EXISTS idx_build_runs_domain_version
     ON build_runs(domain_id, version, started_at DESC);
+
+-- ----------------------------------------------------------------
+-- Domain-version review / validation audit log (append-only).
+-- One immutable row per workflow decision or lifecycle change:
+-- submit-for-review, business-user sign-off (approve), request
+-- changes, publish, reopen, or a free-text comment. ``from_status``
+-- / ``to_status`` snapshot the lifecycle transition the event drove
+-- ('' on pure sign-off / comment rows). The grain is the tuple
+-- (domain_id, version); many rows per tuple are expected — together
+-- they form the full validation history surfaced in the Domain
+-- Validation page and the Registry "My Tasks" worklist.
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS domain_review_events (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id       uuid NOT NULL
+                    REFERENCES domains(id) ON DELETE CASCADE,
+    version         text NOT NULL,
+    actor           text NOT NULL,
+    action          text NOT NULL
+                    CHECK (action IN ('submitted', 'approved',
+                                      'changes_requested', 'published',
+                                      'reopened', 'commented')),
+    from_status     text NOT NULL DEFAULT '',   -- lifecycle status before the event
+    to_status       text NOT NULL DEFAULT '',   -- lifecycle status after the event
+    comment         text NOT NULL DEFAULT '',
+    meta            jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_review_events_domain_version
+    ON domain_review_events(domain_id, version, created_at);

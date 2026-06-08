@@ -296,9 +296,26 @@ CREATE TABLE IF NOT EXISTS "${SCHEMA}".build_runs (
 );
 CREATE INDEX IF NOT EXISTS idx_build_runs_domain_version
     ON "${SCHEMA}".build_runs(domain_id, version, started_at DESC);
+
+-- domain_review_events (validation/review audit log added after initial release)
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_review_events (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id       uuid NOT NULL
+                    REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version         text NOT NULL,
+    actor           text NOT NULL,
+    action          text NOT NULL,
+    from_status     text NOT NULL DEFAULT '',
+    to_status       text NOT NULL DEFAULT '',
+    comment         text NOT NULL DEFAULT '',
+    meta            jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_review_events_domain_version
+    ON "${SCHEMA}".domain_review_events(domain_id, version, created_at);
 SQL
     then
-        echo "  ✓ schema migrations applied (domain_versions.status, build_runs)"
+        echo "  ✓ schema migrations applied (domain_versions.status, build_runs, domain_review_events)"
     else
         echo "  ⚠ schema migration failed — continuing (SP grants below may partially succeed)"
     fi

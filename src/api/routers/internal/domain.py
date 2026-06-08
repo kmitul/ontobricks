@@ -507,6 +507,18 @@ async def list_build_runs(
     return p.list_build_runs_result(p.build_registry_service(), version=version, limit=limit)
 
 
+@router.get("/audit-trail")
+async def audit_trail(
+    limit: int = Query(default=500, ge=1, le=2000),
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Unified audit trail (review decisions + build runs) for the loaded domain."""
+    domain = get_domain(session_mgr)
+    p = Domain(domain, settings)
+    return p.audit_trail_result(p.build_registry_service(), limit=limit)
+
+
 @router.post("/set-version-status")
 async def set_version_status(
     request: Request,

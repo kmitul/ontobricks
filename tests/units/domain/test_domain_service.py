@@ -3,6 +3,7 @@
 import pytest
 from unittest.mock import MagicMock
 from back.objects.domain import Domain
+from back.core.errors import ValidationError
 
 
 def _mock_domain(
@@ -100,3 +101,45 @@ class TestGetDomainTemplateData:
         assert data["name"] == "Test"
         assert data["has_ontology"] is True
         assert data["has_mapping"] is False
+
+
+class TestAuditTrail:
+    def _svc(self, events, runs, configured=True):
+        svc = MagicMock()
+        svc.cfg.is_configured = configured
+        svc.list_review_events.return_value = events
+        svc.load_build_runs.return_value = runs
+        return svc
+
+    def test_merges_review_events_and_build_runs(self):
+        domain = _mock_domain()
+        domain.uc_domain_folder = "test_domain"
+        events = [{"action": "submitted", "comment": "go", "created_at": "t1"}]
+        runs = [{"id": 1, "status": "success", "started_at": "t2"}]
+        result = Domain(domain).audit_trail_result(
+            self._svc(events, runs), limit=10
+        )
+        assert result["success"] is True
+        assert result["domain_folder"] == "test_domain"
+        assert result["events"] == events
+        assert result["runs"] == runs
+
+    def test_passes_folder_and_limit_to_store(self):
+        domain = _mock_domain()
+        domain.uc_domain_folder = "test_domain"
+        svc = self._svc([], [])
+        Domain(domain).audit_trail_result(svc, limit=42)
+        svc.list_review_events.assert_called_once_with("test_domain")
+        svc.load_build_runs.assert_called_once_with("test_domain", limit=42)
+
+    def test_requires_configured_registry(self):
+        domain = _mock_domain()
+        domain.uc_domain_folder = "test_domain"
+        with pytest.raises(ValidationError):
+            Domain(domain).audit_trail_result(self._svc([], [], configured=False))
+
+    def test_requires_saved_domain(self):
+        domain = _mock_domain()
+        domain.uc_domain_folder = ""
+        with pytest.raises(ValidationError):
+            Domain(domain).audit_trail_result(self._svc([], []))

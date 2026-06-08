@@ -52,6 +52,7 @@ class _InMemoryStore(RegistryStore):
         self._schedules: Dict[str, Dict[str, Any]] = {}
         self._history: Dict[str, List[ScheduleHistoryEntry]] = {}
         self._build_runs: Dict[str, List[Dict[str, Any]]] = {}
+        self._review_events: List[Dict[str, Any]] = []
         self._global: Dict[str, Any] = {}
         self._initialized = False
 
@@ -187,6 +188,47 @@ class _InMemoryStore(RegistryStore):
             "active_build": dict(active) if active else None,
             "per_version": [],
         }
+
+    def record_review_event(
+        self,
+        folder: str,
+        version: str,
+        actor: str,
+        action: str,
+        *,
+        from_status: str = "",
+        to_status: str = "",
+        comment: str = "",
+        meta=None,
+    ) -> Tuple[bool, str]:
+        self._review_events.append(
+            {
+                "id": str(len(self._review_events) + 1),
+                "folder": folder,
+                "version": version,
+                "actor": actor,
+                "action": action,
+                "from_status": from_status,
+                "to_status": to_status,
+                "comment": comment,
+                "meta": dict(meta or {}),
+                "created_at": f"2026-01-01T00:00:{len(self._review_events):02d}",
+            }
+        )
+        return True, "ok"
+
+    def list_review_events(
+        self, folder: str, version=None
+    ) -> List[Dict[str, Any]]:
+        return [
+            dict(e)
+            for e in self._review_events
+            if e["folder"] == folder
+            and (version is None or e["version"] == version)
+        ]
+
+    def list_all_review_events(self) -> List[Dict[str, Any]]:
+        return [dict(e) for e in self._review_events]
 
     def load_global_config(self) -> Dict[str, Any]:
         return dict(self._global)
@@ -409,6 +451,33 @@ class TestStoreContract:
         assert a["total_runs"] == 0
         assert a["active_build"] is None
         assert a["success_rate"] == 0.0
+
+    def test_review_events_round_trip_oldest_first(self, store):
+        store.record_review_event(
+            "demo", "1", "alice@a.com", "submitted",
+            from_status="DRAFT", to_status="IN-REVIEW", comment="go",
+        )
+        store.record_review_event(
+            "demo", "1", "bob@a.com", "approved", comment="lgtm",
+        )
+        events = store.list_review_events("demo", "1")
+        assert [e["action"] for e in events] == ["submitted", "approved"]
+        assert events[0]["from_status"] == "DRAFT"
+        assert events[0]["to_status"] == "IN-REVIEW"
+        assert events[1]["actor"] == "bob@a.com"
+
+    def test_review_events_filter_by_version(self, store):
+        store.record_review_event("demo", "1", "a@a.com", "submitted")
+        store.record_review_event("demo", "2", "a@a.com", "submitted")
+        assert len(store.list_review_events("demo", "1")) == 1
+        assert len(store.list_review_events("demo")) == 2
+
+    def test_list_all_review_events_spans_domains(self, store):
+        store.record_review_event("demo", "1", "a@a.com", "submitted")
+        store.record_review_event("other", "1", "a@a.com", "submitted")
+        allev = store.list_all_review_events()
+        folders = {e["folder"] for e in allev}
+        assert folders == {"demo", "other"}
 
     def test_table_row_counts_defaults_to_zero(self, store):
         # The base class returns zero for every requested table — only

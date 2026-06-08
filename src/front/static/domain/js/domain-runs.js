@@ -142,7 +142,13 @@ function _phaseTable(phases) {
 }
 
 function showRunDetails(idx) {
-    const run = _runsCache[idx];
+    showRunDetailsObj(_runsCache[idx]);
+}
+
+// Render the build-run details popup for a run object directly (so other
+// views, e.g. the Audit trail timeline, can reuse the same modal without
+// depending on this file's internal _runsCache).
+function showRunDetailsObj(run) {
     if (!run) return;
 
     const body = document.getElementById('runDetailsBody');
@@ -202,3 +208,5 @@ function showRunDetails(idx) {
     const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
     modal.show();
 }
+
+window.showRunDetailsObj = showRunDetailsObj;

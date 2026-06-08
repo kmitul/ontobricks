@@ -865,6 +865,42 @@ class RegistryService:
             invalidate_registry_cache(self.cache_key)
         return ok, msg
 
+    # -- review / validation audit log -------------------------------
+
+    def record_review_event(
+        self,
+        folder: str,
+        version: str,
+        actor: str,
+        action: str,
+        *,
+        from_status: str = "",
+        to_status: str = "",
+        comment: str = "",
+        meta: Optional[dict] = None,
+    ) -> Tuple[bool, str]:
+        """Append a review-audit row for ``(folder, version)`` (best-effort)."""
+        return self._store.record_review_event(
+            folder,
+            version,
+            actor,
+            action,
+            from_status=from_status,
+            to_status=to_status,
+            comment=comment,
+            meta=meta,
+        )
+
+    def list_review_events(
+        self, folder: str, version: Optional[str] = None
+    ) -> list:
+        """Oldest-first review events for *folder* (optionally one version)."""
+        return self._store.list_review_events(folder, version)
+
+    def list_all_review_events(self) -> list:
+        """All review events across the registry (oldest-first)."""
+        return self._store.list_all_review_events()
+
     # -- document operations -------------------------------------------
 
     def copy_version_documents(

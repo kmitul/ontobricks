@@ -89,6 +89,28 @@ class BuildRunEntry(TypedDict, total=False):
     stats: Dict[str, Any]
 
 
+class ReviewEvent(TypedDict, total=False):
+    """One row in the domain-version review / validation audit log.
+
+    Captures a single workflow decision or lifecycle change for the
+    tuple ``(folder, version)``. ``from_status`` / ``to_status``
+    snapshot the lifecycle transition the event drove (empty on pure
+    sign-off / comment rows). Rows are append-only and ordered by
+    ``created_at``.
+    """
+
+    id: str                  # row id (UUID string; "" for stores without one)
+    folder: str              # domain folder (populated by registry-wide reads)
+    version: str
+    actor: str               # acting user email
+    action: str              # submitted|approved|changes_requested|published|reopened|commented
+    from_status: str
+    to_status: str
+    comment: str
+    meta: Dict[str, Any]
+    created_at: str          # ISO timestamp
+
+
 class RegistryStore(ABC):
     """Single seam in front of all registry-shaped JSON storage."""
 
@@ -269,6 +291,52 @@ class RegistryStore(ABC):
             }
 
         Empty/zeroed dict on any error.
+        """
+
+    # ------------------------------------------------------------------
+    # Review / validation audit log
+    #
+    # Append-only history of workflow decisions and lifecycle changes
+    # per (folder, version): submit-for-review, sign-off (approve),
+    # request changes, publish, reopen, comment. Best-effort writes —
+    # a transition must never fail because the audit row could not be
+    # written (the lifecycle ``status`` on ``domain_versions`` stays
+    # the source of truth). Reads return oldest-first.
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def record_review_event(
+        self,
+        folder: str,
+        version: str,
+        actor: str,
+        action: str,
+        *,
+        from_status: str = "",
+        to_status: str = "",
+        comment: str = "",
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> Tuple[bool, str]:
+        """Append a review-audit row for ``(folder, version)``.
+
+        Best-effort: returns ``(False, msg)`` instead of raising so a
+        lifecycle transition is never rolled back by a failed audit
+        write.
+        """
+
+    @abstractmethod
+    def list_review_events(
+        self, folder: str, version: Optional[str] = None
+    ) -> List[ReviewEvent]:
+        """Oldest-first review events for *folder* (optionally a single
+        *version*). Empty list on any error.
+        """
+
+    @abstractmethod
+    def list_all_review_events(self) -> List[ReviewEvent]:
+        """All review events across the registry, each enriched with its
+        ``folder``. Oldest-first. Backs the cross-domain "My Tasks"
+        worklist. Empty list on any error.
         """
 
     # ------------------------------------------------------------------

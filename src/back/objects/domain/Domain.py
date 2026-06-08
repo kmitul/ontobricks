@@ -425,6 +425,41 @@ class Domain:
                 "Failed to load build runs", detail=str(e)
             ) from e
 
+    def audit_trail_result(
+        self,
+        svc: RegistryService,
+        *,
+        limit: int = 500,
+    ) -> Dict[str, Any]:
+        """Unified activity feed for the loaded domain (all versions).
+
+        Merges two registry streams so the frontend can interleave them
+        into one timeline: review/validation decisions (status switches
+        with their comments) and the build-run history (runs + results).
+        Both are returned raw and newest-first-friendly; the UI sorts and
+        filters the combined stream client-side.
+        """
+        try:
+            if not svc.cfg.is_configured:
+                raise ValidationError("Registry not configured")
+            folder = self._s.uc_domain_folder
+            if not folder:
+                raise ValidationError("Domain not saved to registry")
+            return {
+                "success": True,
+                "domain_folder": folder,
+                "current_version": self._s.current_version,
+                "events": svc.list_review_events(folder),
+                "runs": svc.load_build_runs(folder, limit=limit),
+            }
+        except OntoBricksError:
+            raise
+        except Exception as e:
+            logger.exception("Audit trail failed: %s", e)
+            raise InfrastructureError(
+                "Failed to load audit trail", detail=str(e)
+            ) from e
+
     async def _bridge_domain_for_entity_uri(self, entity_uri: str) -> Optional[str]:
         """Resolve which registry domain folder owns *entity_uri* (async)."""
         svc = self.build_registry_service()

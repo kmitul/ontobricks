@@ -50,6 +50,10 @@ document.addEventListener('DOMContentLoaded', function() {
             if (section === 'validation') {
                 loadValidationDetails();
             }
+            // Load review/validation workflow when switching to review section
+            if (section === 'review' && typeof window.loadDomainReview === 'function') {
+                window.loadDomainReview();
+            }
             // Load versions when switching to versions section
             if (section === 'versions' && typeof loadVersionsList === 'function') {
                 loadVersionsList();
@@ -57,6 +61,10 @@ document.addEventListener('DOMContentLoaded', function() {
             // Load build runs when switching to runs section
             if (section === 'runs' && typeof loadDomainRuns === 'function') {
                 loadDomainRuns();
+            }
+            // Load the unified audit trail when switching to audit section
+            if (section === 'audit' && typeof window.loadDomainAudit === 'function') {
+                window.loadDomainAudit();
             }
             // Load OWL content when switching to owl-content section
             if (section === 'owl-content' && typeof window.loadOwlContent === 'function') {
