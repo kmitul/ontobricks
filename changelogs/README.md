@@ -1,6 +1,6 @@
 # Changelogs
 
-Per `.cursorrules`: every code change appends a section to `changelogs/<YYYY-MM-DD>.log`. One file per day; multiple sections per file when multiple changes land same-day.
+Per `.cursorrules`: every code change appends a section to `changelogs/<user>_<YYYY-MM-DD>.log`. One file per day and per user; multiple sections per file when multiple changes land same-day.
 
 ## Format
 
@@ -22,7 +22,7 @@ Per `.cursorrules`: every code change appends a section to `changelogs/<YYYY-MM-
 
 ## When to append vs create
 
-- If `changelogs/<today>.log` exists: append a new `##` section.
+- If `changelogs/<user>_<today>.log` exists: append a new `##` section.
 - If not: create the file with today's date and a single section.
 - Date format: ISO `YYYY-MM-DD` (UTC of the developer's machine).
 
