@@ -534,14 +534,14 @@ document.addEventListener('DOMContentLoaded', function () {
             if (help) help.textContent = data.databases.length + ' database(s) found.';
 
             if (matched && dbSel.value) {
-                await loadLakebasePgSchemas(dbSel.value, cfgSchema);
+                await loadLakebasePgSchemas(dbSel.value, cfgSchema, branchPath);
             }
         } catch (e) {
             _setSelectError(dbSel, '(error — ' + (e.message || 'network') + ')');
         }
     }
 
-    async function loadLakebasePgSchemas(database, cfgSchema) {
+    async function loadLakebasePgSchemas(database, cfgSchema, branchPath) {
         const schSel = document.getElementById('lakebaseGraphSchema');
         const schIn  = document.getElementById('lakebaseGraphSchemaInput');
         const help   = document.getElementById('lakebaseGraphSchemaHelp');
@@ -550,8 +550,10 @@ document.addEventListener('DOMContentLoaded', function () {
         _setSelectLoading(schSel, 'Loading schemas…');
 
         try {
+            const params = new URLSearchParams({ database });
+            if (branchPath) params.set('branch_path', branchPath);
             const resp = await fetch(
-                '/settings/graph-engine/lakebase-pg-schemas?database=' + encodeURIComponent(database),
+                '/settings/graph-engine/lakebase-pg-schemas?' + params.toString(),
                 { credentials: 'same-origin' }
             );
             const data = resp.ok ? await resp.json() : {};
@@ -829,13 +831,16 @@ document.addEventListener('DOMContentLoaded', function () {
             msgEl.innerHTML = '<i class="bi bi-' + (data.schema_exists ? 'check-circle' : 'exclamation-triangle') + ' me-1"></i>'
                 + escapeHtmlSettings(data.message || 'OK');
             dl.innerHTML = (
-                row('PGHOST', escapeHtmlSettings(String(data.host || '')))
+                row('Bound host (PGHOST)', escapeHtmlSettings(String(data.host || '')))
                 + row('Port', escapeHtmlSettings(String(data.port != null ? data.port : '')))
-                + row('Bound PGDATABASE', escapeHtmlSettings(String(data.bound_database || '')))
-                + row('Effective database', escapeHtmlSettings(String(data.effective_database || '')))
+                + row('Graph database', escapeHtmlSettings(String(data.graph_database || '')))
                 + row('Graph schema', escapeHtmlSettings(String(data.graph_schema || '')))
                 + row('Schema exists', data.schema_exists ? 'yes' : 'no')
                 + row('Tables in schema', escapeHtmlSettings(String(data.tables_in_schema != null ? data.tables_in_schema : '')))
+                + '<dt class="col-sm-4 text-muted text-warning small mt-2">Registry database</dt>'
+                + '<dd class="col-sm-8 font-monospace text-break small mt-2 text-muted">'
+                + escapeHtmlSettings(String(data.registry_database || ''))
+                + ' <span class="text-muted">(PGDATABASE — registry only, separate from graph)</span></dd>'
             );
         } catch (e) {
             msgEl.className = 'small mb-2 text-danger';
@@ -938,7 +943,10 @@ document.addEventListener('DOMContentLoaded', function () {
         const schSel = document.getElementById('lakebaseGraphSchema');
         _setSelectLoading(schSel, '(select a database first)');
         mergeLakebasePanelIntoConfigTextarea();
-        if (this.value) await loadLakebasePgSchemas(this.value, _getCurrentSchemaValue());
+        if (this.value) {
+            const bp = document.getElementById('lakebaseBranch')?.value || '';
+            await loadLakebasePgSchemas(this.value, _getCurrentSchemaValue(), bp);
+        }
     });
     document.getElementById('lakebaseGraphSchema')?.addEventListener('change', function () {
         mergeLakebasePanelIntoConfigTextarea();
@@ -964,14 +972,15 @@ document.addEventListener('DOMContentLoaded', function () {
 
     // ── Lakebase objects (schemas / tables / views) ──────────────────────────
     async function loadLakebaseObjects() {
-        const btn        = document.getElementById('btnLoadLakebaseObjects');
-        const result     = document.getElementById('lakebaseObjectsResult');
-        const dbSel      = document.getElementById('lakebaseGraphDb');
-        const branchSel  = document.getElementById('lakebaseBranch');
+        const btn    = document.getElementById('btnLoadLakebaseObjects');
+        const result = document.getElementById('lakebaseObjectsResult');
+        const dbSel  = document.getElementById('lakebaseGraphDb');
         if (!result) return;
 
+        // Always query the BOUND Lakebase host (where GraphDBFactory writes data).
+        // The branch_path from the Connection form refers to the provisioner target
+        // project — not the actual connection host — so it must NOT be forwarded here.
         const database   = dbSel?.value   || '';
-        const branchPath = branchSel?.value || '';
         if (btn) {
             btn.disabled = true;
             btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Loading…';
@@ -980,8 +989,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         try {
             const params = new URLSearchParams();
-            if (database)   params.set('database',    database);
-            if (branchPath) params.set('branch_path', branchPath);
+            if (database) params.set('database', database);
             const url = '/settings/graph-engine/lakebase-objects'
                 + (params.toString() ? '?' + params.toString() : '');
             const resp = await fetch(url, { credentials: 'same-origin' });
@@ -1132,7 +1140,7 @@ document.addEventListener('DOMContentLoaded', function () {
                         this.dataset.lkSchema,
                         this.dataset.lkName,
                         database,
-                        branchPath,
+                        '',
                     );
                 });
             });
@@ -1146,7 +1154,7 @@ document.addEventListener('DOMContentLoaded', function () {
             });
 
             // Best-effort: load UC/Lakeflow sync objects and inject into each domain slot
-            loadLakebaseSyncObjects(database, branchPath);
+            loadLakebaseSyncObjects(database, '');
         } catch (e) {
             result.innerHTML = '<div class="alert alert-danger small py-2 mt-2">'
                 + escapeHtmlSettings(e.message || 'Network error') + '</div>';
@@ -1175,7 +1183,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 credentials: 'same-origin',
-                body: JSON.stringify({ kind, schema, name, database: database || '', branch_path: branchPath || '' }),
+                body: JSON.stringify({ kind, schema, name, database: database || '' }),
             });
             let data = {};
             try { data = await resp.json(); } catch (_) {}
@@ -1220,6 +1228,175 @@ document.addEventListener('DOMContentLoaded', function () {
         });
         modal.show();
     }
+
+    // ── Permissions tab ──────────────────────────────────────────────────────
+
+    function _lkPermEsc(s) {
+        return String(s ?? '')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function _lkPermBanner(cls, html) {
+        const el = document.getElementById('lkPermBanner');
+        if (!el) return;
+        el.className = 'alert ' + cls + ' py-2 px-3 small mb-3';
+        el.innerHTML = html;
+    }
+
+    async function _lkPermGrantEmail(email) {
+        if (!email) {
+            _lkPermBanner('alert-warning', 'Please select a user first.');
+            return;
+        }
+        _lkPermBanner('alert-info',
+            '<span class="spinner-border spinner-border-sm me-2" role="status"></span>Granting superuser to <strong>' + _lkPermEsc(email) + '</strong>…');
+        try {
+            const resp = await fetch('/settings/graph-engine/lakebase-grant-superuser', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({user_email: email}),
+            });
+            const data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.detail || data.message || 'Failed');
+            _lkPermBanner('alert-success',
+                '<i class="bi bi-check-circle me-1"></i>' + _lkPermEsc(data.message || 'Done'));
+            await loadLakebasePermissions();
+        } catch (e) {
+            _lkPermBanner('alert-danger', 'Grant failed: ' + _lkPermEsc(e.message));
+        }
+    }
+
+    async function loadLakebasePermissions() {
+        const loading   = document.getElementById('lkPermLoading');
+        const tableWrap = document.getElementById('lkPermTableWrap');
+        const tbody     = document.getElementById('lkPermTbody');
+        const empty     = document.getElementById('lkPermEmpty');
+        const selUser   = document.getElementById('lkPermUserSelect');
+        if (!loading) return;
+
+        const bannerEl = document.getElementById('lkPermBanner');
+        if (bannerEl) bannerEl.className = 'alert d-none py-2 px-3 small mb-3';
+        loading.classList.remove('d-none');
+        tableWrap.classList.add('d-none');
+
+        let data;
+        try {
+            const resp = await fetch('/settings/graph-engine/lakebase-pg-roles');
+            data = await resp.json();
+            if (!resp.ok || !data.success) throw new Error(data.detail || data.message || 'Failed');
+        } catch (e) {
+            loading.classList.add('d-none');
+            _lkPermBanner('alert-danger', 'Could not load permissions: ' + _lkPermEsc(e.message));
+            return;
+        }
+
+        // Build email→role lookup
+        const roleMap = {};
+        (data.roles || []).forEach(r => { roleMap[r.email.toLowerCase()] = r; });
+
+        // Merge: app_users + any Postgres roles not in app_users
+        const appUsers = data.app_users || [];
+        const appEmails = new Set(appUsers.map(u => u.email.toLowerCase()));
+        const extraRoles = (data.roles || []).filter(r => !appEmails.has(r.email.toLowerCase()));
+
+        const allRows = [
+            ...appUsers.map(u => ({email: u.email, display: u.display_name, fromApp: true})),
+            ...extraRoles.map(r => ({email: r.email, display: r.email, fromApp: false})),
+        ];
+
+        // Populate dropdown
+        if (selUser) {
+            const prevVal = selUser.value;
+            selUser.innerHTML = '<option value="">— select a user —</option>';
+            allRows.forEach(row => {
+                const opt = document.createElement('option');
+                opt.value = row.email;
+                opt.textContent = row.display + (row.display !== row.email ? ' (' + row.email + ')' : '');
+                selUser.appendChild(opt);
+            });
+            if (prevVal) selUser.value = prevVal;
+        }
+
+        // Render table
+        tbody.innerHTML = '';
+        empty.classList.toggle('d-none', allRows.length > 0);
+        allRows.forEach(row => {
+            const em   = row.email.toLowerCase();
+            const role = roleMap[em];
+            const hasRole      = Boolean(role);
+            const hasSuperuser = hasRole && role.has_superuser;
+
+            const tr = document.createElement('tr');
+
+            // User cell
+            const tdUser = document.createElement('td');
+            tdUser.className = 'align-middle';
+            tdUser.innerHTML = row.display !== row.email
+                ? '<span class="fw-semibold">' + _lkPermEsc(row.display) + '</span>'
+                  + ' <span class="text-muted small">' + _lkPermEsc(row.email) + '</span>'
+                : '<span class="font-monospace small">' + _lkPermEsc(row.email) + '</span>';
+            tr.appendChild(tdUser);
+
+            // Role cell
+            const tdRole = document.createElement('td');
+            tdRole.className = 'text-center align-middle';
+            tdRole.innerHTML = hasRole
+                ? '<span class="badge bg-success-subtle text-success-emphasis">yes</span>'
+                : '<span class="badge bg-secondary-subtle text-secondary-emphasis">none</span>';
+            tr.appendChild(tdRole);
+
+            // Superuser cell
+            const tdSu = document.createElement('td');
+            tdSu.className = 'text-center align-middle';
+            tdSu.innerHTML = hasSuperuser
+                ? '<span class="badge bg-primary-subtle text-primary-emphasis"><i class="bi bi-shield-fill-check me-1"></i>superuser</span>'
+                : '<span class="badge bg-warning-subtle text-warning-emphasis">no</span>';
+            tr.appendChild(tdSu);
+
+            // Action cell
+            const tdBtn = document.createElement('td');
+            tdBtn.className = 'text-end align-middle';
+            const btn = document.createElement('button');
+            btn.className = 'btn btn-xs btn-outline-primary py-0 px-2';
+            btn.disabled = hasSuperuser;
+            btn.dataset.email = row.email;
+            btn.innerHTML = '<i class="bi bi-shield-plus me-1"></i>Grant';
+            btn.addEventListener('click', function () {
+                _lkPermGrantEmail(this.dataset.email);
+            });
+            tdBtn.appendChild(btn);
+            tr.appendChild(tdBtn);
+
+            tbody.appendChild(tr);
+        });
+
+        loading.classList.add('d-none');
+        tableWrap.classList.remove('d-none');
+    }
+
+    // Wire Permissions tab listeners once
+    (function () {
+        const tabBtn     = document.getElementById('lktab-perms');
+        const grantBtn   = document.getElementById('btnLkPermGrant');
+        const refreshBtn = document.getElementById('btnLkPermRefresh');
+        let loaded = false;
+
+        if (tabBtn) {
+            tabBtn.addEventListener('shown.bs.tab', function () {
+                if (!loaded) { loaded = true; loadLakebasePermissions(); }
+            });
+        }
+        if (grantBtn) {
+            grantBtn.addEventListener('click', function () {
+                const sel = document.getElementById('lkPermUserSelect');
+                _lkPermGrantEmail(sel ? sel.value.trim() : '');
+            });
+        }
+        if (refreshBtn) {
+            refreshBtn.addEventListener('click', function () { loadLakebasePermissions(); });
+        }
+    }());
 
     /** Drop all objects for a domain (views first, then tables, then UC/Lakeflow sync objects).
      *  Takes only the registry key — items are looked up from _lkDomainRegistry
@@ -1292,7 +1469,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     credentials: 'same-origin',
-                    body: JSON.stringify({ kind: o.kind, schema, name: o.name, database: database || '', branch_path: branchPath || '' }),
+                    body: JSON.stringify({ kind: o.kind, schema, name: o.name, database: database || '' }),
                 });
                 let data = {};
                 try { data = await resp.json(); } catch (_) { /* non-JSON body */ }

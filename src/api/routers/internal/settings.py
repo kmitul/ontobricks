@@ -848,13 +848,14 @@ async def get_graph_engine_lakebase_pg_databases(
 @router.get("/graph-engine/lakebase-pg-schemas")
 async def get_graph_engine_lakebase_pg_schemas(
     database: str = "",
+    branch_path: str = "",
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
     """List Postgres schemas in a Lakebase database."""
     with map_route_errors("graph engine Lakebase PG schemas", logger):
         return config_service.graph_engine_lakebase_pg_schemas_result(
-            database, session_mgr, settings
+            database, session_mgr, settings, branch_path=branch_path
         )
 
 
@@ -932,6 +933,40 @@ async def post_graph_engine_lakebase_drop_object(
             branch_path=data.get("branch_path", ""),
             _session_mgr=session_mgr,
             _settings=settings,
+        )
+
+
+@router.get(
+    "/graph-engine/lakebase-pg-roles",
+    dependencies=[Depends(require(ROLE_ADMIN))],
+)
+async def get_graph_engine_lakebase_pg_roles(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """List Postgres roles on the graph Lakebase branch + overlay app-user status (admin only)."""
+    with map_route_errors("graph engine Lakebase pg roles", logger):
+        return config_service.graph_engine_lakebase_pg_roles_result(session_mgr, settings)
+
+
+@router.post(
+    "/graph-engine/lakebase-grant-superuser",
+    dependencies=[Depends(require(ROLE_ADMIN))],
+)
+async def post_graph_engine_lakebase_grant_superuser(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Grant DATABRICKS_SUPERUSER to a user on the graph Lakebase branch (admin only).
+
+    Body: ``{ "user_email": "user@example.com" }``
+    """
+    with map_route_errors("graph engine Lakebase grant superuser", logger):
+        data = await request.json()
+        user_email = (data.get("user_email") or "").strip()
+        return config_service.graph_engine_lakebase_grant_superuser_result(
+            user_email, session_mgr, settings
         )
 
 

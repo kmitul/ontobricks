@@ -1248,30 +1248,13 @@ class SettingsService:
         import os
 
         from back.core.databricks import get_lakebase_auth
+        from back.core.databricks.LakebaseAuth import BranchLakebaseAuth
         from back.core.graphdb.lakebase.LakebaseBase import (
             default_schema,
             validate_graph_schema,
         )
 
-        auth = get_lakebase_auth()
-        port = int(os.environ.get("PGPORT", "5432") or "5432")
-        bound_db = os.environ.get("PGDATABASE", "").strip()
-        host_display = (
-            os.environ.get("PGHOST", "")
-            or os.environ.get("LAKEBASE_PROJECT", "")
-            + (
-                "/" + os.environ.get("LAKEBASE_BRANCH", "")
-                if os.environ.get("LAKEBASE_BRANCH")
-                else ""
-            )
-        )
-
-        if not auth.is_available:
-            raise ValidationError(
-                "Lakebase not available — set LAKEBASE_PROJECT + LAKEBASE_BRANCH + PGUSER "
-                "in .env (local), or bind a Databricks App postgres resource (deployed)."
-            )
-
+        # Resolve graph engine config first so we can pick the right auth.
         try:
             _, host, token, registry_cfg = SettingsService._resolve_context(
                 session_mgr, settings
@@ -1288,17 +1271,39 @@ class SettingsService:
 
         db_override = ""
         schema_raw = ""
+        branch_path = ""
         if isinstance(gcfg, dict):
             db_override = (gcfg.get("database") or "").strip()
             schema_raw = (gcfg.get("schema") or "").strip()
+            branch_path = (gcfg.get("lakebase_branch") or "").strip()
+
+        # Use the same auth selection as GraphDBFactory: BranchLakebaseAuth
+        # when lakebase_branch is configured, else the bound auth.
+        if branch_path:
+            auth = BranchLakebaseAuth(branch_path, db_override)
+        else:
+            auth = get_lakebase_auth()
+
+        port = int(os.environ.get("PGPORT", "5432") or "5432")
+        bound_db = os.environ.get("PGDATABASE", "").strip()
+        try:
+            host_display = auth.host
+        except Exception:  # noqa: BLE001
+            host_display = os.environ.get("PGHOST", "") or os.environ.get("LAKEBASE_PROJECT", "")
+
+        if not auth.is_available:
+            raise ValidationError(
+                "Lakebase not available — set LAKEBASE_PROJECT + LAKEBASE_BRANCH + PGUSER "
+                "in .env (local), or bind a Databricks App postgres resource (deployed)."
+            )
 
         try:
             schema = validate_graph_schema(schema_raw or default_schema())
         except ValueError as exc:
             raise ValidationError(str(exc)) from exc
 
-        base_db = bound_db or auth.database
-        effective_db = db_override or base_db
+        registry_db = bound_db or get_lakebase_auth().database  # PGDATABASE → registry store
+        graph_db = db_override or registry_db                    # graph_engine_config.database
 
         try:
             from back.core.graphdb.lakebase.pool import _require_psycopg
@@ -1311,7 +1316,7 @@ class SettingsService:
             ) from exc
 
         kwargs = auth.kwargs(application_name="ontobricks-graph-health")
-        kwargs["dbname"] = effective_db
+        kwargs["dbname"] = graph_db
 
         schema_exists = False
         table_count = 0
@@ -1352,8 +1357,8 @@ class SettingsService:
                 "message": f"Lakebase health probe failed: {exc}",
                 "host": host_display,
                 "port": port,
-                "bound_database": base_db,
-                "effective_database": effective_db,
+                "registry_database": registry_db,
+                "graph_database": graph_db,
                 "graph_schema": schema,
                 "schema_exists": False,
                 "tables_in_schema": 0,
@@ -1364,21 +1369,22 @@ class SettingsService:
             "reason": "ok",
             "host": host_display,
             "port": port,
-            "bound_database": base_db,
-            "effective_database": effective_db,
+            "registry_database": registry_db,
+            "graph_database": graph_db,
             "graph_schema": schema,
             "schema_exists": schema_exists,
             "tables_in_schema": table_count,
         }
         if schema_exists:
             out["message"] = (
-                f"Connected to database {effective_db!r}; schema {schema!r} exists "
-                f"({table_count} table(s))."
+                f"Graph DB ready: database={graph_db!r}, schema={schema!r} "
+                f"({table_count} table(s)). Registry database: {registry_db!r}."
             )
         else:
             out["message"] = (
-                f"Connected to database {effective_db!r}, but schema {schema!r} "
-                "does not exist yet — run a Digital Twin build or create the schema."
+                f"Connected to graph database {graph_db!r}, but schema {schema!r} "
+                "does not exist yet — run a Digital Twin build or create the schema. "
+                f"Registry database: {registry_db!r}."
             )
         return out
 
@@ -1544,21 +1550,30 @@ class SettingsService:
         database: str,
         _session_mgr: SessionManager,
         _settings: Settings,
+        branch_path: str = "",
     ) -> Dict[str, Any]:
-        """List Postgres schemas in a Lakebase database (using the bound instance)."""
+        """List Postgres schemas in the graph Lakebase database.
+
+        Uses :meth:`_graph_engine_auth` so it always connects to the correct
+        graph project (BranchLakebaseAuth when configured, bound auth otherwise).
+        ``branch_path`` / ``database`` from the form take priority over saved config.
+        """
         try:
-            from back.core.databricks import get_lakebase_auth
             from back.core.graphdb.lakebase.pool import _require_psycopg
 
-            auth = get_lakebase_auth()
+            auth, effective_db = SettingsService._graph_engine_auth(
+                _session_mgr, _settings,
+                form_branch_path=branch_path,
+                form_database=database,
+            )
             if not auth.is_available:
                 raise ValidationError(
                     "Lakebase resource not bound (LAKEBASE_PROJECT/LAKEBASE_BRANCH/PGUSER missing)"
                 )
             psycopg, _ = _require_psycopg()
             kwargs = auth.kwargs(application_name="ontobricks-schema-list")
-            if database:
-                kwargs["dbname"] = database
+            if effective_db:
+                kwargs["dbname"] = effective_db
             with psycopg.connect(**kwargs) as conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -1672,21 +1687,6 @@ class SettingsService:
         if bool(params.get("grant_uc_catalog")) and sync_mode == "managed_synced":
             uc_catalog = (saved_cfg.get("sync_uc_catalog") or "").strip()
 
-        def _persist_cfg(result: Dict[str, Any]) -> None:
-            merged = dict(saved_cfg)
-            merged["database"] = result.get("database", database)
-            merged["schema"] = result.get("schema", schema)
-            merged["lakebase_project"] = result.get("instance", name)
-            merged["lakebase_branch"] = result.get("branch", branch)
-            ok, msg = global_config_service.set_graph_engine_config(
-                host, token, registry_cfg, merged
-            )
-            if not ok:
-                raise InfrastructureError(msg)
-            SettingsService._mirror_graph_engine_to_domain_registry(
-                session_mgr, config=merged
-            )
-
         tm = get_task_manager()
         task = tm.create_task(
             name="Lakebase Graph DB Provision",
@@ -1707,7 +1707,7 @@ class SettingsService:
                 sync_mode=sync_mode,
                 uc_catalog=uc_catalog,
                 pg_user=pg_user,
-                on_success=_persist_cfg,
+                operator_email=email,
             ).run()
 
         thread = threading.Thread(target=run_provision, daemon=True)
@@ -1718,6 +1718,67 @@ class SettingsService:
             "task_id": task.id,
             "message": "Lakebase graph DB provisioning started",
         }
+
+    @staticmethod
+    def _graph_engine_database(
+        session_mgr: SessionManager,
+        settings: Any,
+    ) -> str:
+        """Return the ``database`` field from the saved graph engine config.
+
+        Returns ``""`` on any failure so callers fall back gracefully.
+        """
+        try:
+            domain = get_domain(session_mgr)
+            host, token = get_databricks_host_and_token(domain, settings)
+            registry_cfg = RegistryCfg.from_domain(domain, settings).as_dict()
+            ge = global_config_service.get_graph_engine_config(host, token, registry_cfg)
+            return (ge.get("database") or "").strip()
+        except Exception:  # noqa: BLE001
+            return ""
+
+    @staticmethod
+    def _graph_engine_auth(
+        session_mgr: SessionManager,
+        settings: Any,
+        form_branch_path: str = "",
+        form_database: str = "",
+    ):
+        """Return the correct Lakebase auth for graph DB operations.
+
+        Mirrors the auth selection in :class:`GraphDBFactory._create_lakebase`:
+
+        * ``form_branch_path`` — explicit branch path from the request (e.g. from a
+          Connection-tab form field).  Takes priority when non-empty.
+        * Saved ``graph_engine_config.lakebase_branch`` — used when the form did not
+          supply a branch path.
+        * Bound auth (PGHOST) — fallback when no branch is configured anywhere.
+
+        Also returns the effective database name (form_database → saved config → "").
+        Returns ``(auth, database)``; raises on irrecoverable failures.
+        """
+        from back.core.databricks import get_lakebase_auth
+        from back.core.databricks.LakebaseAuth import BranchLakebaseAuth
+
+        branch_path = form_branch_path.strip()
+        database = form_database.strip()
+
+        # Load saved config to fill gaps not supplied by the form.
+        try:
+            domain = get_domain(session_mgr)
+            host, token = get_databricks_host_and_token(domain, settings)
+            registry_cfg = RegistryCfg.from_domain(domain, settings).as_dict()
+            ge = global_config_service.get_graph_engine_config(host, token, registry_cfg)
+            if not branch_path:
+                branch_path = (ge.get("lakebase_branch") or "").strip()
+            if not database:
+                database = (ge.get("database") or "").strip()
+        except Exception:  # noqa: BLE001
+            pass  # fall through to bound auth
+
+        if branch_path:
+            return BranchLakebaseAuth(branch_path, database), database
+        return get_lakebase_auth(), database
 
     @staticmethod
     def _lakebase_kwargs_for_branch(
@@ -1795,34 +1856,32 @@ class SettingsService:
         _session_mgr: SessionManager,
         _settings: Settings,
     ) -> Dict[str, Any]:
-        """List all user schemas, tables and views in a Lakebase database.
+        """List all user schemas, tables and views in the graph Lakebase database.
 
-        Uses ``branch_path`` (the form's current branch selection) when provided
-        so the result reflects the live form state rather than the saved config.
-        Falls back to the bound Lakebase auth when ``branch_path`` is empty.
-        Returns the Postgres ``current_user`` so the frontend can display it.
+        Uses :meth:`_graph_engine_auth` to resolve the correct Lakebase host:
+        saved ``graph_engine_config.lakebase_branch`` (BranchLakebaseAuth) when
+        configured, otherwise the bound Lakebase (registry host).
+        The ``branch_path`` / ``database`` form params take priority over saved
+        config when provided.
         """
         try:
             from back.core.graphdb.lakebase.pool import _require_psycopg
 
             psycopg, _ = _require_psycopg()
 
-            if branch_path:
-                kwargs = SettingsService._lakebase_kwargs_for_branch(
-                    branch_path, database, "ontobricks-obj-list"
+            auth, effective_db = SettingsService._graph_engine_auth(
+                _session_mgr, _settings,
+                form_branch_path=branch_path,
+                form_database=database,
+            )
+            if not auth.is_available:
+                raise ValidationError(
+                    "Lakebase not available — configure graph_engine_config.lakebase_branch "
+                    "or bind a Lakebase resource."
                 )
-            else:
-                from back.core.databricks import get_lakebase_auth
-
-                auth = get_lakebase_auth()
-                if not auth.is_available:
-                    raise ValidationError(
-                        "Lakebase resource not bound "
-                        "(LAKEBASE_PROJECT/LAKEBASE_BRANCH/PGUSER missing)"
-                    )
-                kwargs = auth.kwargs(application_name="ontobricks-obj-list")
-                if database:
-                    kwargs["dbname"] = database
+            kwargs = auth.kwargs(application_name="ontobricks-obj-list")
+            if effective_db:
+                kwargs["dbname"] = effective_db
             with psycopg.connect(**kwargs) as conn:
                 with conn.cursor() as cur:
                     cur.execute("SELECT current_user")
@@ -1834,6 +1893,7 @@ class SettingsService:
                                pg_catalog.pg_get_userbyid(nspowner) AS owner
                         FROM pg_catalog.pg_namespace
                         WHERE nspname NOT LIKE 'pg_%%'
+                          AND SUBSTRING(nspname, 1, 2) != '__'
                           AND nspname NOT IN ('information_schema', 'public')
                           AND (
                               pg_catalog.pg_get_userbyid(nspowner) = current_user
@@ -2111,22 +2171,19 @@ class SettingsService:
 
             psycopg, _ = _require_psycopg()
 
-            if branch_path:
-                kwargs = SettingsService._lakebase_kwargs_for_branch(
-                    branch_path, database, "ontobricks-obj-drop"
+            auth, effective_db = SettingsService._graph_engine_auth(
+                _session_mgr, _settings,
+                form_branch_path=branch_path,
+                form_database=database,
+            )
+            if not auth.is_available:
+                raise ValidationError(
+                    "Lakebase not available — configure graph_engine_config.lakebase_branch "
+                    "or bind a Lakebase resource."
                 )
-            else:
-                from back.core.databricks import get_lakebase_auth
-
-                auth = get_lakebase_auth()
-                if not auth.is_available:
-                    raise ValidationError(
-                        "Lakebase resource not bound "
-                        "(LAKEBASE_PROJECT/LAKEBASE_BRANCH/PGUSER missing)"
-                    )
-                kwargs = auth.kwargs(application_name="ontobricks-obj-drop")
-                if database:
-                    kwargs["dbname"] = database
+            kwargs = auth.kwargs(application_name="ontobricks-obj-drop")
+            if effective_db:
+                kwargs["dbname"] = effective_db
 
             with psycopg.connect(**kwargs) as conn:
                 with conn.cursor() as cur:
@@ -2144,6 +2201,167 @@ class SettingsService:
             raise InfrastructureError(
                 "Lakebase drop object failed", detail=str(exc)
             ) from exc
+
+    @staticmethod
+    def graph_engine_lakebase_pg_roles_result(
+        session_mgr: SessionManager,
+        settings: Settings,
+    ) -> Dict[str, Any]:
+        """List Postgres roles on the graph Lakebase branch and overlay app-user status.
+
+        Returns::
+
+            {
+                "success": True,
+                "branch_path": "projects/.../branches/...",
+                "roles": [
+                    {"email": "user@example.com", "role_id": "...",
+                     "has_superuser": True/False},
+                    ...
+                ],
+                "app_users": [
+                    {"email": "user@example.com", "display_name": "..."},
+                    ...
+                ],
+            }
+        """
+        from databricks.sdk import WorkspaceClient
+
+        auth, _ = SettingsService._graph_engine_auth(session_mgr, settings)
+        if not auth.is_available:
+            raise ValidationError(
+                "Lakebase not available — configure graph_engine_config.lakebase_branch "
+                "or bind a Lakebase resource."
+            )
+        branch_path = auth.branch_path
+        if not branch_path:
+            raise ValidationError("Could not resolve Lakebase branch path for Postgres roles API")
+
+        w = WorkspaceClient()
+        api = w.api_client
+        raw = (api.do("GET", f"/api/2.0/postgres/{branch_path}/roles") or {})
+        existing = raw.get("roles") or []
+
+        roles = []
+        for r in existing:
+            status = r.get("status") or {}
+            pg_role = str(status.get("postgres_role") or "").lower()
+            if not pg_role:
+                continue
+            role_id = (r.get("name") or "").rsplit("/", 1)[-1]
+            has_superuser = "DATABRICKS_SUPERUSER" in (status.get("membership_roles") or [])
+            roles.append({"email": pg_role, "role_id": role_id, "has_superuser": has_superuser})
+
+        # App users (best-effort — may be empty when SP has no ACL read access)
+        app_users: List[Dict[str, Any]] = []
+        try:
+            _, host, token, _ = SettingsService._resolve_context(session_mgr, settings)
+            app_name = settings.ontobricks_app_name
+            principals = permission_service.list_app_principals(host, token, app_name)
+            for u in principals.get("users", []):
+                email = (u.get("email") or "").strip()
+                if email:
+                    app_users.append({
+                        "email": email,
+                        "display_name": u.get("display_name") or email,
+                    })
+        except Exception:  # noqa: BLE001
+            pass
+
+        return {
+            "success": True,
+            "branch_path": branch_path,
+            "roles": roles,
+            "app_users": app_users,
+        }
+
+    @staticmethod
+    def graph_engine_lakebase_grant_superuser_result(
+        user_email: str,
+        session_mgr: SessionManager,
+        settings: Settings,
+    ) -> Dict[str, Any]:
+        """Ensure *user_email* has a Postgres OAuth role and DATABRICKS_SUPERUSER membership.
+
+        Mirrors the logic of ``LakebaseGraphProvisioner._ensure_superuser_role``
+        but operates on the currently configured graph Lakebase branch.
+        Idempotent — re-granting an existing superuser is a no-op.
+        """
+        import time
+        from databricks.sdk import WorkspaceClient
+
+        user_email = (user_email or "").strip()
+        if not user_email:
+            raise ValidationError("user_email is required")
+
+        auth, _ = SettingsService._graph_engine_auth(session_mgr, settings)
+        if not auth.is_available:
+            raise ValidationError(
+                "Lakebase not available — configure graph_engine_config.lakebase_branch "
+                "or bind a Lakebase resource."
+            )
+        branch_path = auth.branch_path
+        if not branch_path:
+            raise ValidationError("Could not resolve Lakebase branch path for Postgres roles API")
+
+        w = WorkspaceClient()
+        api = w.api_client
+
+        existing = (api.do("GET", f"/api/2.0/postgres/{branch_path}/roles") or {}).get("roles") or []
+        role_map: Dict[str, Dict[str, Any]] = {}
+        for r in existing:
+            status = r.get("status") or {}
+            pg_role = str(status.get("postgres_role") or "").lower()
+            if not pg_role:
+                continue
+            role_map[pg_role] = {
+                "role_id": (r.get("name") or "").rsplit("/", 1)[-1],
+                "has_superuser": "DATABRICKS_SUPERUSER" in (status.get("membership_roles") or []),
+            }
+
+        email_lower = user_email.lower()
+        existing_role = role_map.get(email_lower)
+
+        if existing_role and existing_role.get("has_superuser"):
+            return {"success": True, "message": f"{user_email} already has DATABRICKS_SUPERUSER"}
+
+        role_id: str = (existing_role or {}).get("role_id", "")
+
+        if not role_id:
+            op = (
+                api.do(
+                    "POST",
+                    f"/api/2.0/postgres/{branch_path}/roles",
+                    body={
+                        "spec": {
+                            "identity_type": "USER",
+                            "postgres_role": user_email,
+                            "auth_method": "LAKEBASE_OAUTH_V1",
+                        }
+                    },
+                )
+                or {}
+            )
+            op_name = op.get("name") or ""
+            parts = op_name.split("/")
+            if "roles" in parts:
+                idx = parts.index("roles")
+                if idx + 1 < len(parts) and parts[idx + 1] != "operations":
+                    role_id = parts[idx + 1]
+            if not role_id:
+                raise InfrastructureError(
+                    f"Could not create Postgres role for {user_email}",
+                    detail=f"LRO name: {op_name!r}",
+                )
+            time.sleep(3.0)
+
+        api.do(
+            "PATCH",
+            f"/api/2.0/postgres/{branch_path}/roles/{role_id}?update_mask=spec.membership_roles",
+            body={"spec": {"membership_roles": ["DATABRICKS_SUPERUSER"]}},
+        )
+        logger.info("Granted DATABRICKS_SUPERUSER to %s on %s", user_email, branch_path)
+        return {"success": True, "message": f"DATABRICKS_SUPERUSER granted to {user_email}"}
 
     @staticmethod
     def graph_engine_drop_uc_object_result(

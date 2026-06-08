@@ -172,6 +172,13 @@
                                 </button>
                             </li>
                             <li class="nav-item" role="presentation">
+                                <button class="nav-link" id="lktab-perms" data-bs-toggle="tab"
+                                        data-bs-target="#lkpane-perms" type="button" role="tab"
+                                        aria-controls="lkpane-perms" aria-selected="false">
+                                    <i class="bi bi-shield-lock me-1"></i> Permissions
+                                </button>
+                            </li>
+                            <li class="nav-item" role="presentation">
                                 <button class="nav-link" id="lktab-advanced" data-bs-toggle="tab"
                                         data-bs-target="#lkpane-advanced" type="button" role="tab"
                                         aria-controls="lkpane-advanced" aria-selected="false">
@@ -188,6 +195,14 @@
                                     Select the Autoscaling project, branch, and database where graph triples will be stored.
                                     Use <strong>Load</strong> to discover available options from the workspace.
                                 </p>
+                                <div class="alert alert-info py-2 px-3 small mb-3">
+                                    <i class="bi bi-info-circle me-1"></i>
+                                    <strong>Architecture note:</strong> the app always connects via the <strong>bound Lakebase</strong>
+                                    (PGHOST set by the platform resource binding). The project and branch selected here are used
+                                    only by the <em>Create Graph DB</em> provisioner. The <strong>database</strong> and
+                                    <strong>schema</strong> fields directly control where graph triples are stored.
+                                    The <strong>registry</strong> always uses a separate database (PGDATABASE).
+                                </div>
 
                                 <!-- Row 1: Project + Branch -->
                                 <div class="row g-3 mb-3">
@@ -355,7 +370,57 @@
                                 </div>
                             </div>
 
-                            <!-- ── TAB 5 · Advanced ── -->
+                            <!-- ── TAB 5 · Permissions ── -->
+                            <div class="tab-pane fade" id="lkpane-perms" role="tabpanel" aria-labelledby="lktab-perms">
+                                <p class="small text-muted mb-3">
+                                    Grant Postgres superuser access to application users so they can query
+                                    the graph database directly in the Databricks UI.
+                                </p>
+
+                                <!-- Grant row: dropdown of app users + Grant + Refresh -->
+                                <div class="row g-2 align-items-end mb-3">
+                                    <div class="col">
+                                        <label for="lkPermUserSelect" class="form-label small fw-semibold mb-1">Select user</label>
+                                        <select class="form-select form-select-sm" id="lkPermUserSelect">
+                                            <option value="">— loading users… —</option>
+                                        </select>
+                                    </div>
+                                    <div class="col-auto">
+                                        <button class="btn btn-sm btn-primary" id="btnLkPermGrant">
+                                            <i class="bi bi-shield-check me-1"></i>Grant superuser
+                                        </button>
+                                    </div>
+                                    <div class="col-auto">
+                                        <button class="btn btn-sm btn-outline-secondary" id="btnLkPermRefresh">
+                                            <i class="bi bi-arrow-clockwise me-1"></i>Refresh
+                                        </button>
+                                    </div>
+                                </div>
+
+                                <!-- Status banner -->
+                                <div id="lkPermBanner" class="alert d-none py-2 px-3 small mb-3" role="alert"></div>
+
+                                <!-- Loading / table -->
+                                <div id="lkPermLoading" class="text-center text-muted small py-3 d-none">
+                                    <div class="spinner-border spinner-border-sm me-2" role="status"></div>Loading roles…
+                                </div>
+                                <div id="lkPermTableWrap" class="d-none">
+                                    <table class="table table-sm table-hover ob-table mb-0">
+                                        <thead class="table-light">
+                                            <tr>
+                                                <th>User</th>
+                                                <th class="text-center">Postgres role</th>
+                                                <th class="text-center">Superuser</th>
+                                                <th class="text-end">Action</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody id="lkPermTbody"></tbody>
+                                    </table>
+                                    <div id="lkPermEmpty" class="text-center text-muted small py-2 d-none">No users found.</div>
+                                </div>
+                            </div>
+
+                            <!-- ── TAB 6 · Advanced ── -->
                             <div class="tab-pane fade" id="lkpane-advanced" role="tabpanel" aria-labelledby="lktab-advanced">
                                 <p class="small text-muted mb-3">
                                     Form fields in the other tabs are merged into this object on <strong>Save</strong>.

@@ -76,6 +76,7 @@ def provision_steps(*, grant_uc: bool) -> List[Dict[str, str]]:
         {"name": "schema", "description": "Creating graph schema"},
         {"name": "can_use", "description": "Granting CAN_USE on the project"},
         {"name": "grants", "description": "Granting schema privileges"},
+        {"name": "superusers", "description": "Granting Postgres superuser to CAN_MANAGE users"},
     ]
     if grant_uc:
         steps.append(
@@ -132,6 +133,7 @@ class LakebaseGraphProvisioner:
         sync_mode: str = "app_managed",
         uc_catalog: str = "",
         pg_user: str = "",
+        operator_email: str = "",
         on_success: Optional[Callable[[Dict[str, Any]], None]] = None,
     ) -> None:
         self._tm = tm
@@ -155,6 +157,7 @@ class LakebaseGraphProvisioner:
         self._sync_mode = sync_mode or "app_managed"
         self._uc_catalog = (uc_catalog or "").strip()
         self._pg_user = (pg_user or "").strip()
+        self._operator_email = (operator_email or "").strip()
         self._on_success = on_success
 
         # Resolved canonical resource paths (filled in during the endpoint
@@ -211,6 +214,9 @@ class LakebaseGraphProvisioner:
 
             tm.advance_step(self._task_id)
             self._step_grant_schema(api, sp_ids)
+
+            tm.advance_step(self._task_id)
+            self._step_grant_superuser_to_managers(api)
 
             if self._uc_catalog and self._sync_mode == "managed_synced":
                 tm.advance_step(self._task_id)
@@ -496,13 +502,20 @@ class LakebaseGraphProvisioner:
                 }
             },
         )
-        # The control plane reports the database asynchronously; give it a
-        # moment then confirm it is listed before moving on.
-        for _ in range(6):
+        # Phase 1: wait for the control-plane API to list the new database.
+        for _ in range(10):
             self._check_cancelled()
             if self._database_exists(api):
                 break
             time.sleep(3.0)
+
+        # Phase 2: wait for the database to accept Postgres connections.
+        # The API may report the DB as existing before the Postgres layer
+        # is ready, causing "database does not exist" on the first connect.
+        self._tm.update_progress(
+            self._task_id, 43, f"Waiting for {self._database} to become reachable…"
+        )
+        self._wait_for_db_reachable()
         self._tm.update_progress(
             self._task_id, 45, f"Database {self._database} created"
         )
@@ -613,6 +626,196 @@ class LakebaseGraphProvisioner:
                 )
         self._tm.update_progress(self._task_id, 98, "Unity Catalog grants applied")
 
+    def _step_grant_superuser_to_managers(self, api: Any) -> None:
+        """Provision Postgres roles + DATABRICKS_SUPERUSER for every workspace admin.
+
+        Workspace admins hold ``CAN_MANAGE`` on every Lakebase project via the
+        *admins* group, but that group membership is never expanded to individual
+        ``user_name`` rows in the project ACL — so reading the project ACL alone
+        is insufficient.  Instead we resolve admins via the SCIM ``/Groups``
+        endpoint (``displayName eq admins``) and act on ``Users/`` members only
+        (service-principal members already have DATABRICKS_SUPERUSER as the
+        project creator).
+
+        For each admin user we ensure:
+
+        1. A ``LAKEBASE_OAUTH_V1`` Postgres role (created if absent).
+        2. ``DATABRICKS_SUPERUSER`` group membership (patched if absent).
+
+        Idempotent and best-effort — users who already hold the membership are
+        skipped; individual failures produce warnings but do not abort the flow.
+        """
+        manager_users = self._resolve_admin_emails(api)
+        if not manager_users:
+            self._tm.update_progress(
+                self._task_id, 93, "No workspace admin users found — superuser step skipped"
+            )
+            return
+
+        try:
+            existing = (
+                api.do("GET", f"/api/2.0/postgres/{self._branch_path}/roles") or {}
+            ).get("roles") or []
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not list branch roles: %s", exc)
+            existing = []
+
+        # email → {role_id, has_superuser}
+        role_map: Dict[str, Dict[str, Any]] = {}
+        for r in existing:
+            status = r.get("status") or {}
+            pg_role = str(status.get("postgres_role") or "").lower()
+            if not pg_role:
+                continue
+            role_map[pg_role] = {
+                "role_id": (r.get("name") or "").rsplit("/", 1)[-1],
+                "has_superuser": "DATABRICKS_SUPERUSER" in (status.get("membership_roles") or []),
+            }
+
+        for user_email in manager_users:
+            self._ensure_superuser_role(api, user_email, role_map)
+
+        self._tm.update_progress(
+            self._task_id,
+            93,
+            f"Superuser grants applied to {len(manager_users)} CAN_MANAGE user(s)",
+        )
+
+    def _resolve_admin_emails(self, api: Any) -> List[str]:
+        """Return emails that should receive DATABRICKS_SUPERUSER.
+
+        Priority order:
+
+        1. ``operator_email`` — the human who clicked the button.  Always
+           included when set.  This is the only reliable source when the
+           provisioner runs as a service principal that lacks SCIM read
+           access.
+
+        2. Workspace admins group via SCIM (best-effort).  May return an
+           empty supplemental list when called as a non-admin SP — that is
+           not treated as an error.
+        """
+        seen: set = set()
+        emails: List[str] = []
+
+        if self._operator_email:
+            emails.append(self._operator_email)
+            seen.add(self._operator_email.lower())
+
+        try:
+            resources = (
+                api.do(
+                    "GET",
+                    "/api/2.0/preview/scim/v2/Groups?filter=displayName+eq+admins",
+                )
+                or {}
+            ).get("Resources") or []
+            for group in resources:
+                for member in (group.get("members") or []):
+                    ref = member.get("$ref") or ""
+                    if not ref.startswith("Users/"):
+                        continue
+                    user_id = member.get("value") or ref.split("/", 1)[-1]
+                    if not user_id:
+                        continue
+                    try:
+                        user = (
+                            api.do(
+                                "GET",
+                                f"/api/2.0/preview/scim/v2/Users/{user_id}",
+                            )
+                            or {}
+                        )
+                        email = user.get("userName") or ""
+                        if email and email.lower() not in seen:
+                            emails.append(email)
+                            seen.add(email.lower())
+                    except Exception as exc:  # noqa: BLE001
+                        logger.debug(
+                            "Could not resolve admin user %s: %s", user_id, exc
+                        )
+        except Exception as exc:  # noqa: BLE001
+            # Expected when the SP doesn't have SCIM read access — not fatal.
+            logger.debug("SCIM admin group lookup skipped: %s", exc)
+
+        return emails
+
+    def _ensure_superuser_role(
+        self, api: Any, user_email: str, role_map: Dict[str, Dict[str, Any]]
+    ) -> None:
+        """Create (if absent) and promote *user_email* to DATABRICKS_SUPERUSER."""
+        email_lower = user_email.lower()
+        existing = role_map.get(email_lower)
+
+        if existing and existing.get("has_superuser"):
+            logger.debug("%s already has DATABRICKS_SUPERUSER — skipping", user_email)
+            return
+
+        role_id: str = (existing or {}).get("role_id", "")
+
+        if not role_id:
+            try:
+                op = (
+                    api.do(
+                        "POST",
+                        f"/api/2.0/postgres/{self._branch_path}/roles",
+                        body={
+                            "spec": {
+                                "identity_type": "USER",
+                                "postgres_role": user_email,
+                                "auth_method": "LAKEBASE_OAUTH_V1",
+                            }
+                        },
+                    )
+                    or {}
+                )
+                # Extract role_id from the LRO name:
+                # ".../roles/<role_id>/operations/<op_id>"
+                op_name = op.get("name") or ""
+                parts = op_name.split("/")
+                if "roles" in parts:
+                    idx = parts.index("roles")
+                    if idx + 1 < len(parts) and parts[idx + 1] != "operations":
+                        role_id = parts[idx + 1]
+                if not role_id:
+                    raise ProvisionError(
+                        f"Could not extract role_id from operation: {op_name!r}"
+                    )
+                time.sleep(3.0)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "Postgres role creation failed for %s: %s", user_email, exc
+                )
+                self._warnings.append(
+                    f"{user_email}: Postgres role creation failed ({exc})"
+                )
+                return
+
+        try:
+            api.do(
+                "PATCH",
+                (
+                    f"/api/2.0/postgres/{self._branch_path}/roles/{role_id}"
+                    f"?update_mask=spec.membership_roles"
+                ),
+                body={"spec": {"membership_roles": ["DATABRICKS_SUPERUSER"]}},
+            )
+            self._granted.append(
+                f"{user_email}: DATABRICKS_SUPERUSER on {self._project_short}"
+            )
+            logger.info(
+                "Granted DATABRICKS_SUPERUSER to %s on %s",
+                user_email,
+                self._project_short,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "DATABRICKS_SUPERUSER grant failed for %s: %s", user_email, exc
+            )
+            self._warnings.append(
+                f"{user_email}: DATABRICKS_SUPERUSER grant failed ({exc})"
+            )
+
     # ------------------------------------------------------------------
     # Service principal resolution
     # ------------------------------------------------------------------
@@ -683,6 +886,52 @@ class LakebaseGraphProvisioner:
         except Exception as exc:  # noqa: BLE001
             logger.debug("get instance %s failed: %s", self._name, exc)
             return None
+
+    def _wait_for_db_reachable(self, max_retries: int = 15, interval_s: float = 5.0) -> None:
+        """Poll until a Postgres connection to the new database succeeds.
+
+        After the control-plane API reports the database as created, the
+        Postgres layer may still be propagating it.  We retry up to
+        ``max_retries`` times (default ~75 s total) before giving up and
+        letting the next step surface the real error.
+        """
+        from back.core.graphdb.lakebase.pool import _require_psycopg
+
+        psycopg, _ = _require_psycopg()
+        for attempt in range(max_retries):
+            self._check_cancelled()
+            try:
+                token = self._mint_token(self._api())
+                kwargs = {
+                    "host": self._host,
+                    "port": 5432,
+                    "user": self._pg_user,
+                    "password": token,
+                    "dbname": self._database,
+                    "sslmode": "require",
+                    "connect_timeout": 10,
+                    "application_name": "ontobricks-provision-probe",
+                }
+                with psycopg.connect(autocommit=True, **kwargs):
+                    return  # connection succeeded — database is ready
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc).lower()
+                if "does not exist" in msg or "database" in msg:
+                    logger.debug(
+                        "DB reachability probe attempt %d/%d — not ready yet: %s",
+                        attempt + 1,
+                        max_retries,
+                        exc,
+                    )
+                    time.sleep(interval_s)
+                else:
+                    # Unexpected error (auth, network) — stop retrying.
+                    raise
+        logger.warning(
+            "DB %r did not become reachable after %d attempts; continuing anyway",
+            self._database,
+            max_retries,
+        )
 
     def _database_exists(self, api: Any) -> bool:
         try:
