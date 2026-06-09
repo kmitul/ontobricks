@@ -116,18 +116,19 @@ OntoBricks can be positioned as the **semantic layer for the Databricks Lakehous
 **Theme:** improve day-to-day usability across Graph Chat, Mapping, and Ontology, and add a governed version lifecycle and review workflow.
 
 
-| Capability                            | Status        | Notes                                                                                       |
-| ------------------------------------- | ------------- | ------------------------------------------------------------------------------------------- |
-| **Graph Chat performance**            | ✅ Delivered   | Streaming (SSE) agent loop — live tool-call / token rendering                                |
-| **Mapping — exclude unmapped**        | ✅ Delivered   | Smart **Auto-Exclude** (unmapped + orphans + pure parents) and **Include excluded**         |
-| **Digital Twin publication workflow** | ✅ Delivered   | `DRAFT → IN-REVIEW → PUBLISHED` lifecycle + Validation & Review workspace, sign-off quorum   |
-| **Ontology precision scoring**        | ✅ Delivered   | Precision score + actionable pitfall hints, surfaced in the Domain Cockpit                  |
-| **Unstructured data ingestion**       | ✅ Delivered   | PDF/Office/image → markdown via `ai_parse_document`, feeding OWL & business-rules agents     |
-| **Auto quality rules**                | ✅ Delivered   | Business-rules generator agent proposes SWRL / decision-table / SPARQL CONSTRUCT / aggregate rules from the ontology + documents, for review & accept |
-| **Ontology iteration UX**             | ↪ Moved to v0.6.0 | Compare, diff, promote, and rollback generated ontology versions                         |
-| **Mapping — multi-select**            | ↪ Moved to v0.6.0 | Multi-select of entities and relationships in the Mapping canvas                         |
-| **Mapping — orphan detection**        | ↪ Moved to v0.6.0 | Validate that all mapped entities are connected (no isolated nodes)                      |
-| **Scheduler — inference & materialization** | ↪ Moved to v0.6.0 | Trigger OWL 2 RL inference / SWRL materialization as scheduled tasks                |
+| Capability                                              | Status            | Notes                                                                                                                                                 |
+| ------------------------------------------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Graph Chat performance**                              | ✅ Delivered       | Streaming (SSE) agent loop — live tool-call / token rendering                                                                                         |
+| **Mapping — exclude unmapped**                          | ✅ Delivered       | Smart **Auto-Exclude** (unmapped + orphans + pure parents) and **Include excluded**                                                                   |
+| **Digital Twin publication workflow**                   | ✅ Delivered       | `DRAFT → IN-REVIEW → PUBLISHED` lifecycle + Validation & Review workspace, sign-off quorum                                                            |
+| **Ontology precision scoring**                          | ✅ Delivered       | Precision score + actionable pitfall hints, surfaced in the Domain Cockpit                                                                            |
+| **Unstructured data ingestion for Ontology generation** | ✅ Delivered       | PDF/Office/image → markdown via `ai_parse_document`, feeding OWL & business-rules agents                                                              |
+| **Auto quality rules**                                  | ✅ Delivered       | Business-rules generator agent proposes SWRL / decision-table / SPARQL CONSTRUCT / aggregate rules from the ontology + documents, for review & accept |
+| **Ontology iteration UX**                               | ↪ Moved to v0.6.0 | Compare, diff, promote, and rollback generated ontology versions                                                                                      |
+| **Mapping — multi-select**                              | ↪ Moved to v0.6.0 | Multi-select of entities and relationships in the Mapping canvas                                                                                      |
+| **Mapping — orphan detection**                          | ↪ Moved to v0.6.0 | Validate that all mapped entities are connected (no isolated nodes)                                                                                   |
+| **Scheduler — inference & materialization**             | ↪ Moved to v0.6.0 | Trigger OWL 2 RL inference / SWRL materialization as scheduled tasks                                                                                  |
+
 
 #### Also delivered (beyond the original plan)
 
@@ -144,14 +145,15 @@ OntoBricks can be positioned as the **semantic layer for the Databricks Lakehous
 **Theme:** a fast-follow release that closes the remaining 0.5-line UX and automation items deferred from v0.5.0, building directly on the new version-lifecycle and review foundations.
 
 
-| Capability                                  | Description                                                                                                 | Priority |
-| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------- | -------- |
-| **Ontology iteration UX**                   | Manage and iterate over generated ontology versions — side-by-side compare, structural diff (added/removed classes, properties, relationships), promote, and rollback — wired into the `DRAFT → IN-REVIEW → PUBLISHED` lifecycle | P1       |
-| **Mapping — multi-select**                  | Multi-select of entities and relationships in the Mapping canvas (shift/ctrl + marquee) so bulk actions (map, exclude, clear) apply to a selection | P2       |
-| **Mapping — orphan detection**              | Validation pass that flags mapped entities with no relationships (isolated nodes), surfaced as advisory warnings in the Mapping designer and the Cockpit readiness checks | P2       |
-| **Scheduler — inference & materialization** | Extend the scheduler so OWL 2 RL inference and SWRL materialization can run as scheduled tasks alongside the existing build job, with results recorded in the build-run trace | P2       |
-| **Graph analytics metrics**                 | Compute graph-specific centrality and structure metrics over the knowledge graph — betweenness, PageRank, degree/closeness centrality, clustering coefficient, connected components — surfaced in the Knowledge Graph explorer (node sizing/ranking) and the Domain Cockpit | P1       |
-| **Collaborative comments & tasks**          | Contextual commenting anywhere on a `DRAFT` domain — on the ontology canvas, mapping designer, and while exploring the knowledge graph. Users can attach threaded comments to any object (class, property, mapping, node/edge) and read the full comment trail to understand what's happening and why. The app also proposes turning a comment into a **personalized task assigned to a teammate**, tracked through the version-lifecycle and surfaced in the Validation & Review workspace | P1       |
+| Capability                                          | Description                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Priority |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| **Ontology iteration UX**                           | Manage and iterate over generated ontology versions — side-by-side compare, structural diff (added/removed classes, properties, relationships), promote, and rollback — wired into the `DRAFT → IN-REVIEW → PUBLISHED` lifecycle                                                                                                                                                                                                                                                                                                                                                                                 | P1       |
+| **Mapping — multi-select**                          | Multi-select of entities and relationships in the Mapping canvas (shift/ctrl + marquee) so bulk actions (map, exclude, clear) apply to a selection                                                                                                                                                                                                                                                                                                                                                                                                                                                               | P2       |
+| **Mapping — orphan detection**                      | Validation pass that flags mapped entities with no relationships (isolated nodes), surfaced as advisory warnings in the Mapping designer and the Cockpit readiness checks                                                                                                                                                                                                                                                                                                                                                                                                                                        | P2       |
+| **Scheduler — inference & materialization**         | Extend the scheduler so OWL 2 RL inference and SWRL materialization can run as scheduled tasks alongside the existing build job, with results recorded in the build-run trace                                                                                                                                                                                                                                                                                                                                                                                                                                    | P2       |
+| **Graph analytics metrics**                         | Compute graph-specific centrality and structure metrics over the knowledge graph — betweenness, PageRank, degree/closeness centrality, clustering coefficient, connected components — surfaced in the Knowledge Graph explorer (node sizing/ranking) and the Domain Cockpit                                                                                                                                                                                                                                                                                                                                      | P1       |
+| **Collaborative comments & tasks**                  | Contextual commenting anywhere on a `DRAFT` domain — on the ontology canvas, mapping designer, and while exploring the knowledge graph. Users can attach threaded comments to any object (class, property, mapping, node/edge) and read the full comment trail to understand what's happening and why. The app also proposes turning a comment into a **personalized task assigned to a teammate**, tracked through the version-lifecycle and surfaced in the Validation & Review workspace                                                                                                                      | P1       |
+| **Advanced reasoning — temporal & recursive rules** | Extend the multi-phase reasoning engine with two new symbolic families, both compiling to SQL and integrated into the existing run pipeline (default off, per-rule selectable, materializable): **(1) Temporal reasoning** — Allen's 13 interval relations (before, meets, overlaps, during, …) inferred from entity start/end datatype properties; **(2) recursive Datalog** — stratified, semi-naïve fixpoint rules reusing the SWRL atom syntax for true recursion (e.g. conditional reachability/ancestry) beyond the fixed transitive closure. Shipped as a phased roadmap (temporal first, Datalog second) | P2       |
 
 
 #### Why a fast-follow 0.6.0
@@ -162,10 +164,26 @@ These items share the same surfaces just reworked in 0.5.0 (the ontology designe
 
 The feature introduces new persistence in the **Lakebase registry schema** (`ontobricks_registry`). It extends the existing append-only `domain_review_events` table (which already records `commented` events at the `(domain_id, version)` grain) with two new tables:
 
-- **`domain_comments`** — threaded, contextual comments anchored to a specific object on a `DRAFT` version. Grain is `(domain_id, version)` plus an `anchor_type` (`ontology_class` | `ontology_property` | `mapping` | `graph_node` | `graph_edge` | `domain`) and `anchor_ref` (the target URI / node id), with `parent_id` for reply threads, `author`, `body`, and `resolved` flag.
-- **`domain_tasks`** — personalized tasks created from a comment or standalone, with `assignee` (principal), `created_by`, `title`, `description`, `status` (`open` | `in_progress` | `done` | `cancelled`), optional `due_date`, and a `comment_id` back-reference. Surfaced in the Validation & Review "My Tasks" worklist.
+- `**domain_comments`** — threaded, contextual comments anchored to a specific object on a `DRAFT` version. Grain is `(domain_id, version)` plus an `anchor_type` (`ontology_class` | `ontology_property` | `mapping` | `graph_node` | `graph_edge` | `domain`) and `anchor_ref` (the target URI / node id), with `parent_id` for reply threads, `author`, `body`, and `resolved` flag.
+- `**domain_tasks**` — personalized tasks created from a comment or standalone, with `assignee` (principal), `created_by`, `title`, `description`, `status` (`open` | `in_progress` | `done` | `cancelled`), optional `due_date`, and a `comment_id` back-reference. Surfaced in the Validation & Review "My Tasks" worklist.
 
 **Deployment is automatic and idempotent.** These tables (and their indexes) are added to `src/back/objects/registry/store/lakebase/schema.sql` using `CREATE TABLE IF NOT EXISTS` / `CREATE INDEX IF NOT EXISTS`, exactly like the existing registry tables. They are created on the next `LakebaseRegistryStore.initialize()` and re-applied safely on every deploy. Existing deployments pick them up by re-running the registry init (**Settings → Registry → Initialize**) or `make bootstrap-lakebase`, which also re-grants `USAGE/DML` on the new objects to the app and MCP service principals — **no destructive migration and no manual DDL required**.
+
+#### A note on unstructured data ingestion
+
+Unstructured data (documents, PDFs, emails, images, transcripts, logs) was originally scoped to be a first-class part of the **data ingestion** process — sitting alongside the structured R2RML mapping flow so that text and tables could feed the same ontology-governed knowledge graph. As we dug in, it became clear this is a **genuinely hard problem** that deserves more investigation before we commit to a design: entity/relation extraction quality, chunking and grounding, deduplication and entity resolution against existing instances, provenance and confidence, cost at scale, and keeping the whole thing governed under Unity Catalog. v0.5.0 already shipped a first step here — document-to-markdown conversion via `ai_parse_document` feeding the OWL and business-rules agents — but turning raw unstructured content into trustworthy, mappable graph entities is a larger effort. We would rather take the time to get the architecture right than ship something half-baked, so the full capability is **deliberately deferred** while we research it.
+
+In the meantime, the good news is that the **Databricks platform already offers most of the building blocks** to bridge unstructured data into an ontology you have already designed in OntoBricks. Today you can compose, among others:
+
+- **Lakeflow Declarative Pipelines** (batch/streaming) and **Auto Loader** to land and incrementally process raw files
+- **AI Functions** in SQL — `ai_parse_document`, `ai_extract`, `ai_classify`, `ai_query`, `ai_gen` — to extract entities, attributes, and relationships directly from text
+- **Foundation Model API / Model Serving** for custom extraction, summarization, and structured-output prompting
+- **Vector Search** for semantic retrieval, entity linking, and de-duplication against existing graph instances
+- **Unity Catalog** for governance, lineage, and permissions across the whole flow
+
+Our current thinking is to **lean on these existing capabilities** rather than reinvent them: use them to extract structured records from unstructured sources, then map those records onto an **ontology that is already designed** in OntoBricks — reusing the same mapping, reasoning, and quality machinery that structured sources already go through. That keeps unstructured ingestion consistent with the rest of the platform and avoids a parallel, ungoverned pipeline.
+
+> **Call to action:** this is exactly the kind of feature we want to shape **with** our users. If you have concrete use cases, source types, or requirements for unstructured ingestion, please share them in the project **Discussions** — your input will directly steer the design and prioritization of this work.
 
 ---
 
@@ -245,25 +263,26 @@ Neo4j is the dominant graph database with 40%+ market share. Customers in financ
 ## Feature Matrix
 
 
-| Feature                               | v0.3 | v0.4 | v0.5 | v0.6 | v0.7 | v0.8 | v1.0 |
-| ------------------------------------- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
-| Delta Lake triple store               | ✅    | ✅    | ✅    | ✅    | ✅    | ✅    | ✅    |
-| **Lakebase named-graph triple store** | —    | ✅    | ✅    | ✅    | ✅    | ✅    | ✅    |
-| **Lakebase optimized indexes**        | —    | ✅    | ✅    | ✅    | ✅    | ✅    | ✅    |
-| **Lakebase SPARQL SELECT**            | —    | ✅    | ✅    | ✅    | ✅    | ✅    | ✅    |
-| **UX & workflow improvements**        | —    | —    | ✅    | ✅    | ✅    | ✅    | ✅    |
-| **Version lifecycle & review**        | —    | —    | ✅    | ✅    | ✅    | ✅    | ✅    |
-| **Auto quality rules**                | —    | —    | ✅    | ✅    | ✅    | ✅    | ✅    |
-| **Ontology version diff/iteration**   | —    | —    | —    | ✅    | ✅    | ✅    | ✅    |
-| **Mapping multi-select & orphan check** | —  | —    | —    | ✅    | ✅    | ✅    | ✅    |
-| **Scheduled inference / materialization** | — | —   | —    | ✅    | ✅    | ✅    | ✅    |
-| **Graph analytics (betweenness, PageRank, …)** | — | — | —  | ✅    | ✅    | ✅    | ✅    |
-| **Collaborative comments & tasks**    | —    | —    | —    | ✅    | ✅    | ✅    | ✅    |
-| **Neo4j connector**                   | —    | —    | —    | —    | ✅    | ✅    | ✅    |
-| Fine-grained RBAC                     | —    | —    | —    | —    | —    | ✅    | ✅    |
-| Multi-workspace federation            | —    | —    | —    | —    | —    | ✅    | ✅    |
-| Amazon Neptune                        | —    | —    | —    | —    | —    | —    | ✅    |
-| Databricks Marketplace                | —    | —    | —    | —    | —    | —    | ✅    |
+| Feature                                        | v0.3 | v0.4 | v0.5 | v0.6 | v0.7 | v0.8 | v1.0 |
+| ---------------------------------------------- | ---- | ---- | ---- | ---- | ---- | ---- | ---- |
+| Delta Lake triple store                        | ✅    | ✅    | ✅    | ✅    | ✅    | ✅    | ✅    |
+| **Lakebase named-graph triple store**          | —    | ✅    | ✅    | ✅    | ✅    | ✅    | ✅    |
+| **Lakebase optimized indexes**                 | —    | ✅    | ✅    | ✅    | ✅    | ✅    | ✅    |
+| **Lakebase SPARQL SELECT**                     | —    | ✅    | ✅    | ✅    | ✅    | ✅    | ✅    |
+| **UX & workflow improvements**                 | —    | —    | ✅    | ✅    | ✅    | ✅    | ✅    |
+| **Version lifecycle & review**                 | —    | —    | ✅    | ✅    | ✅    | ✅    | ✅    |
+| **Auto quality rules**                         | —    | —    | ✅    | ✅    | ✅    | ✅    | ✅    |
+| **Ontology version diff/iteration**            | —    | —    | —    | ✅    | ✅    | ✅    | ✅    |
+| **Mapping multi-select & orphan check**        | —    | —    | —    | ✅    | ✅    | ✅    | ✅    |
+| **Scheduled inference / materialization**      | —    | —    | —    | ✅    | ✅    | ✅    | ✅    |
+| **Graph analytics (betweenness, PageRank, …)** | —    | —    | —    | ✅    | ✅    | ✅    | ✅    |
+| **Collaborative comments & tasks**             | —    | —    | —    | ✅    | ✅    | ✅    | ✅    |
+| **Temporal & recursive Datalog reasoning**     | —    | —    | —    | ✅    | ✅    | ✅    | ✅    |
+| **Neo4j connector**                            | —    | —    | —    | —    | ✅    | ✅    | ✅    |
+| Fine-grained RBAC                              | —    | —    | —    | —    | —    | ✅    | ✅    |
+| Multi-workspace federation                     | —    | —    | —    | —    | —    | ✅    | ✅    |
+| Amazon Neptune                                 | —    | —    | —    | —    | —    | —    | ✅    |
+| Databricks Marketplace                         | —    | —    | —    | —    | —    | —    | ✅    |
 
 
 ---
