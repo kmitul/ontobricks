@@ -589,7 +589,32 @@ class Domain:
             ok, versions, msg = svc.list_versions(domain_name)
             if not ok:
                 raise InfrastructureError("Failed to list domain versions", detail=msg)
-            return {"success": True, "versions": versions}
+            # Best-effort per-version lifecycle status, so callers (e.g. the
+            # Load-Domain modal) can label versions DRAFT / IN-REVIEW /
+            # PUBLISHED. Sourced from the cached domain metadata; never fatal.
+            version_status: Dict[str, str] = {}
+            try:
+                ok2, details, _ = svc.list_domain_details_cached()
+                if ok2:
+                    for d in details:
+                        if d.get("name") != domain_name:
+                            continue
+                        for v in d.get("versions", []) or []:
+                            if isinstance(v, dict) and v.get("version"):
+                                version_status[str(v["version"])] = (
+                                    v.get("status") or "DRAFT"
+                                )
+                        break
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "version status lookup failed for %s", domain_name,
+                    exc_info=True,
+                )
+            return {
+                "success": True,
+                "versions": versions,
+                "version_status": version_status,
+            }
         except OntoBricksError:
             raise
         except Exception as e:

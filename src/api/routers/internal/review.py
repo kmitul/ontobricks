@@ -139,7 +139,7 @@ async def reopen(
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
-    """Reopen a PUBLISHED version for editing (admin only)."""
+    """Send an IN-REVIEW or PUBLISHED version back to Draft (admin only)."""
     comment = await _comment(request)
     user_role, domain_role = _roles(request, folder, settings)
     return ReviewService.reopen(

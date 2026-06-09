@@ -268,6 +268,10 @@ ALTER TABLE "${SCHEMA}".domain_versions
 CREATE INDEX IF NOT EXISTS idx_domain_versions_status
     ON "${SCHEMA}".domain_versions(domain_id, status);
 
+-- domains.review_quorum (per-domain sign-off quorum added after initial release)
+ALTER TABLE "${SCHEMA}".domains
+    ADD COLUMN IF NOT EXISTS review_quorum integer NOT NULL DEFAULT 1;
+
 -- build_runs (build history table added after initial release)
 CREATE TABLE IF NOT EXISTS "${SCHEMA}".build_runs (
     id                  bigserial PRIMARY KEY,
@@ -315,7 +319,7 @@ CREATE INDEX IF NOT EXISTS idx_review_events_domain_version
     ON "${SCHEMA}".domain_review_events(domain_id, version, created_at);
 SQL
     then
-        echo "  ✓ schema migrations applied (domain_versions.status, build_runs, domain_review_events)"
+        echo "  ✓ schema migrations applied (domain_versions.status, domains.review_quorum, build_runs, domain_review_events)"
     else
         echo "  ⚠ schema migration failed — continuing (SP grants below may partially succeed)"
     fi

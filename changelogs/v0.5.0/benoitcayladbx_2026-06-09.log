@@ -1,0 +1,144 @@
+# v0.5.0 — 2026-06-09 — benoitcayladbx
+
+## Move workflow actions to the Validation workspace; admin "Back to Draft" everywhere
+
+**Context**: As an admin, the "Back to Draft" action was available on the Registry → Browse
+page (via the per-version lifecycle buttons) but not on the Domain → Validation (review/sign-off)
+page, where the "reopen" action was restricted to PUBLISHED versions and app-admins only. This was
+inconsistent. The Browse page also duplicated the full workflow (Submit / Back to Draft / Publish /
+Unpublish), competing with the Validation workspace as a second place to drive the lifecycle. The
+Browse view should instead just hand off to the Validation workspace, loading the domain/version
+first when needed.
+
+**Changes**:
+1. `src/back/objects/registry/ReviewService.py` — `reopen()` now sends **IN-REVIEW or PUBLISHED**
+   versions back to DRAFT (was PUBLISHED-only) and authorizes via `_is_admin` (app-level **or**
+   domain-level admin) instead of the app-admin-only `user_role != ROLE_ADMIN` check. The recorded
+   `reopened` event uses the actual `from_status`. `review_detail.actions.can_reopen` is now
+   `status in (IN-REVIEW, PUBLISHED) and is_admin`.
+2. `src/api/routers/internal/review.py` — updated the `reopen` endpoint docstring to reflect the
+   broadened transition.
+3. `src/front/static/domain/js/domain-review.js` — relabeled the reopen control to **"Back to
+   Draft"** (icon `arrow-counterclockwise`) and updated its confirmation dialog copy.
+4. `src/front/static/registry/js/registry.js` — removed the per-version lifecycle buttons
+   (`statusButtons`) and the `setRegistryVersionStatus` handler from the Browse view. Each version
+   now exposes a single **"Validate"** button (`openVersionInValidation`) that loads the version
+   from Unity Catalog when it is not already current and jumps to `/domain/?section=review` (the
+   Validation workspace), the single place to drive the review workflow.
+5. `tests/units/registry/test_review_service.py` — added `test_reopen_in_review_to_draft_by_admin`,
+   `test_reopen_domain_admin_allowed`, `test_reopen_rejected_from_draft`,
+   `test_review_detail_admin_can_reopen_in_review`, `test_review_detail_builder_cannot_reopen`, and
+   strengthened `test_reopen_published_to_draft` to assert `from_status`.
+
+**Modified files**:
+- `src/back/objects/registry/ReviewService.py`
+- `src/api/routers/internal/review.py`
+- `src/front/static/domain/js/domain-review.js`
+- `src/front/static/registry/js/registry.js`
+- `tests/units/registry/test_review_service.py`
+
+**Test result**: `uv run pytest tests/units` -> 2311 passed.
+
+## Reshape the Validation page with a lifecycle diagram
+
+**Context**: The Validation (review/sign-off) workspace presented the workflow as a flat
+status banner + actions + audit list. Users asked for a visual lifecycle diagram showing the
+possible steps as boxes, the current status, and the people involved at each stage.
+
+**Changes**:
+1. `src/front/static/domain/js/domain-review.js` — added a `lifecycleDiagram(d)` block rendered
+   between the (now slimmed) status banner and the consistency/actions/timeline columns. It draws
+   three connected stage boxes — **Draft → In Review → Published** — with forward "Submit" /
+   "Publish" arrows. The current stage is highlighted ("you are here"), completed stages get a
+   green check, upcoming stages are dimmed. Each box surfaces the people involved, derived from the
+   review events: Draft shows who sent it back (changes requested / reopened), In Review shows the
+   submitter + sign-off chips with the live `X/quorum` progress bar, Published shows the publisher.
+   Added helpers `stageBox`, `flowArrow`, `progressBar` (moved out of the banner), `peopleLine`,
+   `mutedLine`, `personChip` (initials avatar), `initialsOf`, `shortName`, `lastActorFor`,
+   `latestEventFor`. The status banner no longer duplicates the progress bar.
+2. `src/front/static/domain/css/domain-review.css` — added styles for `.review-flow`,
+   `.review-stage` (is-done / is-current / is-todo states), `.review-stage-badge/-icon/-label/-now`,
+   `.review-people` / `.review-person` / `.review-avatar` chips, and `.review-arrow`. Responsive:
+   the row stacks vertically with rotated arrows below the `lg` breakpoint.
+
+**Modified files**:
+- `src/front/static/domain/js/domain-review.js`
+- `src/front/static/domain/css/domain-review.css`
+
+**Test result**: `uv run pytest tests/units` -> 2311 passed (frontend-only change; no Python tests
+cover the rendered markup).
+
+## Move review actions into the header; drop the "Your actions" card
+
+**Context**: Follow-up to the Validation reshape. The "Your actions" card duplicated chrome and
+pushed the buttons low on the page. Requested: surface the action buttons top-right of the header
+and fold the contextual notices (admin override, sign-off-blocked, etc.) into the header banner
+next to the status / domain / version.
+
+**Changes**:
+1. `src/front/static/domain/js/domain-review.js` — removed `actionsCard(d)`. Split its logic into
+   `actionButtons(d)` (returns just the workflow buttons: Submit / Approve / Request changes /
+   Publish [or override] / Back to Draft) and `actionNotes(d)` (returns the contextual messages:
+   submit-blocked reason, "you have signed off", the **admin override** warning, and the
+   "publishing unlocks once N sign-off(s)…" hint). `statusBanner(d)` now lays out status badge +
+   domain + version on the left, the action buttons on the top-right, and the notes underneath —
+   so everything lives in the header. `render()` no longer emits the actions card; the left column
+   under the lifecycle diagram now holds only the consistency checks.
+
+**Modified files**:
+- `src/front/static/domain/js/domain-review.js`
+
+**Test result**: `uv run pytest tests/units` -> 2311 passed (frontend-only change).
+
+## Fix: review comment box disabled in read-only states
+
+**Context**: Clicking "Back to Draft" (and Publish) on an IN-REVIEW / PUBLISHED version opens the
+`ReviewModals.promptComment` dialog, but its comment textarea was greyed out and not editable. Those
+statuses put the page in `read-only-version`, and the blanket read-only rule in `permissions.css`
+disables every `textarea`. The audit-note box must always be editable — it is the only way to attach
+a comment to the very transition that leaves the read-only state.
+
+**Changes**:
+1. `src/front/static/global/css/permissions.css` — exempted `textarea[data-rm-comment]` (the review
+   workflow comment box) from the read-only `textarea` disabling rule, alongside the existing
+   version-filter exemptions. Updated the explanatory comment.
+
+**Modified files**:
+- `src/front/static/global/css/permissions.css`
+
+**Test result**: `uv run pytest tests/units` -> 2311 passed (frontend-only change).
+
+## Home → My Tasks jumps to Validation instead of inline actions
+
+**Context**: Like the Registry → Browse change, the Home page "My Tasks" worklist should hand off
+to the Validation workspace rather than drive the workflow (submit / publish) inline.
+
+**Changes**:
+1. `src/front/static/home/js/home-tasks.js` — replaced the per-task action buttons (and the
+   `actionButton` / `onAction` / `transition` machinery) with a single **"Validate"** button
+   (`bi-ui-checks`, matching Browse) that loads the domain/version from Unity Catalog and jumps to
+   `/domain/?section=review`. The comments button is kept; the column header is now "Review".
+
+**Modified files**:
+- `src/front/static/home/js/home-tasks.js`
+
+**Test result**: `uv run pytest tests/units` -> 2311 passed (frontend-only change).
+
+## Load-Domain modal shows lifecycle status instead of "Latest / Read-Only"
+
+**Context**: The navbar "Load Domain from registry" popup labelled each version `(Latest)` /
+`(Read-Only)`. Requested: show the actual lifecycle status (Draft / In Review / Published) instead.
+
+**Changes**:
+1. `src/back/objects/domain/Domain.py` — `list_domain_versions_result` now also returns a
+   `version_status` map ({version: status}), sourced best-effort from `list_domain_details_cached()`
+   (cached registry metadata; never fatal). `versions` (string list) is unchanged for back-compat.
+2. `src/front/static/global/js/navbar.js` — `loadVersionsForDomainFromRegistry` labels each option
+   `v<ver> — <status>` using the new map (added `statusLabel()` mapping DRAFT/IN-REVIEW/PUBLISHED to
+   Draft/In Review/Published). Dropped the index-based "(Latest)"/"(Read-Only)" wording.
+
+**Modified files**:
+- `src/back/objects/domain/Domain.py`
+- `src/front/static/global/js/navbar.js`
+
+**Test result**: `uv run pytest tests/units` -> 2311 passed.

@@ -743,10 +743,11 @@ async function loadVersionsForDomainFromRegistry(domainName) {
         versionSelect.disabled = false;
 
         if (data.success && data.versions && data.versions.length > 0) {
+            const statuses = data.version_status || {};
             const sorted = data.versions.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
             versionSelect.innerHTML = '';
-            sorted.forEach((ver, idx) => {
-                const label = idx === 0 ? `${ver} (Latest)` : `${ver} (Read-Only)`;
+            sorted.forEach((ver) => {
+                const label = `v${ver} — ${statusLabel(statuses[ver])}`;
                 versionSelect.innerHTML += `<option value="${ver}">${label}</option>`;
             });
             versionSelect.value = sorted[0];
@@ -760,6 +761,14 @@ async function loadVersionsForDomainFromRegistry(domainName) {
         };
     } catch (e) {
         versionSelect.innerHTML = '<option value="">Error loading versions</option>';
+    }
+}
+
+function statusLabel(status) {
+    switch ((status || 'DRAFT').toUpperCase()) {
+        case 'PUBLISHED': return 'Published';
+        case 'IN-REVIEW': return 'In Review';
+        default: return 'Draft';
     }
 }
 

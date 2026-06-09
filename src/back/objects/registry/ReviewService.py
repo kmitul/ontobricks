@@ -226,7 +226,8 @@ class ReviewService:
                         and (quorum_met or is_admin)
                     ),
                     "can_reopen": (
-                        status == STATUS_PUBLISHED and user_role == ROLE_ADMIN
+                        status in (STATUS_IN_REVIEW, STATUS_PUBLISHED)
+                        and is_admin
                     ),
                 },
             }
@@ -438,13 +439,15 @@ class ReviewService:
         user_role: str,
         user_domain_role: str,
     ) -> Dict[str, Any]:
-        """Reopen a PUBLISHED version for editing (admin only)."""
+        """Send an IN-REVIEW or PUBLISHED version back to DRAFT (admin only)."""
         svc, info = ReviewService._load(session_mgr, settings, folder, version)
         status = (info.get("status") or STATUS_DRAFT).upper()
-        if user_role != ROLE_ADMIN:
+        if not ReviewService._is_admin(user_role, user_domain_role):
             raise AuthorizationError("Only an administrator can reopen")
-        if status != STATUS_PUBLISHED:
-            raise ConflictError(f"Version is {status}, expected PUBLISHED")
+        if status not in (STATUS_IN_REVIEW, STATUS_PUBLISHED):
+            raise ConflictError(
+                f"Version is {status}, expected IN-REVIEW or PUBLISHED"
+            )
 
         ReviewService._set_status(
             svc, session_mgr, folder, version, STATUS_DRAFT
@@ -454,7 +457,7 @@ class ReviewService:
             version,
             ReviewService._email(request),
             ACTION_REOPENED,
-            from_status=STATUS_PUBLISHED,
+            from_status=status,
             to_status=STATUS_DRAFT,
             comment=comment,
         )

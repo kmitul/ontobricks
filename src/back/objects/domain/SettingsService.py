@@ -32,7 +32,12 @@ from back.objects.registry import (
     invalidate_registry_cache,
     obx_format,
 )
-from back.objects.registry.version_lifecycle import check_status_transition
+from back.objects.registry.version_lifecycle import (
+    check_status_transition,
+    STATUS_DRAFT,
+    STATUS_IN_REVIEW,
+    STATUS_PUBLISHED,
+)
 from back.objects.domain.version_status import clear_version_status_cache
 from back.objects.session import (
     SessionManager,
@@ -906,6 +911,7 @@ class SettingsService:
         *,
         user_role: str,
         user_domain_role: str,
+        actor_email: str = "",
         session_mgr: SessionManager,
         settings: Settings,
     ) -> Dict[str, Any]:
@@ -916,6 +922,10 @@ class SettingsService:
         machine (allowed transitions), per-transition role requirements,
         and the DRAFT→IN-REVIEW precondition (the version must have been
         built at least once, i.e. ``last_build`` is set).
+
+        The change is recorded in the ``domain_review_events`` audit log
+        (attributed to ``actor_email``) so direct lifecycle transitions are
+        tracked alongside the review-workflow ones.
         """
         try:
             new_status = (new_status or "").strip().upper()
@@ -948,6 +958,32 @@ class SettingsService:
             if not ok:
                 raise InfrastructureError(
                     "Failed to update version status", detail=set_msg
+                )
+
+            # Attribute the change in the audit log. Best-effort: never let a
+            # failed audit write roll back the transition itself.
+            try:
+                action = {
+                    STATUS_IN_REVIEW: "submitted",
+                    STATUS_PUBLISHED: "published",
+                    STATUS_DRAFT: "reopened",
+                }.get(new_status, "commented")
+                svc.record_review_event(
+                    domain_name,
+                    version,
+                    actor_email or "",
+                    action,
+                    from_status=current_status,
+                    to_status=new_status,
+                    comment="",
+                    meta={"source": "lifecycle"},
+                )
+            except Exception as audit_exc:  # noqa: BLE001
+                logger.warning(
+                    "audit write skipped for %s/%s status change: %s",
+                    domain_name,
+                    version,
+                    audit_exc,
                 )
 
             invalidate_registry_cache()

@@ -544,12 +544,16 @@ async def set_version_status(
     domain_role = SettingsService.resolve_domain_role(
         request, domain_name, settings, app_role=user_role
     )
+    actor_email = getattr(request.state, "user_email", "") or request.headers.get(
+        "x-forwarded-email", ""
+    )
     return SettingsService.set_registry_version_status_result(
         domain_name,
         version,
         new_status,
         user_role=user_role,
         user_domain_role=domain_role,
+        actor_email=actor_email,
         session_mgr=session_mgr,
         settings=settings,
     )

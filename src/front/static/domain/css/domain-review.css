@@ -24,6 +24,220 @@
     max-width: 420px;
 }
 
+/* ── Lifecycle diagram ─────────────────────────────── */
+.review-flow {
+    display: flex;
+    align-items: stretch;
+    gap: 0.5rem;
+    flex-wrap: nowrap;
+}
+
+.review-stage {
+    position: relative;
+    flex: 1 1 0;
+    min-width: 0;
+    border: 1px solid var(--db-border);
+    border-radius: 10px;
+    padding: 0.85rem 0.9rem;
+    background: #fff;
+    transition: box-shadow .15s, border-color .15s, opacity .15s;
+}
+
+.review-stage.is-todo {
+    opacity: 0.55;
+}
+
+.review-stage.is-done {
+    border-color: var(--db-success);
+    background: rgba(40, 167, 69, 0.04);
+}
+
+.review-stage.is-current {
+    border-color: var(--db-primary, #FF3621);
+    border-width: 2px;
+    box-shadow: 0 0 0 3px var(--db-primary-light, rgba(255, 54, 33, 0.1));
+}
+
+.review-stage-badge {
+    position: absolute;
+    top: -10px;
+    right: -10px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #fff;
+    border: 1px solid var(--db-border);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.65rem;
+}
+
+.review-stage.is-done .review-stage-badge {
+    background: var(--db-success);
+    border-color: var(--db-success);
+    color: #fff;
+}
+
+.review-stage.is-current .review-stage-badge {
+    background: var(--db-primary, #FF3621);
+    border-color: var(--db-primary, #FF3621);
+    color: #fff;
+}
+
+.review-stage-head {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin-bottom: 0.25rem;
+}
+
+.review-stage-icon {
+    width: 26px;
+    height: 26px;
+    border-radius: 7px;
+    background: var(--db-bg-secondary, #f3f4f6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    color: var(--db-text);
+    flex: 0 0 auto;
+}
+
+.review-stage.is-done .review-stage-icon {
+    background: rgba(40, 167, 69, 0.12);
+    color: var(--db-success);
+}
+
+.review-stage.is-current .review-stage-icon {
+    background: var(--db-primary-light, rgba(255, 54, 33, 0.1));
+    color: var(--db-primary, #FF3621);
+}
+
+.review-stage-label {
+    font-weight: 600;
+    font-size: 0.9rem;
+}
+
+.review-stage-now {
+    margin-left: auto;
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    color: var(--db-primary, #FF3621);
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.review-stage-desc {
+    font-size: 0.75rem;
+    color: var(--db-text-muted);
+    margin-bottom: 0.5rem;
+}
+
+.review-stage-foot {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+}
+
+.review-stage-line-label {
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+    color: var(--db-text-muted);
+    margin-bottom: 0.2rem;
+}
+
+.review-stage-muted {
+    font-size: 0.78rem;
+    color: var(--db-text-muted);
+    font-style: italic;
+}
+
+.review-people {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+}
+
+.review-person {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    background: var(--db-bg-secondary, #f3f4f6);
+    border-radius: 999px;
+    padding: 0.1rem 0.55rem 0.1rem 0.15rem;
+    max-width: 100%;
+}
+
+.review-avatar {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: var(--db-primary, #FF3621);
+    color: #fff;
+    font-size: 0.58rem;
+    font-weight: 700;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+}
+
+.review-avatar-muted {
+    background: var(--db-text-muted);
+}
+
+.review-person-name {
+    font-size: 0.74rem;
+    color: var(--db-text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 130px;
+}
+
+.review-arrow {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    color: var(--db-text-muted);
+    flex: 0 0 auto;
+    padding: 0 0.1rem;
+    min-width: 44px;
+}
+
+.review-arrow i {
+    font-size: 1.05rem;
+}
+
+.review-arrow-label {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: .03em;
+}
+
+.review-arrow.is-active {
+    color: var(--db-success);
+}
+
+@media (max-width: 991px) {
+    .review-flow {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .review-arrow {
+        transform: rotate(90deg);
+        align-self: center;
+        min-width: 0;
+        padding: 0.1rem 0;
+    }
+}
+
 .review-card {
     border: 1px solid var(--db-border);
     border-radius: 8px;

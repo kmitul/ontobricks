@@ -271,6 +271,44 @@ def test_reopen_published_to_draft():
           user_domain_role=ROLE_NONE)
     assert info["status"] == "DRAFT"
     assert events[-1]["action"] == "reopened"
+    assert events[-1]["from_status"] == "PUBLISHED"
+
+
+def test_reopen_in_review_to_draft_by_admin():
+    svc, info, events = _make_svc(status="IN-REVIEW")
+    _call("reopen", svc, comment="needs work", user_role=ROLE_ADMIN,
+          user_domain_role=ROLE_NONE)
+    assert info["status"] == "DRAFT"
+    assert events[-1]["action"] == "reopened"
+    assert events[-1]["from_status"] == "IN-REVIEW"
+
+
+def test_reopen_domain_admin_allowed():
+    svc, info, _ = _make_svc(status="IN-REVIEW")
+    _call("reopen", svc, comment="", user_role="",
+          user_domain_role=ROLE_ADMIN)
+    assert info["status"] == "DRAFT"
+
+
+def test_reopen_rejected_from_draft():
+    svc, _, _ = _make_svc(status="DRAFT")
+    with pytest.raises(ConflictError):
+        _call("reopen", svc, comment="", user_role=ROLE_ADMIN,
+              user_domain_role=ROLE_NONE)
+
+
+def test_review_detail_admin_can_reopen_in_review():
+    svc, _, _ = _make_svc(status="IN-REVIEW")
+    detail = _call("review_detail", svc, user_role=ROLE_ADMIN,
+                   user_domain_role=ROLE_NONE)
+    assert detail["actions"]["can_reopen"] is True
+
+
+def test_review_detail_builder_cannot_reopen():
+    svc, _, _ = _make_svc(status="IN-REVIEW")
+    detail = _call("review_detail", svc, user_role="",
+                   user_domain_role=ROLE_BUILDER)
+    assert detail["actions"]["can_reopen"] is False
 
 
 # ----------------------------------------------------------------------
