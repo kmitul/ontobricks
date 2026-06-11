@@ -167,3 +167,31 @@ so the pill should read `ADMIN`.
 
 **Test result**: Front-end only (no Python touched). No new lint errors on the
 edited files.
+
+## Feature: Help Center full-page (maximize) toggle
+
+**Context**: The in-app Help Center opens as an `modal-xl` dialog capped at
+1100px wide / 88vh tall. Requested the ability to expand it to the whole page.
+
+**Changes**:
+1. `src/front/templates/partials/layout/help_modal.html` — added a
+   `#helpMaximizeToggle` button in the modal header (left of the close button)
+   with a `bi-arrows-fullscreen` icon and `aria-pressed`.
+2. `src/front/static/global/js/help-modal.js` — added `_applyMaximized()` /
+   `_initMaximize()` (wired in `init()`). Clicking the button toggles a
+   `help-modal-maximized` class on `#helpModal`, swaps the icon
+   (fullscreen ↔ angle-contract) and the title/aria label, and persists the
+   choice in `localStorage` (`ob.helpCenter.maximized`) so it reopens in the
+   last-used size. Wrapped in try/catch for private-mode browsers.
+3. `src/front/static/global/css/help-modal.css` — `.help-modal-maximized`
+   makes the dialog full viewport (`width/height:100%`, `margin:0`,
+   `modal-content` → `100vh`, square corners), with a 0.2s transition. Styled
+   the header expand button to match the red header (translucent white).
+
+**Modified files**:
+- `src/front/templates/partials/layout/help_modal.html`
+- `src/front/static/global/js/help-modal.js`
+- `src/front/static/global/css/help-modal.css`
+
+**Test result**: Front-end only (no Python touched). No new lint errors on the
+edited files.

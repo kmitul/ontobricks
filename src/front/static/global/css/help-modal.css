@@ -15,6 +15,40 @@
     overflow: hidden;
     height: 88vh;
     max-height: 88vh;
+    transition: height 0.2s ease, max-height 0.2s ease, border-radius 0.2s ease;
+}
+
+/* ── Maximized / full-page state (toggled via the header expand button) ── */
+.help-modal.help-modal-maximized .modal-dialog {
+    max-width: 100%;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+}
+
+.help-modal.help-modal-maximized .modal-content {
+    height: 100vh;
+    max-height: 100vh;
+    border-radius: 0;
+}
+
+/* Header expand/contract button */
+.help-modal-header .help-modal-expand-btn {
+    color: #fff;
+    background: rgba(255, 255, 255, 0.12);
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    padding: 0.2rem 0.5rem;
+    line-height: 1;
+    transition: background 0.15s ease, transform 0.15s ease;
+}
+
+.help-modal-header .help-modal-expand-btn:hover {
+    background: rgba(255, 255, 255, 0.22);
+    color: #fff;
+}
+
+.help-modal-header .help-modal-expand-btn:focus {
+    box-shadow: 0 0 0 0.2rem rgba(255, 255, 255, 0.25);
 }
 
 /* Only the inner .help-content scrolls — prevent Bootstrap from adding a
