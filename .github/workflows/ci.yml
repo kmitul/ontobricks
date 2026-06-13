@@ -166,7 +166,7 @@ jobs:
         run: uv sync --dev
 
       - name: Download coverage artifact
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: coverage-report
 
