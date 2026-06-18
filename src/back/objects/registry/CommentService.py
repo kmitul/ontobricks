@@ -354,6 +354,12 @@ class CommentService:
             )
             if kickoff:
                 effective_comment_id = str(kickoff.get("id") or "") or None
+            else:
+                logger.warning(
+                    "create_task: kickoff comment could not be created for "
+                    "AI-Agent task in %s/%s; the task will have no thread root "
+                    "and cannot be resumed", folder, version,
+                )
 
         created = svc.insert_task(
             folder,

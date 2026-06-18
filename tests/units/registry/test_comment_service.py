@@ -334,6 +334,23 @@ def test_create_task_ai_agent_no_comment_inserts_kickoff():
     assert start.call_args.kwargs["comment_id"] == kickoff_id
 
 
+def test_create_task_ai_agent_kickoff_failure_still_creates_task():
+    svc, _, tasks, _ = _make_svc(status="DRAFT")
+    # The kickoff comment can't be created (store returns falsy): the task is
+    # still created, just without a thread root (comment_id stays None).
+    svc.insert_comment.side_effect = lambda *a, **k: None
+    with patch.object(_mod, "start_agent_task", return_value="bg00") as start:
+        result = _call(
+            "create_task", svc, assignee=_mod.AI_AGENT_PRINCIPAL,
+            title="Generate the ontology", description="from metadata",
+            due_date=None, comment_id=None,
+            user_role="", user_domain_role=ROLE_VIEWER,
+        )
+    assert result["success"] is True
+    assert svc.insert_task.call_args.kwargs["comment_id"] is None
+    assert start.call_args.kwargs["comment_id"] == ""
+
+
 def test_create_task_human_assignee_does_not_trigger_runner():
     svc, _, _, _ = _make_svc(status="DRAFT")
     with patch.object(_mod, "start_agent_task") as start:
