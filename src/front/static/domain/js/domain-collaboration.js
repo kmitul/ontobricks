@@ -499,16 +499,20 @@
     }
 
     // Global entry point so any domain-page template can call it via onclick.
+    // Shows the panel immediately with a spinner, resolves context behind it.
     window.openDomainDiscussion = function () {
+        if (window.OntoComments) OntoComments.showLoadingPanel();
         resolveDomainContext().then(function (dc) {
+            if (!window.OntoComments) return;
             if (!dc.folder || !dc.hasRegistry) {
-                if (typeof window.showNotification === 'function') {
-                    window.showNotification(
-                        'Save this domain to the registry to start a discussion.', 'warning');
+                const panelEl = document.querySelector('.oc-comments [data-oc-list]');
+                if (panelEl) {
+                    panelEl.innerHTML =
+                        '<div class="alert alert-warning small mb-0">' +
+                        'Save this domain to the registry to start a discussion.</div>';
                 }
                 return;
             }
-            if (!window.OntoComments) return;
             OntoComments.openThread({ folder: dc.folder, version: dc.version });
         });
     };

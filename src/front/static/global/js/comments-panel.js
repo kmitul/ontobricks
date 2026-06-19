@@ -131,6 +131,29 @@
             esc(t.label || t.ref) + '</span>').join('') + '</div>';
     }
 
+    // Open the offcanvas immediately with a spinner so the panel appears on
+    // click without waiting for any async work. Called by entry points that
+    // need to resolve domain context before they can call openThread.
+    function showLoadingPanel() {
+        build();
+        const list = el.querySelector('[data-oc-list]');
+        if (list) {
+            list.innerHTML =
+                '<div class="text-center text-muted small py-4">' +
+                '<span class="spinner-border spinner-border-sm me-1"></span> Loading...</div>';
+        }
+        const anchor = el.querySelector('[data-oc-anchor]');
+        if (anchor) anchor.innerHTML = '';
+        if (window.bootstrap) {
+            offcanvas = bootstrap.Offcanvas.getOrCreateInstance(el);
+            offcanvas.show();
+            setTimeout(() => {
+                document.querySelectorAll('.offcanvas-backdrop.show')
+                    .forEach((b) => b.classList.add('oc-comments-backdrop'));
+            }, 0);
+        }
+    }
+
     async function openThread(opts) {
         opts = opts || {};
         if (!opts.folder || !opts.version) {
@@ -139,9 +162,6 @@
         }
         build();
         lastListSig = '';
-        // Discussions are domain-wide: every entry point opens the single
-        // Domain thread (no per-anchor separation, no entity/relationship tags).
-        // The caller's anchor hints (type/ref/label/taggable) are ignored.
         ctx = {
             folder: opts.folder,
             version: opts.version,
@@ -150,13 +170,15 @@
 
         if (window.bootstrap) {
             offcanvas = bootstrap.Offcanvas.getOrCreateInstance(el);
-            offcanvas.show();
-            // Lift the shared backdrop above the navbar (z-index:1050) so
-            // the whole screen dims behind the panel (see review-modals.css).
-            setTimeout(() => {
-                document.querySelectorAll('.offcanvas-backdrop.show')
-                    .forEach((b) => b.classList.add('oc-comments-backdrop'));
-            }, 0);
+            // Only call show() if not already visible (showLoadingPanel may
+            // have already opened it, avoiding a flicker/re-animation).
+            if (!el.classList.contains('show')) {
+                offcanvas.show();
+                setTimeout(() => {
+                    document.querySelectorAll('.offcanvas-backdrop.show')
+                        .forEach((b) => b.classList.add('oc-comments-backdrop'));
+                }, 0);
+            }
         }
         await reload();
         loadMembers();
@@ -563,18 +585,31 @@
      * discussions are domain-wide.
      */
     async function openForSelection() {
+        // Open the panel immediately — the spinner is visible while we resolve
+        // the domain context and fetch comments asynchronously.
+        showLoadingPanel();
         const dc = await resolveDomainContext();
         if (!dc.folder || !dc.hasRegistry) {
-            notify('Save this domain to the registry to start a discussion.',
-                'warning');
+            const list = el.querySelector('[data-oc-list]');
+            if (list) {
+                list.innerHTML =
+                    '<div class="alert alert-warning small mb-0">' +
+                    'Save this domain to the registry to start a discussion.</div>';
+            }
             return;
         }
-        openThread({ folder: dc.folder, version: dc.version });
+        lastListSig = '';
+        ctx = { folder: dc.folder, version: dc.version };
+        renderAnchorBadge();
+        await reload();
+        loadMembers();
+        loadCurrentUser();
     }
 
     window.OntoComments = {
         openThread: openThread,
         openForSelection: openForSelection,
+        showLoadingPanel: showLoadingPanel,
         taggableFromOntology: taggableFromOntology,
         // Split a stored comment body into { text, tags } (strips the
         // internal tag marker). Shared with the Domain → Discussions timeline.
