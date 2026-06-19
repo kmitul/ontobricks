@@ -498,6 +498,21 @@
         });
     }
 
+    // Global entry point so any domain-page template can call it via onclick.
+    window.openDomainDiscussion = function () {
+        resolveDomainContext().then(function (dc) {
+            if (!dc.folder || !dc.hasRegistry) {
+                if (typeof window.showNotification === 'function') {
+                    window.showNotification(
+                        'Save this domain to the registry to start a discussion.', 'warning');
+                }
+                return;
+            }
+            if (!window.OntoComments) return;
+            OntoComments.openThread({ folder: dc.folder, version: dc.version });
+        });
+    };
+
     // ---- tiny html helpers --------------------------------------------------
 
     function spinner(label) {
