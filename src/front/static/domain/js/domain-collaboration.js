@@ -502,7 +502,7 @@
     // Shows the panel immediately with a spinner, resolves context behind it.
     window.openDomainDiscussion = function () {
         if (window.OntoComments) OntoComments.showLoadingPanel();
-        resolveDomainContext().then(function (dc) {
+        resolveDomainCtx().then(function (dc) {
             if (!window.OntoComments) return;
             if (!dc.folder || !dc.hasRegistry) {
                 const panelEl = document.querySelector('.oc-comments [data-oc-list]');
