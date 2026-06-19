@@ -190,10 +190,24 @@ async function initOntologyMap() {
         return nodeNameLower.get(name.toLowerCase());
     }
     
+    // Primitive XSD/OWL data types — properties whose range is one of these are
+    // data-type attributes, not object relationships. Skip them silently; they
+    // have no target node on the graph.
+    const PRIMITIVE_TYPES = new Set([
+        'string', 'integer', 'int', 'long', 'float', 'double', 'decimal',
+        'boolean', 'date', 'datetime', 'time', 'duration',
+        'anyuri', 'literal', 'plainliteral', 'langstring',
+        'xsd:string', 'xsd:integer', 'xsd:int', 'xsd:long', 'xsd:float',
+        'xsd:double', 'xsd:decimal', 'xsd:boolean', 'xsd:date',
+        'xsd:datetime', 'xsd:time', 'xsd:duration', 'xsd:anyuri',
+        'rdfs:literal',
+    ]);
+
     // Add relationship links (only if both domain and range exist as classes)
     let mapSkipped = 0;
     properties.forEach(prop => {
         if (prop.domain && prop.range) {
+            if (PRIMITIVE_TYPES.has((prop.range || '').toLowerCase())) return;
             const source = resolveNodeId(prop.domain);
             const target = resolveNodeId(prop.range);
             if (source && target) {

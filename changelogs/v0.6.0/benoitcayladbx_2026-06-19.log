@@ -282,3 +282,72 @@ this capability before the v0.6 merge to keep the feature surface focused.
 
 **Test result:** `pytest tests/units tests/back -q` → 2132 passed, 15 skipped,
 1 pre-existing lakebase/psycopg failure unrelated to these changes.
+
+---
+
+## Fix: Discussion panel crashes on open — `stopPanelPolling` not defined
+
+**Context:** Clicking the Discussion button on the Designer (and any other
+surface calling `OntoComments.openForSelection`) silently failed after a fresh
+page load. The `build()` function in `comments-panel.js` referenced
+`stopPanelPolling` as an event listener callback on the `hidden.bs.offcanvas`
+event, but that function was never defined — it was a stale reference left when
+the AI-Agent polling loop was removed. The `ReferenceError` was thrown inside
+the async `openThread` promise, aborting the whole flow before the offcanvas
+ever opened.
+
+**Changes:**
+1. `src/front/static/global/js/comments-panel.js` — replaced the
+   `stopPanelPolling` reference with an explicit no-op arrow function
+   (`() => {}`).  The listener is kept as a hook for future cleanup (e.g.
+   clearing a future auto-refresh timer) without breaking anything today.
+
+**Modified files:**
+- `src/front/static/global/js/comments-panel.js`
+
+**Test result:** `pytest tests/units -q` → 2372 passed, 15 skipped, 4
+pre-existing lakebase/psycopg failures unrelated to this change.
+
+---
+
+## Feature: Add Discussion button to Ontology/Information page
+
+**Context:** The Discussion button (opening the domain-wide comments panel via
+`openOntologyDiscussion()`) was only present on the Visual Designer tab. The
+Information tab had no way to open it, forcing the user to navigate to a
+different tab.
+
+**Changes:**
+1. `src/front/templates/partials/ontology/_ontology_information.html` — wrapped
+   the existing Reset button in a flex group and added the Discussion button
+   (`btn-outline-primary onto-discuss-btn`) with the same markup and
+   `onclick="openOntologyDiscussion()"` as the Designer tab.
+
+**Modified files:**
+- `src/front/templates/partials/ontology/_ontology_information.html`
+
+**Test result:** no JS/Python logic changed — existing test suite unaffected.
+
+---
+
+## Fix: Suppress spurious `[Map] Skipping property` warnings for data-type attributes
+
+**Context:** The ontology graph map was logging `console.warn` for every
+data-type attribute property (range = `string`, `integer`, `double`,
+`boolean`, `date`, etc.) because it tried to resolve the range as a class node
+and failed. These are not errors — data-type attributes are intentionally
+absent from the graph. The noisy warnings made it hard to spot real problems
+(a range that names a class but can't be resolved).
+
+**Changes:**
+1. `src/front/static/ontology/js/ontology-map.js` — added a `PRIMITIVE_TYPES`
+   set covering common XSD/OWL literal types. In the property-link loop,
+   properties whose `range` matches a primitive are skipped silently (no
+   `console.warn`); only genuine misconfigured object properties (range looks
+   like a class name but isn't found) still log a warning.
+
+**Modified files:**
+- `src/front/static/ontology/js/ontology-map.js`
+
+**Test result:** `pytest tests/units -q` → 2372 passed, 15 skipped, 4
+pre-existing lakebase/psycopg failures unrelated to this change.

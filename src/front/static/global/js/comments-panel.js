@@ -95,7 +95,8 @@
             postComment((ta.value || '').trim(), null, ta, compose);
         });
         el.querySelector('[data-oc-new-task]').addEventListener('click', openNewTask);
-        el.addEventListener('hidden.bs.offcanvas', stopPanelPolling);
+        // No-op: polling was removed; handler kept for future cleanup hooks.
+        el.addEventListener('hidden.bs.offcanvas', () => {});
     }
 
     // Header subtitle: discussions are domain-wide, so just name the domain
