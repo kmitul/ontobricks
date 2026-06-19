@@ -1,3 +1,50 @@
+## Tests: Multi-user review/comment/task collaboration scenarios
+
+**Context:** The review/validation workflow (`ReviewService`) and the
+collaborative comments/tasks workflow (`CommentService`) were well covered for
+single-actor rules, but the *interactions between distinct users* that the
+audit trail and sign-off quorum exist for were under-tested: distinct reviewers
+accumulating sign-offs toward a quorum end-to-end, a change-request from one
+reviewer discarding another's approval, a full lifecycle chain driven by four
+different users, and the cross-domain `my_tasks` worklist resolving a real
+per-domain role (not the admin short-circuit). Added two focused test modules
+that drive several sequential calls against a shared review-event / comment /
+task list so the rules run as a real multi-user sequence.
+
+**Changes:**
+1. `tests/units/registry/test_review_multiuser.py` (new) — 9 tests:
+   - two distinct reviewers meeting a quorum of 2 then a builder publishing
+     (no override, distinct approvers recorded in order);
+   - a single reviewer / a duplicate sign-off (incl. case-insensitive email)
+     failing to satisfy the quorum and blocking publish;
+   - a change-request discarding a prior approval and reopening to DRAFT;
+   - a full DRAFT -> IN-REVIEW -> PUBLISHED -> reopen -> resubmit chain
+     (builder + two reviewers + admin) with the interleaved audit log asserted;
+   - `my_tasks` resolving a real per-domain role via a stubbed
+     `permission_service.get_domain_role` — listing only domains where the
+     caller has a role, and gating the builder's "publish" action on a
+     distinct-approver quorum.
+2. `tests/units/registry/test_comment_multiuser.py` (new) — 9 tests:
+   - a threaded conversation (root + replies) authored by three members with
+     `parent_id` anchoring asserted;
+   - author vs editor vs stranger resolution rules on another user's thread;
+   - a task created by one user, assigned to a second, completed only by the
+     assignee (stranger refused, creator + admin allowed), with the linked
+     `commented` audit rows (`task_created` / `task_done`) asserted;
+   - collaboration blocked once the version is PUBLISHED.
+
+No production code changed — tests only.
+
+**Modified files:**
+- `tests/units/registry/test_review_multiuser.py` (new)
+- `tests/units/registry/test_comment_multiuser.py` (new)
+
+**Test result:** `pytest tests/units/registry/test_review_multiuser.py
+tests/units/registry/test_comment_multiuser.py` → 18 passed. Full
+`pytest tests/units` → 2432 passed, 1 warning.
+
+---
+
 ## Change: Drop the comment `anchor_type` / `anchor_ref` columns
 
 **Context:** Discussions are now a single domain-wide thread per
