@@ -42,12 +42,6 @@ from back.core.errors import (
     ValidationError,
 )
 from back.core.logging import get_logger
-from back.objects.registry.agent_task_runner import (
-    AI_AGENT_PRINCIPAL,
-    is_ai_agent,
-    resume_agent_task,
-    start_agent_task,
-)
 from back.objects.registry.RegistryService import RegistryCfg, RegistryService
 from back.objects.registry.PermissionService import (
     ASSIGNABLE_ROLES,
@@ -143,10 +137,6 @@ class CommentService:
         )
         if not created:
             raise InfrastructureError("Failed to save comment")
-        CommentService._maybe_resume_agent(
-            svc, session_mgr, settings, folder, version, created,
-            author=CommentService._email(request),
-        )
         return {"success": True, "comment": created}
 
     @staticmethod
@@ -268,17 +258,6 @@ class CommentService:
         members.sort(
             key=lambda m: (-role_level(m["role"]), m["display_name"].lower())
         )
-        # The AI Agent is always assignable: picking it routes the task to the
-        # right specialized agent and runs it asynchronously. Listed first.
-        members.insert(
-            0,
-            {
-                "principal": AI_AGENT_PRINCIPAL,
-                "principal_type": "agent",
-                "display_name": "AI Agent",
-                "role": "agent",
-            },
-        )
         return {"success": True, "domain": folder, "members": members}
 
     @staticmethod
@@ -313,28 +292,7 @@ class CommentService:
         CommentService._require_member(user_role, user_domain_role)
         CommentService._require_writable(status)
 
-        # A standalone AI-Agent task needs a thread root so its clarifying
-        # questions and your replies live in one place. Create a kickoff
-        # comment (the task statement) and anchor the task to it.
         effective_comment_id = comment_id or None
-        if is_ai_agent(assignee) and not effective_comment_id:
-            kickoff_body = title + (
-                f"\n\n{(description or '').strip()}" if (description or "").strip() else ""
-            )
-            kickoff = svc.insert_comment(
-                folder, version,
-                author=CommentService._email(request),
-                body=kickoff_body, parent_id=None,
-            )
-            if kickoff:
-                effective_comment_id = str(kickoff.get("id") or "") or None
-            else:
-                logger.warning(
-                    "create_task: kickoff comment could not be created for "
-                    "AI-Agent task in %s/%s; the task will have no thread root "
-                    "and cannot be resumed", folder, version,
-                )
-
         created = svc.insert_task(
             folder,
             version,
@@ -361,26 +319,7 @@ class CommentService:
             },
         )
 
-        # When assigned to the AI Agent, kick off the async router that picks
-        # and runs the right specialized agent against this domain.
-        agent_task_id = None
-        if is_ai_agent(assignee):
-            agent_task_id = start_agent_task(
-                svc=svc,
-                domain=get_domain(session_mgr),
-                settings=settings,
-                folder=folder,
-                version=version,
-                task_id=created.get("id", ""),
-                title=title,
-                description=(description or "").strip(),
-                comment_id=effective_comment_id or "",
-            )
-
-        result = {"success": True, "task": created}
-        if agent_task_id:
-            result["agent_task_id"] = agent_task_id
-        return result
+        return {"success": True, "task": created}
 
     @staticmethod
     def update_task_status(
@@ -487,50 +426,6 @@ class CommentService:
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("collab audit append skipped: %s", exc)
-
-    @staticmethod
-    def _maybe_resume_agent(
-        svc,
-        session_mgr: SessionManager,
-        settings,
-        folder: str,
-        version: str,
-        comment: Dict[str, Any],
-        *,
-        author: str,
-    ) -> None:
-        """Resume a parked AI-Agent task when a teammate replies on its thread.
-
-        Best-effort: the AI Agent's own outcome comments are written through the
-        store (not this method), so only human replies reach here. Matches the
-        new comment's thread root against an active AI-Agent task's ``comment_id``.
-        """
-        from back.objects.registry.agent_task_runner import AI_AGENT_LABEL
-
-        try:
-            if (author or "") == AI_AGENT_LABEL:
-                return
-            root = str(comment.get("parent_id") or comment.get("id") or "")
-            if not root:
-                return
-            for task in svc.list_tasks(folder, version):
-                if not is_ai_agent(task.get("assignee") or ""):
-                    continue
-                if (task.get("status") or "") != "in_progress":
-                    continue
-                if str(task.get("comment_id") or "") != root:
-                    continue
-                resume_agent_task(
-                    svc=svc,
-                    domain=get_domain(session_mgr),
-                    settings=settings,
-                    folder=folder,
-                    version=version,
-                    task=task,
-                )
-                break
-        except Exception as exc:  # noqa: BLE001
-            logger.debug("CommentService: agent resume skipped: %s", exc)
 
     @staticmethod
     def _is_comment_author(

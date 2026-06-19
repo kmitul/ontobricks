@@ -1,18 +1,14 @@
 """
 Contract tests for the Discussion panel front-end assets.
 
-The Discussion-panel behaviour added for AI-Agent tasks lives entirely in
-static JS/CSS (the repo has no JS unit-test harness). These tests fetch the
-served assets through the app's ``/static`` mount and assert the wiring is
-present, so an accidental removal/rename of a key hook is caught by CI.
+These tests fetch the served assets through the app's ``/static`` mount and
+assert the wiring is present, so an accidental removal/rename of a key hook
+is caught by CI.
 
 They are deliberately token-level (not behavioural) — they guard that the
 contract between the panel and the rest of the app stays intact:
 
-* comment bodies are rendered as markdown (via the global ``marked``);
-* AI-Agent task status + progress are surfaced in the pane and answerable;
-* finishing an AI-Agent task broadcasts ``ontobricks:design-updated`` and the
-  ontology / mapping pages listen for it to refresh their design.
+* comment bodies are rendered as markdown (via the global ``marked``).
 """
 
 from __future__ import annotations
@@ -24,9 +20,6 @@ ONTOLOGY_INIT_JS = "/static/ontology/js/ontology-init.js"
 MAPPING_INIT_JS = "/static/mapping/js/mapping-init.js"
 COLLAB_JS = "/static/domain/js/domain-collaboration.js"
 REVIEW_CSS = "/static/global/css/review-modals.css"
-
-# Event name shared between the panel (dispatch) and the pages (listeners).
-DESIGN_UPDATED_EVENT = "ontobricks:design-updated"
 
 
 def _static(client, path: str) -> str:
@@ -65,75 +58,6 @@ class TestDiscussionMarkdownRendering:
     def test_markdown_styles_present(self, client):
         css = _static(client, REVIEW_CSS)
         assert ".oc-md" in css
-
-
-class TestDiscussionAgentStatus:
-    """AI-Agent runs surface progress + status inside the pane."""
-
-    def test_loads_ai_tasks_and_runs(self, panel_js):
-        assert "function loadAiTasks" in panel_js
-        assert "function loadAgentRuns" in panel_js
-        # AI-Agent background runs are the router/plan/run worker.
-        assert "'task_router'" in panel_js
-
-    def test_progress_strip_rendered(self, panel_js):
-        assert "function renderAgentStrip" in panel_js
-        assert "oc-agent-strip" in panel_js
-
-    def test_live_polling_loop(self, panel_js):
-        assert "function panelPollTick" in panel_js
-        assert "function startPanelPolling" in panel_js
-        # Polling must not clobber a half-written reply.
-        assert "function userIsComposing" in panel_js
-
-    def test_per_thread_status_chip(self, panel_js):
-        assert "function agentChipHtml" in panel_js
-        assert "waiting for your reply" in panel_js
-
-    def test_strip_and_chip_styles_present(self, client):
-        css = _static(client, REVIEW_CSS)
-        for token in (".oc-agent-strip", "oc-agent-working", "oc-agent-waiting"):
-            assert token in css, f"missing CSS token {token!r}"
-
-
-class TestAnswerTheAgent:
-    """A parked AI-Agent thread is answerable from the pane."""
-
-    def test_answer_box_present(self, panel_js):
-        assert "function agentAnswerHtml" in panel_js
-        assert "Answer the AI Agent" in panel_js
-
-    def test_answer_send_wired_to_reply(self, panel_js):
-        # The send button posts a reply (parent = thread root) which resumes the
-        # agent server-side, then re-checks tracking.
-        assert "data-agent-send" in panel_js
-        assert "ensureAgentTracking" in panel_js
-
-    def test_answer_box_styles_present(self, client):
-        css = _static(client, REVIEW_CSS)
-        assert ".oc-agent-answer" in css
-
-
-class TestDesignUpdatedRefresh:
-    """Finishing an AI-Agent design task refreshes the open pages."""
-
-    def test_panel_dispatches_event_on_completion(self, panel_js):
-        assert "function announceAgentCompletions" in panel_js
-        assert DESIGN_UPDATED_EVENT in panel_js
-
-    def test_ontology_page_listens_and_refreshes(self, client):
-        js = _static(client, ONTOLOGY_INIT_JS)
-        assert DESIGN_UPDATED_EVENT in js
-        # Pulls the agent's saved changes and re-renders the active section.
-        assert "loadOntologyFromSession" in js
-        assert "_initSectionByName(SidebarNav.getActiveSection())" in js
-
-    def test_mapping_page_listens_and_refreshes(self, client):
-        js = _static(client, MAPPING_INIT_JS)
-        assert DESIGN_UPDATED_EVENT in js
-        # Re-pulls the loaded ontology and redraws the mapping design.
-        assert "/ontology/get-loaded-ontology" in js
-        assert "refreshMappingDesign" in js
 
 
 class TestDiscussionDomainScope:

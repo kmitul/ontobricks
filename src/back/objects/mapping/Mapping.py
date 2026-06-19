@@ -960,30 +960,6 @@ class Mapping:
                 merged.append(new_m)
         return merged
 
-    def apply_agent_mappings(
-        self,
-        entity_mappings: Optional[List[Dict[str, Any]]],
-        relationship_mappings: Optional[List[Dict[str, Any]]],
-    ) -> Dict[str, int]:
-        """Merge agent-proposed mappings into the domain and persist to the registry.
-
-        The session-less counterpart of :meth:`save_mappings_to_session`: it
-        upserts into ``domain.assignment`` (preserving ``excluded`` flags) and
-        calls ``domain.save()``. Used by the background AI-Agent task runner,
-        which has a domain but no HTTP session. Returns the post-merge totals.
-        """
-        domain = self._domain
-        merged_e = Mapping._merge_entity_mappings(
-            domain.get_entity_mappings(), entity_mappings or []
-        )
-        merged_r = Mapping._merge_relationship_mappings(
-            domain.get_relationship_mappings(), relationship_mappings or []
-        )
-        domain.assignment["entities"] = merged_e
-        domain.assignment["relationships"] = merged_r
-        domain.save()
-        return {"entities": len(merged_e), "relationships": len(merged_r)}
-
     @staticmethod
     def save_mappings_to_session(
         session_id: Optional[str],

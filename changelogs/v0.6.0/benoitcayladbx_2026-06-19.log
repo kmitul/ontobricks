@@ -167,3 +167,71 @@ disagreed.
 
 **Test result:** `pytest tests/back/core/digitaltwin/test_build_pipeline_units.py`
 → 22 passed.
+
+---
+
+## Change: Remove AI Agent task capability (discussion & tasks)
+
+**Context:** The `feat/Collaborative-Comments-Tasks` branch introduced
+an experimental feature that allowed collaborative tasks to be assigned to a
+virtual "AI Agent" (`agent://router`). The feature included a route →
+plan → clarify → dispatch loop backed by `agent_task_runner.py`,
+`agent_task_planner/`, and `agent_task_router/`. The decision was made to drop
+this capability before the v0.6 merge to keep the feature surface focused.
+
+**Changes:**
+
+1. `src/agents/agent_task_planner/` (3 files) — deleted entirely.
+2. `src/agents/agent_task_router/` (3 files) — deleted entirely.
+3. `src/agents/registry.py` — deleted (only used by the two modules above).
+4. `src/back/objects/registry/agent_task_runner.py` — deleted.
+5. `src/back/objects/registry/CommentService.py` — removed import of
+   agent_task_runner constants; removed AI Agent entry from `list_assignees`;
+   removed kickoff-comment block and `start_agent_task` call from
+   `create_task`; removed `_maybe_resume_agent` method and its call from
+   `add_comment`.
+6. `src/back/objects/mapping/Mapping.py` — removed `apply_agent_mappings()`
+   method (session-less counterpart used only by the runner).
+7. `src/front/static/global/js/comments-panel.js` — removed all AI-Agent
+   state variables, live-status functions (`loadAiTasks`, `loadAgentRuns`,
+   `renderAgentStrip`, `ensureAgentTracking`, `announceAgentCompletions`,
+   `panelPollTick`, `agentChipHtml`, `agentAnswerHtml`), agent thread CSS
+   classes, polling timer, and `data-agent-send` handler; simplified
+   `taskFormHtml` and `syncDueVisibility`; simplified `listSignature`.
+8. `src/front/static/ontology/js/ontology-init.js` — removed
+   `ontobricks:design-updated` event listener.
+9. `src/front/static/mapping/js/mapping-init.js` — removed
+   `ontobricks:design-updated` event listener.
+10. `src/front/static/global/css/review-modals.css` — removed all
+    `.oc-agent-*` and `.oc-thread-agent` rules and the `@keyframes oc-agent-spin` block.
+11. `tests/units/agents/test_agent_task_planner.py` — deleted.
+12. `tests/units/agents/test_agent_task_router.py` — deleted.
+13. `tests/units/registry/test_agent_task_runner.py` — deleted.
+14. `tests/units/registry/test_comment_service.py` — removed 7 AI-agent test
+    functions; updated `test_list_assignees_returns_domain_holders_sorted` to
+    no longer expect the AI Agent as first entry.
+15. `tests/units/mapping/test_mapping_service.py` — removed
+    `TestApplyAgentMappings` class (4 tests).
+16. `tests/units/api/test_discussion_panel_assets.py` — removed
+    `TestDiscussionAgentStatus`, `TestAnswerTheAgent`, `TestDesignUpdatedRefresh`
+    classes; updated module docstring.
+17. `docs/architecture.md` — removed `registry.py`, `agent_task_router/`,
+    `agent_task_planner/` from the tree; removed the `task_router` row from
+    the task-type table; removed the entire "AI Agent task assignment" section.
+18. `docs/superpowers/plans/2026-06-18-ai-agent-clarifying-questions.md` — deleted.
+19. `docs/superpowers/specs/2026-06-18-ai-agent-clarifying-questions-design.md` — deleted.
+
+**Modified files:**
+- `src/back/objects/registry/CommentService.py`
+- `src/back/objects/mapping/Mapping.py`
+- `src/front/static/global/js/comments-panel.js`
+- `src/front/static/ontology/js/ontology-init.js`
+- `src/front/static/mapping/js/mapping-init.js`
+- `src/front/static/global/css/review-modals.css`
+- `docs/architecture.md`
+- `tests/units/registry/test_comment_service.py`
+- `tests/units/mapping/test_mapping_service.py`
+- `tests/units/api/test_discussion_panel_assets.py`
+
+**Test result:** `pytest tests/units tests/back -q` → 2132 passed, 15 skipped,
+1 pre-existing lakebase/psycopg failure unrelated to these changes.

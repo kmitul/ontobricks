@@ -168,58 +168,6 @@ def test_add_comment_requires_body():
               user_role=ROLE_ADMIN, user_domain_role=ROLE_NONE)
 
 
-def test_add_comment_resumes_active_ai_agent_task():
-    prior = [{
-        "id": "1", "folder": "acme", "version": "2",
-        "assignee": _mod.AI_AGENT_PRINCIPAL, "created_by": "alice@acme.com",
-        "title": "t", "description": "", "status": "in_progress",
-        "due_date": "", "comment_id": "5",
-        "created_at": "t", "updated_at": "t",
-    }]
-    svc, _, _, _ = _make_svc(status="DRAFT", tasks=prior)
-    with patch.object(_mod, "resume_agent_task", return_value="bg7") as resume:
-        result = _call("add_comment", svc,
-                       body="any update?", parent_id="5",
-                       user_role="", user_domain_role=ROLE_VIEWER)
-    assert result["success"] is True
-    resume.assert_called_once()
-    assert resume.call_args.kwargs["task"]["id"] == "1"
-
-
-def test_add_comment_does_not_resume_done_task():
-    prior = [{
-        "id": "1", "folder": "acme", "version": "2",
-        "assignee": _mod.AI_AGENT_PRINCIPAL, "created_by": "alice@acme.com",
-        "title": "t", "description": "", "status": "done",
-        "due_date": "", "comment_id": "5",
-        "created_at": "t", "updated_at": "t",
-    }]
-    svc, _, _, _ = _make_svc(status="DRAFT", tasks=prior)
-    with patch.object(_mod, "resume_agent_task") as resume:
-        result = _call("add_comment", svc,
-                       body="any update?", parent_id="5",
-                       user_role="", user_domain_role=ROLE_VIEWER)
-    assert result["success"] is True
-    resume.assert_not_called()
-
-
-def test_add_comment_does_not_resume_human_task():
-    prior = [{
-        "id": "1", "folder": "acme", "version": "2",
-        "assignee": "bob@acme.com", "created_by": "alice@acme.com",
-        "title": "t", "description": "", "status": "in_progress",
-        "due_date": "", "comment_id": "5",
-        "created_at": "t", "updated_at": "t",
-    }]
-    svc, _, _, _ = _make_svc(status="DRAFT", tasks=prior)
-    with patch.object(_mod, "resume_agent_task") as resume:
-        result = _call("add_comment", svc,
-                       body="any update?", parent_id="5",
-                       user_role="", user_domain_role=ROLE_VIEWER)
-    assert result["success"] is True
-    resume.assert_not_called()
-
-
 # ----------------------------------------------------------------------
 # Comments — resolve
 # ----------------------------------------------------------------------
@@ -281,71 +229,6 @@ def test_create_task_succeeds_and_audits():
     assert events[-1]["action"] == "commented"
     assert events[-1]["meta"]["comment_id"] == "7"
     assert events[-1]["meta"]["task_id"] == tasks[-1]["id"]
-
-
-def test_create_task_ai_agent_triggers_runner():
-    svc, _, tasks, _ = _make_svc(status="DRAFT")
-    with patch.object(_mod, "start_agent_task", return_value="bg42") as start:
-        result = _call(
-            "create_task", svc, assignee=_mod.AI_AGENT_PRINCIPAL,
-            title="Generate the ontology", description="from metadata",
-            due_date=None, comment_id="7",
-            user_role="", user_domain_role=ROLE_VIEWER,
-        )
-    assert result["success"] is True
-    assert result["agent_task_id"] == "bg42"
-    start.assert_called_once()
-    assert start.call_args.kwargs["task_id"] == tasks[-1]["id"]
-    assert start.call_args.kwargs["title"] == "Generate the ontology"
-
-
-def test_create_task_ai_agent_no_comment_inserts_kickoff():
-    svc, comments, tasks, _ = _make_svc(status="DRAFT")
-    with patch.object(_mod, "start_agent_task", return_value="bg99") as start:
-        result = _call(
-            "create_task", svc, assignee=_mod.AI_AGENT_PRINCIPAL,
-            title="Generate the ontology", description="from metadata",
-            due_date=None, comment_id=None,
-            user_role="", user_domain_role=ROLE_VIEWER,
-        )
-    assert result["success"] is True
-    # A kickoff comment was created (body = the task statement) ...
-    assert comments[-1]["body"] == "Generate the ontology\n\nfrom metadata"
-    kickoff_id = comments[-1]["id"]
-    # ... and the task + runner are anchored to it.
-    assert tasks[-1]["comment_id"] == kickoff_id
-    start.assert_called_once()
-    assert start.call_args.kwargs["comment_id"] == kickoff_id
-
-
-def test_create_task_ai_agent_kickoff_failure_still_creates_task():
-    svc, _, tasks, _ = _make_svc(status="DRAFT")
-    # The kickoff comment can't be created (store returns falsy): the task is
-    # still created, just without a thread root (comment_id stays None).
-    svc.insert_comment.side_effect = lambda *a, **k: None
-    with patch.object(_mod, "start_agent_task", return_value="bg00") as start:
-        result = _call(
-            "create_task", svc, assignee=_mod.AI_AGENT_PRINCIPAL,
-            title="Generate the ontology", description="from metadata",
-            due_date=None, comment_id=None,
-            user_role="", user_domain_role=ROLE_VIEWER,
-        )
-    assert result["success"] is True
-    assert svc.insert_task.call_args.kwargs["comment_id"] is None
-    assert start.call_args.kwargs["comment_id"] == ""
-
-
-def test_create_task_human_assignee_does_not_trigger_runner():
-    svc, _, _, _ = _make_svc(status="DRAFT")
-    with patch.object(_mod, "start_agent_task") as start:
-        result = _call(
-            "create_task", svc, assignee="bob@acme.com", title="Fix mapping",
-            description="", due_date=None, comment_id=None,
-            user_role="", user_domain_role=ROLE_VIEWER,
-        )
-    assert result["success"] is True
-    assert "agent_task_id" not in result
-    start.assert_not_called()
 
 
 def test_create_task_requires_assignee():
@@ -515,11 +398,8 @@ def test_list_assignees_returns_domain_holders_sorted():
     result = _call_assignees(entries=entries)
     assert result["success"] is True
     members = result["members"]
-    # The AI Agent is always offered first.
-    assert members[0]["principal"] == _mod.AI_AGENT_PRINCIPAL
-    assert members[0]["principal_type"] == "agent"
-    # Then domain holders, most-privileged first; the role-less entry is dropped.
-    assert [m["principal"] for m in members[1:]] == [
+    # Domain holders, most-privileged first; the role-less entry is dropped.
+    assert [m["principal"] for m in members] == [
         "b@acme.com", "e@acme.com", "v@acme.com",
     ]
 
