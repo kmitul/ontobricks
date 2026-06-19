@@ -139,3 +139,31 @@ tests/units/mapping/test_mapping_service.py` → 63 passed. Full
 `pytest tests/units` → 2408 passed, 15 skipped, 4 failed; the 4 failures are the
 `TestLakebaseCollab` cases that need the optional `psycopg` extra (not installed
 in this env) — unrelated to this change.
+
+---
+
+## Fix: Interactive Build Does Not Persist last_build to Registry
+
+**Context:** Backport from `fix/v0.5.1` / `develop`. On the Validation page,
+"Submit for Review" was blocked with "This version has never been built." even
+after a successful interactive Digital Twin build. Root cause: the shared build
+completion path (`_BuildPipeline._complete_task`) never called `write_version()`
+to flush `domain.last_build` to the `domain_versions.last_build` DB column.
+Only the scheduled-build path did. The Submit gate reads that column; the
+Consistency-checks panel reads live triple-store state — so both indicators
+disagreed.
+
+**Changes:**
+1. `src/back/objects/digitaltwin/_build_pipeline.py` — added
+   `_persist_last_build_to_registry()` (best-effort registry write); called
+   from `_complete_task()` after `_record_build_run()`, covering both
+   `build_kind="session"` (UI) and `build_kind="api"` (REST).
+2. `tests/back/core/digitaltwin/test_build_pipeline_units.py` — added
+   `TestPersistLastBuildToRegistry` (6 regression tests).
+
+**Modified files:**
+- `src/back/objects/digitaltwin/_build_pipeline.py`
+- `tests/back/core/digitaltwin/test_build_pipeline_units.py`
+
+**Test result:** `pytest tests/back/core/digitaltwin/test_build_pipeline_units.py`
+→ 22 passed.
