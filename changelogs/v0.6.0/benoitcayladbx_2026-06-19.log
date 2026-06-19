@@ -1,3 +1,36 @@
+## UX: Discussion panel opens immediately; copy-comment-as-task-name; Data Sources & Documents buttons
+
+**Context:** Several UX improvements made on top of the collaborative
+comments/tasks feature before merging to develop.
+
+**Changes:**
+1. `src/front/static/global/js/comments-panel.js` — `showLoadingPanel()`
+   opens the offcanvas immediately with a spinner (exposed on
+   `OntoComments`); `openForSelection` calls it before async context
+   resolution; `openThread` skips re-show if already visible.
+   Added "Copy from comment" button in the task creation form: stores raw
+   comment text on `data-raw-text`, truncates to 200 chars + `…` on copy.
+2. `src/front/static/domain/js/domain-collaboration.js` — exposed
+   `window.openDomainDiscussion()` (immediate panel + async context);
+   uses `OntoComments.showLoadingPanel()` before `resolveDomainCtx()`.
+3. `src/front/templates/partials/domain/_domain_metadata.html` — added
+   Discussion button to Data Sources section header.
+4. `src/front/templates/partials/domain/_domain_documents.html` — added
+   Discussion button to Document Management section header.
+5. `.cursor/07-project-conventions.mdc` — added Merge Safety rules.
+
+**Modified files:**
+- `src/front/static/global/js/comments-panel.js`
+- `src/front/static/domain/js/domain-collaboration.js`
+- `src/front/templates/partials/domain/_domain_metadata.html`
+- `src/front/templates/partials/domain/_domain_documents.html`
+- `.cursor/07-project-conventions.mdc`
+
+**Test result:** `pytest tests/units/ tests/back/ -q` → 2553 passed, 15
+skipped, 5 pre-existing optional-extra failures (psycopg, pyshacl).
+
+---
+
 ## Tests: Multi-user review/comment/task collaboration scenarios
 
 **Context:** The review/validation workflow (`ReviewService`) and the
