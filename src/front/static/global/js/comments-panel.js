@@ -280,7 +280,9 @@
     function threadHtml(root, replies) {
         const replyHtml = replies.map((r) => bubble(r, true)).join('');
         const resolvedCls = root.resolved ? ' oc-resolved' : '';
-        return '<div class="oc-thread' + resolvedCls + '" data-thread="' + escAttr(root.id) + '">' +
+        const rawText = parseBody(root.body).text;
+        return '<div class="oc-thread' + resolvedCls + '" data-thread="' + escAttr(root.id) + '"' +
+            ' data-raw-text="' + escAttr(rawText) + '">' +
             bubble(root, false) +
             '<div class="oc-replies">' + replyHtml + '</div>' +
             '<div class="oc-thread-tools">' +
@@ -348,7 +350,9 @@
 
     // Build the inner markup of a task-creation form. Shared by the
     // per-comment task box and the standalone "New task" box in the header.
-    function taskFormHtml(heading, withCancel) {
+    const TASK_TITLE_MAX = 200;
+
+    function taskFormHtml(heading, withCancel, commentText) {
         const members = membersCache[ctx.folder + '/' + ctx.version] || [];
         const opts = members.map((m) => {
             const label = esc(m.display_name || m.principal) +
@@ -359,10 +363,18 @@
         const cancel = withCancel
             ? '<button type="button" class="btn btn-sm btn-outline-secondary" data-tk-cancel>Cancel</button>'
             : '';
+        const copyBtn = commentText
+            ? '<button type="button" class="btn btn-link btn-sm p-0 ms-1 text-muted" data-tk-copy ' +
+              'title="Copy comment text as task name" ' +
+              'data-tk-copy-text="' + escAttr(commentText) + '">' +
+              '<i class="bi bi-clipboard me-1"></i>Copy from comment</button>'
+            : '';
         return '<div class="oc-task-form border rounded p-2">' +
             '<div class="small fw-medium mb-2"><i class="bi bi-check2-square me-1"></i>' +
             esc(heading) + '</div>' +
-            '<input type="text" class="form-control form-control-sm mb-2" data-tk-title placeholder="Task title">' +
+            '<div class="d-flex align-items-center gap-1 mb-2">' +
+            '<input type="text" class="form-control form-control-sm flex-grow-1" data-tk-title placeholder="Task title">' +
+            copyBtn + '</div>' +
             '<div class="d-flex align-items-center justify-content-between mb-1">' +
             '<label class="form-label small text-muted mb-0">Assignee</label>' +
             '<button type="button" class="btn btn-link btn-sm p-0" data-tk-me>' +
@@ -387,6 +399,20 @@
         if (cancel) cancel.addEventListener('click', () => hideTaskBox(box));
         const sel = box.querySelector('[data-tk-assignee]');
         if (sel) sel.addEventListener('change', () => syncDueVisibility(box));
+        const copyBtn = box.querySelector('[data-tk-copy]');
+        if (copyBtn) {
+            copyBtn.addEventListener('click', () => {
+                const raw = copyBtn.dataset.tkCopyText || '';
+                const truncated = raw.length > TASK_TITLE_MAX
+                    ? raw.slice(0, TASK_TITLE_MAX) + '…'
+                    : raw;
+                const titleInput = box.querySelector('[data-tk-title]');
+                if (titleInput) {
+                    titleInput.value = truncated;
+                    titleInput.focus();
+                }
+            });
+        }
         syncDueVisibility(box);
     }
 
@@ -406,7 +432,10 @@
         if (box.style.display !== 'none') { box.style.display = 'none'; return; }
         box.classList.remove('d-none');
         box.style.display = '';
-        box.innerHTML = taskFormHtml('New task from this comment', false);
+        // Read the raw comment text stored on the parent thread element.
+        const thread = el.querySelector('[data-thread="' + cssEsc(rootId) + '"]');
+        const commentText = (thread && thread.dataset.rawText) || '';
+        box.innerHTML = taskFormHtml('New task from this comment', false, commentText);
         wireTaskForm(box, rootId);
     }
 
