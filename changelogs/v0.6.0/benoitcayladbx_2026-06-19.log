@@ -310,6 +310,28 @@ pre-existing lakebase/psycopg failures unrelated to this change.
 
 ---
 
+## Chore: Add Merge Safety rule to project conventions
+
+**Context:** During the conflict resolution of PR #67
+(`feat/Collaborative-Comments-Tasks` ← `develop`), git auto-merged
+`base.html`, `domain.html`, `menu_config.json`, and
+`routers/internal/__init__.py` without conflict markers, silently
+discarding all collaboration UI wiring added by the feature branch.
+Documented the pattern so it isn't repeated.
+
+**Changes:**
+1. `.cursor/07-project-conventions.mdc` — added a **Merge Safety** section
+   (6 rules): feature branch priority, auto-merge risk, a diff checklist for
+   the 4 most-at-risk files, restoration procedure, test requirement, and
+   commit message guidance.
+
+**Modified files:**
+- `.cursor/07-project-conventions.mdc`
+
+**Test result:** documentation/rule change only — no code modified.
+
+---
+
 ## Feature: Add Discussion button to Ontology/Information page
 
 **Context:** The Discussion button (opening the domain-wide comments panel via
