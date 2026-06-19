@@ -1017,10 +1017,20 @@ function loadEntityPanelContent(classUri, className, targetPanelBody = null) {
     const epStatusIcon = (ok) => ok
         ? '<i class="bi bi-check-circle-fill text-success"></i>'
         : '<i class="bi bi-x-circle-fill text-danger"></i>';
-    const epOntologyRows = attributes.map((a, i) => {
+    const epExcludedAttrs = existingMapping?.excluded_attributes || [];
+    const epOntologyRows = attributes.map((a) => {
         const name = a.name || a.localName || '';
-        const assigned = !!(name && epAttrMap[name]);
-        return `<tr><td class="text-muted" style="width:28px;">${i + 1}</td><td>${name}</td><td class="text-center">${epStatusIcon(assigned)}</td></tr>`;
+        const isExcluded = epExcludedAttrs.includes(name);
+        const assigned = !!(name && epAttrMap[name]) && !isExcluded;
+        const nameCell = isExcluded ? `<span class="text-muted text-decoration-line-through">${name}</span>` : name;
+        const mappedCell = isExcluded
+            ? '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>'
+            : epStatusIcon(assigned);
+        return `<tr>
+            <td style="width:32px;padding-left:8px;"><input type="checkbox" class="ep-attr-include-cb form-check-input form-check-input-sm" data-attr="${name}" ${isExcluded ? '' : 'checked'} title="${isExcluded ? 'Click to include this attribute' : 'Click to exclude this attribute'}"></td>
+            <td>${nameCell}</td>
+            <td class="text-center">${mappedCell}</td>
+        </tr>`;
     }).join('');
 
     panelBody.innerHTML = `
@@ -1075,7 +1085,7 @@ function loadEntityPanelContent(classUri, className, targetPanelBody = null) {
                         </div>
                     </div>
                     ${attributes.length > 0
-                        ? '<div class="col-6"><div class="border rounded" style="max-height: 200px; overflow-y: auto;"><table class="table table-sm table-striped mb-0" style="font-size:0.78rem;"><thead class="table-light sticky-top"><tr><th style="width:28px;">#</th><th>Attribute</th><th class="text-center" style="width:70px;">Mapped</th></tr></thead><tbody>' + epOntologyRows + '</tbody></table></div></div>'
+                        ? '<div class="col-6"><div class="border rounded" style="max-height: 200px; overflow-y: auto;"><table class="table table-sm table-striped mb-0" style="font-size:0.78rem;"><thead class="table-light sticky-top"><tr><th style="width:32px;" title="Include in mapping"><i class="bi bi-check2-square text-muted"></i></th><th>Attribute</th><th class="text-center" style="width:70px;">Mapped</th></tr></thead><tbody>' + epOntologyRows + '</tbody></table></div></div>'
                         : ''}
                 </div>
             </div>
@@ -1195,10 +1205,20 @@ function loadRelationshipPanelContent(ontologyProperty, targetPanelBody = null) 
         ${relAttributes.length > 0 ? `<tr><td>${statusIcon(mappedAttrCount === relAttributes.length)}</td><td>Attributes</td><td class="text-muted small">${mappedAttrCount} / ${relAttributes.length} assigned</td></tr>` : ''}
     `;
 
-    const rpOntologyRows = relAttributes.map((a, i) => {
+    const rpExcludedAttrs = existingMapping?.excluded_attributes || [];
+    const rpOntologyRows = relAttributes.map((a) => {
         const name = a.name || a.localName || '';
-        const assigned = !!(name && relAttrMap[name]);
-        return `<tr><td class="text-muted" style="width:28px;">${i + 1}</td><td>${name}</td><td class="text-center">${statusIcon(assigned)}</td></tr>`;
+        const isExcluded = rpExcludedAttrs.includes(name);
+        const assigned = !!(name && relAttrMap[name]) && !isExcluded;
+        const nameCell = isExcluded ? `<span class="text-muted text-decoration-line-through">${name}</span>` : name;
+        const mappedCell = isExcluded
+            ? '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>'
+            : statusIcon(assigned);
+        return `<tr>
+            <td style="width:32px;padding-left:8px;"><input type="checkbox" class="rp-attr-include-cb form-check-input form-check-input-sm" data-attr="${name}" ${isExcluded ? '' : 'checked'} title="${isExcluded ? 'Click to include this attribute' : 'Click to exclude this attribute'}"></td>
+            <td>${nameCell}</td>
+            <td class="text-center">${mappedCell}</td>
+        </tr>`;
     }).join('');
 
     panelBody.innerHTML = `
@@ -1254,7 +1274,7 @@ function loadRelationshipPanelContent(ontologyProperty, targetPanelBody = null) 
                         </div>
                     </div>
                     ${relAttributes.length > 0
-                        ? '<div class="col-6"><div class="border rounded" style="max-height: 200px; overflow-y: auto;"><table class="table table-sm table-striped mb-0" style="font-size:0.78rem;"><thead class="table-light sticky-top"><tr><th style="width:28px;">#</th><th>Attribute</th><th class="text-center" style="width:70px;">Mapped</th></tr></thead><tbody>' + rpOntologyRows + '</tbody></table></div></div>'
+                        ? '<div class="col-6"><div class="border rounded" style="max-height: 200px; overflow-y: auto;"><table class="table table-sm table-striped mb-0" style="font-size:0.78rem;"><thead class="table-light sticky-top"><tr><th style="width:32px;" title="Include in mapping"><i class="bi bi-check2-square text-muted"></i></th><th>Attribute</th><th class="text-center" style="width:70px;">Mapped</th></tr></thead><tbody>' + rpOntologyRows + '</tbody></table></div></div>'
                         : ''}
                 </div>
             </div>
@@ -1334,6 +1354,7 @@ const EntityPanelState = {
     labelColumn: null,
     attributeMappings: {},
     attributes: [],
+    excludedAttributes: [],
     _generation: 0,
     _autoLoadTimer: null
 };
@@ -1353,6 +1374,7 @@ function initEntityPanel(classUri, className, existingMapping, classInfo) {
     EntityPanelState.labelColumn = existingMapping?.label_column || null;
     EntityPanelState.attributeMappings = existingMapping?.attribute_mappings ? {...existingMapping.attribute_mappings} : {};
     EntityPanelState.attributes = classInfo?.dataProperties || [];
+    EntityPanelState.excludedAttributes = existingMapping?.excluded_attributes ? [...existingMapping.excluded_attributes] : [];
     
     updateEntityPanelSaveBtn();
     
@@ -1365,7 +1387,32 @@ function initEntityPanel(classUri, className, existingMapping, classInfo) {
             toggleEntityExclusion(classUri, !this.checked, 'entity');
         });
     }
-    
+
+    // Per-attribute include/exclude checkboxes
+    document.querySelectorAll('.ep-attr-include-cb').forEach(cb => {
+        cb.addEventListener('change', function() {
+            const attrName = this.dataset.attr;
+            if (this.checked) {
+                EntityPanelState.excludedAttributes = EntityPanelState.excludedAttributes.filter(a => a !== attrName);
+            } else {
+                if (!EntityPanelState.excludedAttributes.includes(attrName)) {
+                    EntityPanelState.excludedAttributes.push(attrName);
+                }
+                delete EntityPanelState.attributeMappings[attrName];
+            }
+            const row = this.closest('tr');
+            const nameCell = row.querySelector('td:nth-child(2)');
+            const mappedCell = row.querySelector('td:nth-child(3)');
+            if (this.checked) {
+                nameCell.innerHTML = attrName;
+                mappedCell.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i>';
+            } else {
+                nameCell.innerHTML = `<span class="text-muted text-decoration-line-through">${attrName}</span>`;
+                mappedCell.innerHTML = '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>';
+            }
+        });
+    });
+
     // Auto-load query data in background when there is an existing mapping with SQL
     if (existingMapping?.sql_query) {
         EntityPanelState._autoLoadTimer = setTimeout(() => {
@@ -1613,7 +1660,8 @@ const RelPanelState = {
     sourceIdColumn: null,
     targetIdColumn: null,
     attributeMappings: {},
-    attributes: []
+    attributes: [],
+    excludedAttributes: []
 };
 
 function initRelationshipPanel(ontologyProperty, existingMapping) {
@@ -1623,6 +1671,7 @@ function initRelationshipPanel(ontologyProperty, existingMapping) {
     RelPanelState.targetIdColumn = existingMapping?.target_id_column || null;
     RelPanelState.attributeMappings = existingMapping?.attribute_mappings ? {...existingMapping.attribute_mappings} : {};
     RelPanelState.attributes = ontologyProperty?.properties || [];
+    RelPanelState.excludedAttributes = existingMapping?.excluded_attributes ? [...existingMapping.excluded_attributes] : [];
     
     updateRelPanelSaveBtn();
     
@@ -1635,7 +1684,32 @@ function initRelationshipPanel(ontologyProperty, existingMapping) {
             toggleEntityExclusion(ontologyProperty.uri, !this.checked, 'relationship');
         });
     }
-    
+
+    // Per-attribute include/exclude checkboxes
+    document.querySelectorAll('.rp-attr-include-cb').forEach(cb => {
+        cb.addEventListener('change', function() {
+            const attrName = this.dataset.attr;
+            if (this.checked) {
+                RelPanelState.excludedAttributes = RelPanelState.excludedAttributes.filter(a => a !== attrName);
+            } else {
+                if (!RelPanelState.excludedAttributes.includes(attrName)) {
+                    RelPanelState.excludedAttributes.push(attrName);
+                }
+                delete RelPanelState.attributeMappings[attrName];
+            }
+            const row = this.closest('tr');
+            const nameCell = row.querySelector('td:nth-child(2)');
+            const mappedCell = row.querySelector('td:nth-child(3)');
+            if (this.checked) {
+                nameCell.innerHTML = attrName;
+                mappedCell.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i>';
+            } else {
+                nameCell.innerHTML = `<span class="text-muted text-decoration-line-through">${attrName}</span>`;
+                mappedCell.innerHTML = '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>';
+            }
+        });
+    });
+
     // Auto-load query data in background when there is an existing mapping with SQL
     if (existingMapping?.sql_query) {
         setTimeout(() => {
@@ -1885,14 +1959,20 @@ function saveEntityPanelMapping() {
     
     const existingIndex = MappingState.config.entities.findIndex(m => m.ontology_class === classUri);
     
+    const filteredAttrMappings = Object.fromEntries(
+        Object.entries(EntityPanelState.attributeMappings).filter(([k]) => !EntityPanelState.excludedAttributes.includes(k))
+    );
     const newMapping = {
         ontology_class: classUri,
         ontology_class_label: classLabel,
         sql_query: sqlQuery,
         id_column: EntityPanelState.idColumn,
         label_column: EntityPanelState.labelColumn,
-        attribute_mappings: {...EntityPanelState.attributeMappings}
+        attribute_mappings: filteredAttrMappings
     };
+    if (EntityPanelState.excludedAttributes.length > 0) {
+        newMapping.excluded_attributes = [...EntityPanelState.excludedAttributes];
+    }
     
     if (existingIndex >= 0) {
         MappingState.config.entities[existingIndex] = newMapping;
@@ -1937,6 +2017,9 @@ function saveRelPanelMapping() {
     
     const existingIndex = MappingState.config.relationships.findIndex(m => m.property === propertyUri);
     
+    const filteredRelAttrMappings = Object.fromEntries(
+        Object.entries(RelPanelState.attributeMappings).filter(([k]) => !RelPanelState.excludedAttributes.includes(k))
+    );
     const newMapping = {
         property: propertyUri,
         property_label: propertyLabel,
@@ -1947,9 +2030,12 @@ function saveRelPanelMapping() {
         source_class_label: sourceClassLabel,
         target_class: targetClassUri,
         target_class_label: targetClassLabel,
-        attribute_mappings: {...RelPanelState.attributeMappings},
+        attribute_mappings: filteredRelAttrMappings,
         direction: propertyInfo?.direction || 'forward'
     };
+    if (RelPanelState.excludedAttributes.length > 0) {
+        newMapping.excluded_attributes = [...RelPanelState.excludedAttributes];
+    }
     
     if (existingIndex >= 0) {
         MappingState.config.relationships[existingIndex] = newMapping;

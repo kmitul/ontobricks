@@ -516,6 +516,8 @@ class Mapping:
         }
         if data.get("excluded"):
             mapping["excluded"] = True
+        if data.get("excluded_attributes"):
+            mapping["excluded_attributes"] = list(data["excluded_attributes"])
         return mapping
 
     @staticmethod
@@ -537,6 +539,8 @@ class Mapping:
         }
         if data.get("excluded"):
             mapping["excluded"] = True
+        if data.get("excluded_attributes"):
+            mapping["excluded_attributes"] = list(data["excluded_attributes"])
         return mapping
 
     def add_or_update_entity_mapping(
@@ -1175,10 +1179,11 @@ class Mapping:
                 continue
             em = mapping_by_class.get(cls_uri, {})
             attr_map = em.get("attribute_mappings", {})
+            excluded_attrs = set(em.get("excluded_attributes", []))
             cls_label = cls.get("label") or cls.get("name", "Unknown")
             for dp in data_props:
                 attr_name = dp.get("name") or dp.get("localName") or ""
-                if attr_name and attr_name not in attr_map:
+                if attr_name and attr_name not in attr_map and attr_name not in excluded_attrs:
                     unmapped_attributes.append(
                         {"class": cls_label, "attribute": attr_name}
                     )
