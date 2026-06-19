@@ -595,7 +595,6 @@ Long-running operations use the **TaskManager** pattern (`src/back/core/task_man
 | `triplestore_sync` | Digital Twin → Build | Generates and writes triples to Delta and the configured Graph DB engine (Lakebase) |
 | `quality_checks` | Digital Twin → Quality | Runs all quality checks sequentially with per-check progress |
 | `auto_assign` | Mapping → Auto-Map | Batch-maps entities and relationships via LLM; splits large jobs into chunks of `AUTO_ASSIGN_CHUNK_SIZE` with cooldown between chunks to avoid rate limits |
-
 **How it works:**
 1. Frontend sends a `POST` to start the task; backend creates a `TaskManager` task and spawns a `threading.Thread`
 2. Frontend stores the `task_id` in `sessionStorage` and polls `/tasks/{task_id}` for progress
@@ -708,6 +707,9 @@ relational tables:
 | `schedules` | Active scheduled-build configuration |
 | `schedule_runs` | Ring-buffered run history per domain |
 | `build_runs` | Append-only build-run trace (all paths) keyed by `(domain_id, version)` for analytics; active build = latest successful run |
+| `domain_review_events` | Append-only review/validation audit log (submit / sign-off / publish / reopen / comment) keyed by `(domain_id, version)` |
+| `domain_comments` | Domain-wide threaded discussion keyed by `(domain_id, version)`; `parent_id` links replies, `resolved` closes a thread |
+| `domain_tasks` | Personalised work items assigned to a teammate (usually born from a comment); `status` walks `open → in_progress → done` (or `cancelled`), surfaced in the assignee's "My Tasks" worklist |
 
 Authentication is fully app-managed: the Databricks Apps runtime
 injects `PGHOST`/`PGPORT`/`PGDATABASE`/`PGUSER` and OntoBricks mints a

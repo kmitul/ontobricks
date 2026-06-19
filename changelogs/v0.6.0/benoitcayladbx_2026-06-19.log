@@ -1,38 +1,408 @@
+## UX: Discussion panel opens immediately; copy-comment-as-task-name; Data Sources & Documents buttons
+
+**Context:** Several UX improvements made on top of the collaborative
+comments/tasks feature before merging to develop.
+
+**Changes:**
+1. `src/front/static/global/js/comments-panel.js` — `showLoadingPanel()`
+   opens the offcanvas immediately with a spinner (exposed on
+   `OntoComments`); `openForSelection` calls it before async context
+   resolution; `openThread` skips re-show if already visible.
+   Added "Copy from comment" button in the task creation form: stores raw
+   comment text on `data-raw-text`, truncates to 200 chars + `…` on copy.
+2. `src/front/static/domain/js/domain-collaboration.js` — exposed
+   `window.openDomainDiscussion()` (immediate panel + async context);
+   uses `OntoComments.showLoadingPanel()` before `resolveDomainCtx()`.
+3. `src/front/templates/partials/domain/_domain_metadata.html` — added
+   Discussion button to Data Sources section header.
+4. `src/front/templates/partials/domain/_domain_documents.html` — added
+   Discussion button to Document Management section header.
+5. `.cursor/07-project-conventions.mdc` — added Merge Safety rules.
+
+**Modified files:**
+- `src/front/static/global/js/comments-panel.js`
+- `src/front/static/domain/js/domain-collaboration.js`
+- `src/front/templates/partials/domain/_domain_metadata.html`
+- `src/front/templates/partials/domain/_domain_documents.html`
+- `.cursor/07-project-conventions.mdc`
+
+**Test result:** `pytest tests/units/ tests/back/ -q` → 2553 passed, 15
+skipped, 5 pre-existing optional-extra failures (psycopg, pyshacl).
+
+---
+
+## Tests: Multi-user review/comment/task collaboration scenarios
+
+**Context:** The review/validation workflow (`ReviewService`) and the
+collaborative comments/tasks workflow (`CommentService`) were well covered for
+single-actor rules, but the *interactions between distinct users* that the
+audit trail and sign-off quorum exist for were under-tested: distinct reviewers
+accumulating sign-offs toward a quorum end-to-end, a change-request from one
+reviewer discarding another's approval, a full lifecycle chain driven by four
+different users, and the cross-domain `my_tasks` worklist resolving a real
+per-domain role (not the admin short-circuit). Added two focused test modules
+that drive several sequential calls against a shared review-event / comment /
+task list so the rules run as a real multi-user sequence.
+
+**Changes:**
+1. `tests/units/registry/test_review_multiuser.py` (new) — 9 tests:
+   - two distinct reviewers meeting a quorum of 2 then a builder publishing
+     (no override, distinct approvers recorded in order);
+   - a single reviewer / a duplicate sign-off (incl. case-insensitive email)
+     failing to satisfy the quorum and blocking publish;
+   - a change-request discarding a prior approval and reopening to DRAFT;
+   - a full DRAFT -> IN-REVIEW -> PUBLISHED -> reopen -> resubmit chain
+     (builder + two reviewers + admin) with the interleaved audit log asserted;
+   - `my_tasks` resolving a real per-domain role via a stubbed
+     `permission_service.get_domain_role` — listing only domains where the
+     caller has a role, and gating the builder's "publish" action on a
+     distinct-approver quorum.
+2. `tests/units/registry/test_comment_multiuser.py` (new) — 9 tests:
+   - a threaded conversation (root + replies) authored by three members with
+     `parent_id` anchoring asserted;
+   - author vs editor vs stranger resolution rules on another user's thread;
+   - a task created by one user, assigned to a second, completed only by the
+     assignee (stranger refused, creator + admin allowed), with the linked
+     `commented` audit rows (`task_created` / `task_done`) asserted;
+   - collaboration blocked once the version is PUBLISHED.
+
+No production code changed — tests only.
+
+**Modified files:**
+- `tests/units/registry/test_review_multiuser.py` (new)
+- `tests/units/registry/test_comment_multiuser.py` (new)
+
+**Test result:** `pytest tests/units/registry/test_review_multiuser.py
+tests/units/registry/test_comment_multiuser.py` → 18 passed. Full
+`pytest tests/units` → 2432 passed, 1 warning.
+
+---
+
+## Change: Drop the comment `anchor_type` / `anchor_ref` columns
+
+**Context:** Discussions are now a single domain-wide thread per
+`(domain_id, version)` (see the 2026-06-18 "single domain-wide thread"
+change). The per-anchor columns on `domain_comments` — `anchor_type`
+(class/property/mapping/graph node/edge/domain) and `anchor_ref` — were dead
+weight: every row was effectively `('domain', '')` and nothing read them back.
+Removed them end-to-end (schema, store, service, API, frontend) and added a
+migration to drop them on existing registries.
+
+**Changes:**
+1. `src/back/objects/registry/store/lakebase/schema.sql` — dropped the
+   `anchor_type` column (and its CHECK), the `anchor_ref` column, and the
+   `idx_domain_comments_anchor` index; replaced the index with
+   `idx_domain_comments_lookup (domain_id, version, created_at)` to keep the
+   domain-thread listing query fast.
+2. `src/back/objects/registry/store/lakebase/store.py` — same column/index
+   changes in the lazy `_ensure_collab_tables()` self-heal DDL; dropped
+   `anchor_type` / `anchor_ref` from the row mapper, the `insert_comment`
+   INSERT/RETURNING, and the `list_comments` SELECT + filters.
+3. `src/back/objects/registry/store/base.py` — removed the anchor fields from
+   the `DomainComment` TypedDict and from the `insert_comment` /
+   `list_comments` abstract signatures + docstrings.
+4. `src/back/objects/registry/RegistryService.py` — dropped the anchor params
+   from the `insert_comment` / `list_comments` pass-through wrappers.
+5. `src/back/objects/registry/CommentService.py` — removed the `ANCHOR_TYPES`
+   constant, the `_validate_anchor_type` / `_norm_anchor_type` validators, and
+   the anchor params from `add_comment` / `list_comments` and the AI-Agent
+   kickoff-comment insert.
+6. `src/api/routers/internal/comments.py` — removed the `anchor_type` /
+   `anchor_ref` query params (GET) and body fields (POST).
+7. `src/back/objects/registry/agent_task_runner.py` — replaced `_resolve_anchor`
+   (returned `(anchor_type, anchor_ref, parent_id)`) with
+   `_resolve_thread_parent` (returns just the parent comment id); the agent
+   report no longer passes anchors.
+8. `src/front/static/global/js/comments-panel.js` — stopped sending
+   `anchor_type` / `anchor_ref` to the `/comments` API (GET query + POST body);
+   trimmed `ctx` to `{ folder, version }`; removed the `ANCHOR_LABELS` map and
+   the public `anchorLabel()` helper; `openForSelection` now ignores its legacy
+   anchor args.
+9. `src/front/static/domain/js/domain-collaboration.js` — the Discussions
+   timeline no longer renders the anchor "kind" badge or `data-anchor-*`
+   attributes; `openThreadFor()` opens the domain thread with no anchor; removed
+   the now-unused `localName()` helper.
+10. `scripts/upgrade_lakebase_0.6_drop_comment_anchor.sql` (new) — destructive,
+    idempotent migration: drops `idx_domain_comments_anchor`, drops the two
+    anchor columns (the CHECK drops with `anchor_type`), and creates
+    `idx_domain_comments_lookup`. Comment bodies/authors/threading/resolved
+    state are untouched.
+11. `scripts/bootstrap-lakebase-perms.sh` — owner-provision DDL aligned to the
+    anchorless `domain_comments` shape + new lookup index.
+12. `docs/architecture.md` — updated the `domain_comments` table row to describe
+    the domain-wide thread.
+13. Tests — updated `tests/units/registry/test_registry_store.py`,
+    `tests/units/registry/test_comment_service.py`,
+    `tests/units/api/test_comment_endpoints.py`, and
+    `tests/units/api/test_discussion_panel_assets.py` to drop anchor params /
+    assertions (e.g. the per-anchor filter tests become whole-thread tests; the
+    panel test now asserts no anchor fields are sent).
+
+**Modified files:**
+- `src/back/objects/registry/store/lakebase/schema.sql`
+- `src/back/objects/registry/store/lakebase/store.py`
+- `src/back/objects/registry/store/base.py`
+- `src/back/objects/registry/RegistryService.py`
+- `src/back/objects/registry/CommentService.py`
+- `src/api/routers/internal/comments.py`
+- `src/back/objects/registry/agent_task_runner.py`
+- `src/front/static/global/js/comments-panel.js`
+- `src/front/static/domain/js/domain-collaboration.js`
+- `scripts/upgrade_lakebase_0.6_drop_comment_anchor.sql` (new)
+- `scripts/bootstrap-lakebase-perms.sh`
+- `docs/architecture.md`
+- `tests/units/registry/test_registry_store.py`
+- `tests/units/registry/test_comment_service.py`
+- `tests/units/api/test_comment_endpoints.py`
+- `tests/units/api/test_discussion_panel_assets.py`
+
+**Test result:** `pytest tests/units/registry/test_comment_service.py
+tests/units/api/test_comment_endpoints.py
+tests/units/registry/test_agent_task_runner.py
+tests/units/api/test_discussion_panel_assets.py` → all passed. The
+`TestLakebaseCollab` cases in `test_registry_store.py` require the optional
+`psycopg` extra (not installed in this env) and are skipped/failing for that
+reason only — unrelated to this change.
+
+---
+
+## Change: Fix AI-Agent "unmap" misfire — guard removal + persist mappings
+
+**Context:** A task "unmap Customer" assigned to the AI Agent was routed to the
+Auto SQL Mapper (`auto_assignment`), which then "unmapped Person and other
+relationships, re-included already-excluded entities, and after a page reload no
+changes were there". Root cause was two compounding defects in the
+`agent_task_runner` dispatch:
+1. The mapper is **additive-only** — it has no "remove/unmap" operation — yet a
+   removal request silently triggered a full-ontology re-map. The dispatch also
+   never passed the task text, so the user's intent was discarded.
+2. The `auto_assignment` branch only **proposed** mappings (it called the bare
+   `auto_assign_with_agent` and returned them in the payload) and never applied
+   them, so nothing was persisted — a reload reverted everything. (Contrast
+   `ontology_assistant`, which calls `apply_agent_ontology_changes` to save.)
+
+Fix per the chosen "guard-and-persist" direction: (a) refuse removal/unmap
+requests routed to the mapper and park the task for a rephrase; (b) when the
+mapper does run, merge + persist its mappings to the registry, preserving any
+existing `excluded` flag so a re-map never re-includes an excluded entity.
+
+**Changes:**
+1. `src/back/objects/registry/agent_task_runner.py` — added `_MAPPING_REMOVAL_RE`
+   + `_is_unsupported_mapping_removal()`; `_run_for_task` now short-circuits
+   (before planning/dispatch) when the chosen agent is `auto_assignment` and the
+   task asks to unmap/remove/exclude a mapping, posting a helpful note and
+   parking the task (`in_progress`) so a rephrase can resume it. The
+   `auto_assignment` dispatch branch now calls `mapping_svc.apply_agent_mappings`
+   to persist, and reports "Applied SQL mappings" with the post-merge totals
+   instead of "Proposed … review and save them".
+2. `src/back/objects/mapping/Mapping.py` — added `apply_agent_mappings()`
+   (session-less persist: merge into `domain.assignment` + `domain.save()`) and
+   extracted the upsert logic into reusable static helpers
+   `_merge_entity_mappings` / `_merge_relationship_mappings` (keyed by class
+   URI / `property`, preserving `excluded`); `save_mappings_to_session` now
+   reuses those helpers (dedupe).
+3. Tests — `tests/units/registry/test_agent_task_runner.py`: added
+   `test_is_unsupported_mapping_removal_detects_removal_intent`,
+   `test_run_for_task_refuses_unmap_and_parks`, and
+   `test_dispatch_auto_assignment_persists_mappings`.
+   `tests/units/mapping/test_mapping_service.py`: added `TestApplyAgentMappings`
+   (add+persist, upsert-by-URI, excluded-flag preservation, None payloads).
+
+**Modified files:**
+- `src/back/objects/registry/agent_task_runner.py`
+- `src/back/objects/mapping/Mapping.py`
+- `tests/units/registry/test_agent_task_runner.py`
+- `tests/units/mapping/test_mapping_service.py`
+
+**Test result:** `pytest tests/units/registry/test_agent_task_runner.py
+tests/units/mapping/test_mapping_service.py` → 63 passed. Full
+`pytest tests/units` → 2408 passed, 15 skipped, 4 failed; the 4 failures are the
+`TestLakebaseCollab` cases that need the optional `psycopg` extra (not installed
+in this env) — unrelated to this change.
+
+---
+
 ## Fix: Interactive Build Does Not Persist last_build to Registry
 
-### Context
-Bug report: on the Validation page, "Submit for Review" was blocked with
-"This version has never been built. Run a Digital Twin build first." even
-after a successful interactive Digital Twin build.
+**Context:** Backport from `fix/v0.5.1` / `develop`. On the Validation page,
+"Submit for Review" was blocked with "This version has never been built." even
+after a successful interactive Digital Twin build. Root cause: the shared build
+completion path (`_BuildPipeline._complete_task`) never called `write_version()`
+to flush `domain.last_build` to the `domain_versions.last_build` DB column.
+Only the scheduled-build path did. The Submit gate reads that column; the
+Consistency-checks panel reads live triple-store state — so both indicators
+disagreed.
 
-Root cause: `_BuildPipeline._complete_task()` (the shared completion path
-for both interactive UI and external REST builds) never called
-`store.write_version()` to flush `domain.last_build` to the
-`domain_versions.last_build` DB column.  Only the scheduled-build path
-(`scheduler._persist_domain_metadata`) wrote that column.  The
-`ReviewService.submit()` gate reads the column; the Consistency-checks
-panel reads live triple-store state — hence the two indicators disagreed.
+**Changes:**
+1. `src/back/objects/digitaltwin/_build_pipeline.py` — added
+   `_persist_last_build_to_registry()` (best-effort registry write); called
+   from `_complete_task()` after `_record_build_run()`, covering both
+   `build_kind="session"` (UI) and `build_kind="api"` (REST).
+2. `tests/back/core/digitaltwin/test_build_pipeline_units.py` — added
+   `TestPersistLastBuildToRegistry` (6 regression tests).
 
-Backport of the fix originally applied to fix/v0.5.1.
+**Modified files:**
+- `src/back/objects/digitaltwin/_build_pipeline.py`
+- `tests/back/core/digitaltwin/test_build_pipeline_units.py`
 
-### Changes
+**Test result:** `pytest tests/back/core/digitaltwin/test_build_pipeline_units.py`
+→ 22 passed.
 
-1. `src/back/objects/digitaltwin/_build_pipeline.py`
-   - Added `_BuildPipeline._persist_last_build_to_registry()`: best-effort
-     method that resolves folder/version (same logic as `_record_build_run`),
-     stamps `domain.last_build` when empty (API build path), and calls
-     `RegistryService.from_context()._store.write_version()`.
-   - `_complete_task()` now calls `_persist_last_build_to_registry()` after
-     `_record_build_run()`, covering both `build_kind="session"` (interactive
-     UI) and `build_kind="api"` (external REST).
+---
 
-2. `tests/back/core/digitaltwin/test_build_pipeline_units.py`
-   - Added import for `patch` and `RegistryService`.
-   - Added `TestPersistLastBuildToRegistry` (6 tests).
+## Change: Remove AI Agent task capability (discussion & tasks)
 
-### Modified files
-- src/back/objects/digitaltwin/_build_pipeline.py
-- tests/back/core/digitaltwin/test_build_pipeline_units.py
+**Context:** The `feat/Collaborative-Comments-Tasks` branch introduced
+an experimental feature that allowed collaborative tasks to be assigned to a
+virtual "AI Agent" (`agent://router`). The feature included a route →
+plan → clarify → dispatch loop backed by `agent_task_runner.py`,
+`agent_task_planner/`, and `agent_task_router/`. The decision was made to drop
+this capability before the v0.6 merge to keep the feature surface focused.
 
-### Test results
-22/22 passed in test_build_pipeline_units.py.
+**Changes:**
+
+1. `src/agents/agent_task_planner/` (3 files) — deleted entirely.
+2. `src/agents/agent_task_router/` (3 files) — deleted entirely.
+3. `src/agents/registry.py` — deleted (only used by the two modules above).
+4. `src/back/objects/registry/agent_task_runner.py` — deleted.
+5. `src/back/objects/registry/CommentService.py` — removed import of
+   agent_task_runner constants; removed AI Agent entry from `list_assignees`;
+   removed kickoff-comment block and `start_agent_task` call from
+   `create_task`; removed `_maybe_resume_agent` method and its call from
+   `add_comment`.
+6. `src/back/objects/mapping/Mapping.py` — removed `apply_agent_mappings()`
+   method (session-less counterpart used only by the runner).
+7. `src/front/static/global/js/comments-panel.js` — removed all AI-Agent
+   state variables, live-status functions (`loadAiTasks`, `loadAgentRuns`,
+   `renderAgentStrip`, `ensureAgentTracking`, `announceAgentCompletions`,
+   `panelPollTick`, `agentChipHtml`, `agentAnswerHtml`), agent thread CSS
+   classes, polling timer, and `data-agent-send` handler; simplified
+   `taskFormHtml` and `syncDueVisibility`; simplified `listSignature`.
+8. `src/front/static/ontology/js/ontology-init.js` — removed
+   `ontobricks:design-updated` event listener.
+9. `src/front/static/mapping/js/mapping-init.js` — removed
+   `ontobricks:design-updated` event listener.
+10. `src/front/static/global/css/review-modals.css` — removed all
+    `.oc-agent-*` and `.oc-thread-agent` rules and the `@keyframes oc-agent-spin` block.
+11. `tests/units/agents/test_agent_task_planner.py` — deleted.
+12. `tests/units/agents/test_agent_task_router.py` — deleted.
+13. `tests/units/registry/test_agent_task_runner.py` — deleted.
+14. `tests/units/registry/test_comment_service.py` — removed 7 AI-agent test
+    functions; updated `test_list_assignees_returns_domain_holders_sorted` to
+    no longer expect the AI Agent as first entry.
+15. `tests/units/mapping/test_mapping_service.py` — removed
+    `TestApplyAgentMappings` class (4 tests).
+16. `tests/units/api/test_discussion_panel_assets.py` — removed
+    `TestDiscussionAgentStatus`, `TestAnswerTheAgent`, `TestDesignUpdatedRefresh`
+    classes; updated module docstring.
+17. `docs/architecture.md` — removed `registry.py`, `agent_task_router/`,
+    `agent_task_planner/` from the tree; removed the `task_router` row from
+    the task-type table; removed the entire "AI Agent task assignment" section.
+18. `docs/superpowers/plans/2026-06-18-ai-agent-clarifying-questions.md` — deleted.
+19. `docs/superpowers/specs/2026-06-18-ai-agent-clarifying-questions-design.md` — deleted.
+
+**Modified files:**
+- `src/back/objects/registry/CommentService.py`
+- `src/back/objects/mapping/Mapping.py`
+- `src/front/static/global/js/comments-panel.js`
+- `src/front/static/ontology/js/ontology-init.js`
+- `src/front/static/mapping/js/mapping-init.js`
+- `src/front/static/global/css/review-modals.css`
+- `docs/architecture.md`
+- `tests/units/registry/test_comment_service.py`
+- `tests/units/mapping/test_mapping_service.py`
+- `tests/units/api/test_discussion_panel_assets.py`
+
+**Test result:** `pytest tests/units tests/back -q` → 2132 passed, 15 skipped,
+1 pre-existing lakebase/psycopg failure unrelated to these changes.
+
+---
+
+## Fix: Discussion panel crashes on open — `stopPanelPolling` not defined
+
+**Context:** Clicking the Discussion button on the Designer (and any other
+surface calling `OntoComments.openForSelection`) silently failed after a fresh
+page load. The `build()` function in `comments-panel.js` referenced
+`stopPanelPolling` as an event listener callback on the `hidden.bs.offcanvas`
+event, but that function was never defined — it was a stale reference left when
+the AI-Agent polling loop was removed. The `ReferenceError` was thrown inside
+the async `openThread` promise, aborting the whole flow before the offcanvas
+ever opened.
+
+**Changes:**
+1. `src/front/static/global/js/comments-panel.js` — replaced the
+   `stopPanelPolling` reference with an explicit no-op arrow function
+   (`() => {}`).  The listener is kept as a hook for future cleanup (e.g.
+   clearing a future auto-refresh timer) without breaking anything today.
+
+**Modified files:**
+- `src/front/static/global/js/comments-panel.js`
+
+**Test result:** `pytest tests/units -q` → 2372 passed, 15 skipped, 4
+pre-existing lakebase/psycopg failures unrelated to this change.
+
+---
+
+## Chore: Add Merge Safety rule to project conventions
+
+**Context:** During the conflict resolution of PR #67
+(`feat/Collaborative-Comments-Tasks` ← `develop`), git auto-merged
+`base.html`, `domain.html`, `menu_config.json`, and
+`routers/internal/__init__.py` without conflict markers, silently
+discarding all collaboration UI wiring added by the feature branch.
+Documented the pattern so it isn't repeated.
+
+**Changes:**
+1. `.cursor/07-project-conventions.mdc` — added a **Merge Safety** section
+   (6 rules): feature branch priority, auto-merge risk, a diff checklist for
+   the 4 most-at-risk files, restoration procedure, test requirement, and
+   commit message guidance.
+
+**Modified files:**
+- `.cursor/07-project-conventions.mdc`
+
+**Test result:** documentation/rule change only — no code modified.
+
+---
+
+## Feature: Add Discussion button to Ontology/Information page
+
+**Context:** The Discussion button (opening the domain-wide comments panel via
+`openOntologyDiscussion()`) was only present on the Visual Designer tab. The
+Information tab had no way to open it, forcing the user to navigate to a
+different tab.
+
+**Changes:**
+1. `src/front/templates/partials/ontology/_ontology_information.html` — wrapped
+   the existing Reset button in a flex group and added the Discussion button
+   (`btn-outline-primary onto-discuss-btn`) with the same markup and
+   `onclick="openOntologyDiscussion()"` as the Designer tab.
+
+**Modified files:**
+- `src/front/templates/partials/ontology/_ontology_information.html`
+
+**Test result:** no JS/Python logic changed — existing test suite unaffected.
+
+---
+
+## Fix: Suppress spurious `[Map] Skipping property` warnings for data-type attributes
+
+**Context:** The ontology graph map was logging `console.warn` for every
+data-type attribute property (range = `string`, `integer`, `double`,
+`boolean`, `date`, etc.) because it tried to resolve the range as a class node
+and failed. These are not errors — data-type attributes are intentionally
+absent from the graph. The noisy warnings made it hard to spot real problems
+(a range that names a class but can't be resolved).
+
+**Changes:**
+1. `src/front/static/ontology/js/ontology-map.js` — added a `PRIMITIVE_TYPES`
+   set covering common XSD/OWL literal types. In the property-link loop,
+   properties whose `range` matches a primitive are skipped silently (no
+   `console.warn`); only genuine misconfigured object properties (range looks
+   like a class name but isn't found) still log a warning.
+
+**Modified files:**
+- `src/front/static/ontology/js/ontology-map.js`
+
+**Test result:** `pytest tests/units -q` → 2372 passed, 15 skipped, 4
+pre-existing lakebase/psycopg failures unrelated to this change.
