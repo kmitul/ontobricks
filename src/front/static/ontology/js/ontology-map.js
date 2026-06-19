@@ -1516,6 +1516,20 @@ const ICONS_TASK_KEY = 'ontobricks_icons_task';
 let _iconsCurrentTaskId = null;
 
 /**
+ * Open the domain-wide discussion panel from any ontology surface (designer,
+ * map, information, etc.). Delegates to the global OntoComments API which is
+ * loaded via comments-panel.js.
+ */
+function openOntologyDiscussion() {
+    if (!window.OntoComments) return;
+    const cfg = (typeof OntologyState !== 'undefined' && OntologyState.config) || {};
+    OntoComments.openForSelection(
+        'domain', 'ontology', 'Whole ontology diagram',
+        OntoComments.taggableFromOntology(cfg)
+    );
+}
+
+/**
  * Restore button state (used after completion, failure, or resume).
  */
 function _restoreAutoAssignIconsButton() {
