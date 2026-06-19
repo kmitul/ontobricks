@@ -238,7 +238,7 @@ No command line required — ideal for ad-hoc transfers and cross-tenant sharing
 
 ### Registry Import / Export (CLI)
 
-For automated promotion pipelines, use the
+For automated promotion pipelines use the
 `scripts/registry_transfer.sh` command-line tool — export a curated subset
 of domains/versions from a source registry into a `.zip`, then preview and
 commit it into the target registry. See
