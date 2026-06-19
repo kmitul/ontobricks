@@ -478,9 +478,6 @@
                 OntoComments.openThread({
                     folder: state.folder,
                     version: state.version,
-                    anchorType: 'domain',
-                    anchorRef: '',
-                    anchorLabel: state.folder + ' v' + state.version,
                 });
             }
         );

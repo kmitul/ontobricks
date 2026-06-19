@@ -193,6 +193,38 @@ def test_dispatch_unknown_agent_raises():
         )
 
 
+def test_dispatch_auto_assignment_persists_mappings():
+    # The mapper must APPLY+PERSIST its proposals (not merely propose), so the
+    # mappings survive a page reload.
+    res = SimpleNamespace(
+        success=True, error="",
+        entity_mappings=[{"ontology_class": "C"}],
+        relationship_mappings=[],
+        steps=[], iterations=1, usage={},
+    )
+    fake_mapping = MagicMock()
+    fake_mapping.resolve_auto_assign_schema_context.return_value = {"tables": [1]}
+    fake_mapping.auto_assign_with_agent.return_value = res
+    fake_mapping.apply_agent_mappings.return_value = {"entities": 1, "relationships": 0}
+    fake_ont = MagicMock()
+    fake_ont.agent_ontology_context.return_value = {"entities": [{"uri": "C"}]}
+
+    with patch("back.objects.mapping.Mapping", return_value=fake_mapping), \
+         patch("back.objects.ontology.Ontology", return_value=fake_ont), \
+         patch("back.core.databricks.DatabricksClient", return_value=MagicMock()):
+        summary, report, payload = runner._dispatch_agent(
+            "auto_assignment", domain=MagicMock(), host="h", token="t",
+            llm_endpoint="ep", warehouse_id="wh", task_text="map it",
+            on_step=lambda m: None,
+        )
+
+    fake_mapping.apply_agent_mappings.assert_called_once_with(
+        res.entity_mappings, res.relationship_mappings
+    )
+    assert "Applied SQL mappings" in report
+    assert payload["entity_mappings"] == res.entity_mappings
+
+
 def test_dispatch_ontology_assistant_applies_and_saves_changes():
     res = SimpleNamespace(
         success=True, ontology_changed=True, reply="Removed the Person class.",
@@ -342,6 +374,52 @@ def test_resume_runs_agent_when_planner_ready(monkeypatch):
     assert statuses[-1] == "done"                       # solved
     assert "yes remove it" in captured["task_text"]     # answer folded in
     assert any("Removed Person." in c for c in comments)
+
+
+def test_is_unsupported_mapping_removal_detects_removal_intent():
+    f = runner._is_unsupported_mapping_removal
+    assert f("Unmap Customer") is True
+    assert f("please remove the mapping for Order") is True
+    assert f("clear the SQL mapping") is True
+    assert f("unassign Person") is True
+    # Additive / unrelated requests must NOT trip the guard.
+    assert f("Map Customer to the orders table") is False
+    assert f("create an Agent Manager entity") is False
+    assert f("") is False
+
+
+def test_run_for_task_refuses_unmap_and_parks(monkeypatch):
+    # "Unmap Customer" routed to the Auto SQL Mapper must be refused (the mapper
+    # only adds), parked for a rephrase -- never planned, never dispatched.
+    svc, statuses, comments = _svc_with_thread(
+        [{"id": "root", "parent_id": "", "author": "alice@x.io",
+          "body": "Unmap Customer", "created_at": "t0"}]
+    )
+    router_res = SimpleNamespace(success=True, chosen_agent_key="auto_assignment",
+                                 reasoning="map", error="")
+    plan_called = []
+    monkeypatch.setattr("agents.agent_task_router.run_agent", lambda *a, **k: router_res)
+    monkeypatch.setattr(
+        "agents.agent_task_planner.run_agent",
+        lambda *a, **k: plan_called.append(1) or SimpleNamespace(
+            success=True, ready=True, message="", error=""),
+    )
+    dispatched = []
+    monkeypatch.setattr(runner, "_dispatch_agent",
+                        lambda *a, **k: dispatched.append(k) or ("s", "r", {}))
+
+    runner._run_for_task(
+        svc=svc, domain=MagicMock(), host="h", token="t", llm_endpoint="ep",
+        warehouse_id="wh", folder="d", version="v", domain_task_id="T1",
+        title="Unmap Customer", description="", comment_id="root",
+        on_step=lambda m: None, tm=None, tm_task_id=None,
+    )
+
+    assert dispatched == []                  # mapper never ran
+    assert plan_called == []                  # guard short-circuits before planning
+    assert statuses[-1] == "in_progress"      # parked for a rephrase
+    assert "done" not in statuses
+    assert any("unmap" in c.lower() for c in comments)
 
 
 def test_thread_history_maps_authors_to_roles():

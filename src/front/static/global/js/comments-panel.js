@@ -1,18 +1,11 @@
 /**
- * Collaborative comments & tasks — anchored thread panel (global)
+ * Collaborative comments & tasks — domain discussion panel (global)
  *
- * A reusable right-side offcanvas that opens a contextual, threaded
- * discussion bound to a canonical *anchor* — an ontology class/property,
- * a mapping, a graph node/edge, or the whole domain. Any surface can open
- * it through the global API:
+ * A reusable right-side offcanvas that opens the single domain-wide,
+ * threaded discussion for ``(folder, version)``. Any surface can open it
+ * through the global API:
  *
- *   OntoComments.openThread({
- *       folder, version,
- *       anchorType,            // ontology_class|ontology_property|mapping|
- *                              // graph_node|graph_edge|domain
- *       anchorRef,             // canonical id (prefer full URIs)
- *       anchorLabel,           // human label for the header (optional)
- *   });
+ *   OntoComments.openThread({ folder, version });
  *
  * Backed by the /comments API (see CommentService). A comment can be
  * turned into a task assigned to a teammate; the assignee picker is loaded
@@ -24,22 +17,13 @@
 (function () {
     'use strict';
 
-    const ANCHOR_LABELS = {
-        ontology_class: 'Class',
-        ontology_property: 'Property',
-        mapping: 'Mapping',
-        graph_node: 'Node',
-        graph_edge: 'Edge',
-        domain: 'Domain',
-    };
-
     // Sentinel assignee that routes the task to the AI Agent (see
     // back/objects/registry/agent_task_runner.AI_AGENT_PRINCIPAL).
     const AI_AGENT_PRINCIPAL = 'agent://router';
 
     let el = null;
     let offcanvas = null;
-    let ctx = null;          // { folder, version, anchorType, anchorRef, anchorLabel }
+    let ctx = null;          // { folder, version }
     let membersCache = {};   // key folder/version -> [members]
     let currentUser = null;  // current user's email/principal (for "Assign to me")
     let currentUserPromise = null;
@@ -108,7 +92,6 @@
             '<div class="oc-comments-compose border-top p-3" data-oc-compose>' +
             '<textarea class="form-control form-control-sm mb-2" rows="2" ' +
             'data-oc-input placeholder="Write a comment..."></textarea>' +
-            tagWidgetHtml() +
             '<div class="d-flex justify-content-end">' +
             '<button type="button" class="btn btn-sm btn-primary" data-oc-send>' +
             '<i class="bi bi-send me-1"></i>Comment</button>' +
@@ -125,100 +108,20 @@
         el.addEventListener('hidden.bs.offcanvas', stopPanelPolling);
     }
 
-    // Render the anchor badge in the header for the active scope.
+    // Header subtitle: discussions are domain-wide, so just name the domain
+    // (no per-anchor "kind" badge that would separate threads by selection).
     function renderAnchorBadge() {
-        const kind = ANCHOR_LABELS[ctx.anchorType] || 'Item';
-        const label = ctx.anchorLabel || ctx.anchorRef ||
-            ctx.folder + ' v' + ctx.version;
-        el.querySelector('[data-oc-anchor]').innerHTML =
-            '<span class="badge bg-secondary-subtle text-dark border me-1">' +
-            esc(kind) + '</span>' + esc(label);
+        const label = ctx.folder
+            ? esc(ctx.folder) + ' · v' + esc(ctx.version)
+            : '';
+        el.querySelector('[data-oc-anchor]').innerHTML = label;
     }
 
-    // ---- Tags ---------------------------------------------------------------
-    // When a surface supplies ctx.taggable (a list of entities/relationships),
-    // a compose box gets a tag picker. Selected tags are embedded in the
-    // comment body via a trailing marker so no backend change is needed; they
-    // render as chips on each comment.
+    // ---- Tags (legacy) ------------------------------------------------------
+    // The entity/relationship tag picker has been removed — discussions are
+    // domain-wide and untagged. We keep the marker + parser/renderer so older
+    // comments that embedded tags still display their chips (read-only).
     const TAG_MARK = '\n\n[[onto-tags]]';
-
-    function tagWidgetHtml() {
-        return '' +
-            '<div class="oc-tagbar mb-2 d-none" data-oc-tagbar>' +
-            '<div class="oc-tag-chips d-flex flex-wrap gap-1" data-oc-tag-chips></div>' +
-            '<select class="form-select form-select-sm mt-1" data-oc-tag-select>' +
-            '</select>' +
-            '</div>';
-    }
-
-    function tagSelectOptions() {
-        const classes = ctx.taggable.filter((t) => t.type === 'ontology_class');
-        const props = ctx.taggable.filter((t) => t.type !== 'ontology_class');
-        let html = '<option value="">+ Tag an entity / relationship…</option>';
-        if (classes.length) {
-            html += '<optgroup label="Entities">' + classes.map((t) =>
-                '<option value="' + escAttr(t.ref) + '" data-type="' + escAttr(t.type) +
-                '" data-label="' + escAttr(t.label) + '">' + esc(t.label) +
-                '</option>').join('') + '</optgroup>';
-        }
-        if (props.length) {
-            html += '<optgroup label="Relationships">' + props.map((t) =>
-                '<option value="' + escAttr(t.ref) + '" data-type="' + escAttr(t.type) +
-                '" data-label="' + escAttr(t.label) + '">' + esc(t.label) +
-                '</option>').join('') + '</optgroup>';
-        }
-        return html;
-    }
-
-    // Activate (show + wire) the tag picker inside a compose/reply scope.
-    function setupTagbar(scope) {
-        if (!scope || !ctx.taggable || !ctx.taggable.length) return;
-        const bar = scope.querySelector('[data-oc-tagbar]');
-        if (!bar) return;
-        bar.classList.remove('d-none');
-        const sel = bar.querySelector('[data-oc-tag-select]');
-        sel.innerHTML = tagSelectOptions();
-        sel.onchange = () => {
-            const opt = sel.options[sel.selectedIndex];
-            if (opt && opt.value) {
-                addTagChip(bar.querySelector('[data-oc-tag-chips]'), {
-                    ref: opt.value,
-                    type: opt.getAttribute('data-type'),
-                    label: opt.getAttribute('data-label'),
-                });
-            }
-            sel.value = '';
-        };
-    }
-
-    function addTagChip(chipsEl, tag) {
-        if (!chipsEl || !tag || !tag.ref) return;
-        if (chipsEl.querySelector('[data-ref="' + cssEsc(tag.ref) + '"]')) return;
-        const chip = document.createElement('span');
-        chip.className = 'badge oc-tag-chip border d-inline-flex align-items-center';
-        chip.setAttribute('data-ref', tag.ref);
-        chip.setAttribute('data-type', tag.type || '');
-        chip.setAttribute('data-label', tag.label || tag.ref);
-        chip.innerHTML = '<i class="bi bi-tag me-1"></i>' + esc(tag.label || tag.ref) +
-            '<button type="button" class="btn-close btn-close-sm ms-1" ' +
-            'aria-label="Remove tag"></button>';
-        chip.querySelector('button').addEventListener('click', () => chip.remove());
-        chipsEl.appendChild(chip);
-    }
-
-    function collectTags(scope) {
-        if (!scope) return [];
-        return Array.from(scope.querySelectorAll('[data-oc-tag-chips] [data-ref]'))
-            .map((c) => ({
-                ref: c.getAttribute('data-ref'),
-                type: c.getAttribute('data-type'),
-                label: c.getAttribute('data-label'),
-            }));
-    }
-
-    function encodeBody(text, tags) {
-        return (tags && tags.length) ? text + TAG_MARK + JSON.stringify(tags) : text;
-    }
 
     function parseBody(body) {
         const raw = body || '';
@@ -252,33 +155,14 @@
         aiSnapshotReady = false;
         lastListSig = '';
         renderAgentStrip();
-        // Optional tag vocabulary: a list of {type, ref, label} entities and
-        // relationships the author can attach to individual comments.
-        const taggable = Array.isArray(opts.taggable)
-            ? opts.taggable.map((t) => ({
-                type: t.type || t.anchorType || 'ontology_class',
-                ref: t.ref || t.anchorRef || '',
-                label: t.label || t.anchorLabel || t.ref || '',
-            })).filter((t) => t.ref)
-            : [];
+        // Discussions are domain-wide: every entry point opens the single
+        // Domain thread (no per-anchor separation, no entity/relationship tags).
+        // The caller's anchor hints (type/ref/label/taggable) are ignored.
         ctx = {
             folder: opts.folder,
             version: opts.version,
-            anchorType: opts.anchorType || 'domain',
-            anchorRef: opts.anchorRef || '',
-            anchorLabel: opts.anchorLabel || '',
-            taggable: taggable,
         };
         renderAnchorBadge();
-        // Reset + (re)activate the main compose tag picker for this context.
-        const compose = el.querySelector('[data-oc-compose]');
-        compose.querySelector('[data-oc-tag-chips]').innerHTML = '';
-        const tagbar = compose.querySelector('[data-oc-tagbar]');
-        if (taggable.length) {
-            setupTagbar(compose);
-        } else {
-            tagbar.classList.add('d-none');
-        }
 
         if (window.bootstrap) {
             offcanvas = bootstrap.Offcanvas.getOrCreateInstance(el);
@@ -302,9 +186,7 @@
             '<div class="text-center text-muted small py-4">' +
             '<span class="spinner-border spinner-border-sm me-1"></span> Loading...</div>';
         const url = '/comments/' + encodeURIComponent(ctx.folder) + '/' +
-            encodeURIComponent(ctx.version) +
-            '?anchor_type=' + encodeURIComponent(ctx.anchorType) +
-            '&anchor_ref=' + encodeURIComponent(ctx.anchorRef);
+            encodeURIComponent(ctx.version);
         try {
             const resp = await fetch(url, { credentials: 'same-origin' });
             const data = await resp.json();
@@ -488,9 +370,7 @@
             const list = el.querySelector('[data-oc-list]');
             try {
                 const url = '/comments/' + encodeURIComponent(ctx.folder) + '/' +
-                    encodeURIComponent(ctx.version) +
-                    '?anchor_type=' + encodeURIComponent(ctx.anchorType) +
-                    '&anchor_ref=' + encodeURIComponent(ctx.anchorRef);
+                    encodeURIComponent(ctx.version);
                 const resp = await fetch(url, { credentials: 'same-origin' });
                 const data = await resp.json();
                 if (resp.ok && data.success) {
@@ -659,10 +539,8 @@
         box.innerHTML =
             '<textarea class="form-control form-control-sm mb-2" rows="2" ' +
             'placeholder="Write a reply..."></textarea>' +
-            tagWidgetHtml() +
             '<div class="d-flex justify-content-end">' +
             '<button type="button" class="btn btn-sm btn-outline-primary">Reply</button></div>';
-        setupTagbar(box);
         const ta = box.querySelector('textarea');
         box.querySelector('button').addEventListener('click', () => {
             postComment((ta.value || '').trim(), rootId, ta, box);
@@ -776,7 +654,6 @@
 
     async function postComment(body, parentId, ta, scope) {
         if (!body) { notify('Write something first', 'warning'); return; }
-        const tags = collectTags(scope);
         try {
             const resp = await fetch(
                 '/comments/' + encodeURIComponent(ctx.folder) + '/' +
@@ -786,9 +663,7 @@
                     credentials: 'same-origin',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        anchor_type: ctx.anchorType,
-                        anchor_ref: ctx.anchorRef,
-                        body: encodeBody(body, tags),
+                        body: body,
                         parent_id: parentId || null,
                     }),
                 }
@@ -799,8 +674,6 @@
                 return;
             }
             if (ta) ta.value = '';
-            const chips = scope && scope.querySelector('[data-oc-tag-chips]');
-            if (chips) chips.innerHTML = '';
             await reload();
             ensureAgentTracking();
         } catch (err) {
@@ -925,27 +798,19 @@
     }
 
     /**
-     * Open a thread for a selection on an editor surface, auto-resolving
-     * the loaded domain + version. Use from ontology / mapping / graph.
-     * `taggable` (optional) is a vocabulary of {type, ref, label} entities
-     * and relationships the author can attach to individual comments via the
-     * compose-box tag picker.
+     * Open the domain discussion from any editor surface (ontology / mapping
+     * / graph), auto-resolving the loaded domain + version. Legacy anchor
+     * arguments are accepted for backward compatibility but ignored —
+     * discussions are domain-wide.
      */
-    async function openForSelection(anchorType, anchorRef, anchorLabel, taggable) {
+    async function openForSelection() {
         const dc = await resolveDomainContext();
         if (!dc.folder || !dc.hasRegistry) {
             notify('Save this domain to the registry to start a discussion.',
                 'warning');
             return;
         }
-        openThread({
-            folder: dc.folder,
-            version: dc.version,
-            anchorType: anchorType,
-            anchorRef: anchorRef || '',
-            anchorLabel: anchorLabel || anchorRef || '',
-            taggable: taggable || null,
-        });
+        openThread({ folder: dc.folder, version: dc.version });
     }
 
     window.OntoComments = {
@@ -955,7 +820,5 @@
         // Split a stored comment body into { text, tags } (strips the
         // internal tag marker). Shared with the Domain → Discussions timeline.
         parseBody: parseBody,
-        // Human label for an anchor type (Class / Property / Mapping / …).
-        anchorLabel: function (type) { return ANCHOR_LABELS[type] || 'Item'; },
     };
 })();

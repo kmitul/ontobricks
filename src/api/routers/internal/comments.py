@@ -31,12 +31,10 @@ async def list_comments(
     folder: str,
     version: str,
     request: Request,
-    anchor_type: str = "",
-    anchor_ref: str = "",
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
-    """Comments for a version, optionally scoped to a single anchor."""
+    """All comments for the domain-wide ``(folder, version)`` thread."""
     user_role, domain_role = _roles(request, folder, settings)
     return CommentService.list_comments(
         request,
@@ -44,8 +42,6 @@ async def list_comments(
         settings,
         folder,
         version,
-        anchor_type=(anchor_type or None),
-        anchor_ref=(anchor_ref or None),
         user_role=user_role,
         user_domain_role=domain_role,
     )
@@ -59,7 +55,7 @@ async def add_comment(
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
-    """Add a comment (or a reply via ``parent_id``) to an anchor."""
+    """Add a comment (or a reply via ``parent_id``) to the domain discussion."""
     data = await _body(request)
     user_role, domain_role = _roles(request, folder, settings)
     return CommentService.add_comment(
@@ -68,8 +64,6 @@ async def add_comment(
         settings,
         folder,
         version,
-        anchor_type=(data.get("anchor_type") or "domain"),
-        anchor_ref=(data.get("anchor_ref") or ""),
         body=(data.get("body") or ""),
         parent_id=(data.get("parent_id") or None),
         user_role=user_role,

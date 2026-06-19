@@ -113,21 +113,17 @@ class ReviewEvent(TypedDict, total=False):
 
 
 class DomainComment(TypedDict, total=False):
-    """One contextual / threaded comment anchored to a DRAFT domain.
+    """One threaded comment on a DRAFT domain's discussion.
 
-    Comments hang off a canonical *anchor* — an ontology class/property
-    URI, a mapping URI, a graph node/edge reference, or the whole domain
-    — so the same thread component can be opened from any surface. A
-    non-empty ``parent_id`` makes the row a reply in a thread. Rows are
-    append-only and ordered by ``created_at``; ``resolved`` flips a
-    thread closed without deleting the history.
+    Discussions are domain-wide: every comment belongs to the single
+    per-(domain, version) thread. A non-empty ``parent_id`` makes the row a
+    reply in a thread. Rows are append-only and ordered by ``created_at``;
+    ``resolved`` flips a thread closed without deleting the history.
     """
 
     id: str                  # row id (UUID string; "" for stores without one)
     folder: str              # domain folder (populated by reads)
     version: str
-    anchor_type: str         # ontology_class|ontology_property|mapping|graph_node|graph_edge|domain
-    anchor_ref: str          # canonical anchor identifier (prefer full URIs)
     parent_id: str           # thread parent comment id ("" for a root comment)
     author: str              # acting user email
     body: str
@@ -431,8 +427,6 @@ class RegistryStore(ABC):
         folder: str,
         version: str,
         *,
-        anchor_type: str,
-        anchor_ref: str,
         author: str,
         body: str,
         parent_id: Optional[str] = None,
@@ -447,12 +441,10 @@ class RegistryStore(ABC):
         folder: str,
         version: Optional[str] = None,
         *,
-        anchor_type: Optional[str] = None,
-        anchor_ref: Optional[str] = None,
         include_resolved: bool = True,
     ) -> List[DomainComment]:
         """Oldest-first comments for *folder*, optionally scoped to a
-        version and/or a single anchor. Empty list on any error.
+        version. Empty list on any error.
         """
 
     @abstractmethod

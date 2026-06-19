@@ -39,14 +39,14 @@ function openMappingDiscussion() {
 
 /**
  * Inject (or refresh) a contextual "Discuss" button into a mapping modal
- * header so collaborators can open a thread anchored to this mapping. The
- * anchor ref is the targeted ontology class / property URI; the thread is
- * tagged with anchor_type 'mapping'.
+ * header so collaborators can open the domain discussion. ``selectionRef``
+ * (the targeted ontology class / property URI) only gates whether the button
+ * is shown — discussions are domain-wide, so it is not used as an anchor.
  */
-function injectMappingDiscussButton(modalId, anchorRef, label) {
+function injectMappingDiscussButton(modalId, selectionRef) {
     if (!window.OntoComments) return;
     const modal = document.getElementById(modalId);
-    if (!modal || !anchorRef) return;
+    if (!modal || !selectionRef) return;
     const header = modal.querySelector('.modal-header');
     if (!header) return;
     let btn = header.querySelector('.mapping-discuss-btn');
@@ -60,7 +60,7 @@ function injectMappingDiscussButton(modalId, anchorRef, label) {
         if (closeBtn) header.insertBefore(btn, closeBtn);
         else header.appendChild(btn);
     }
-    btn.onclick = () => window.OntoComments.openForSelection('mapping', anchorRef, label || anchorRef);
+    btn.onclick = () => window.OntoComments.openForSelection();
 }
 
 // ==========================================================================

@@ -244,8 +244,6 @@ class _InMemoryStore(RegistryStore):
         folder: str,
         version: str,
         *,
-        anchor_type: str,
-        anchor_ref: str,
         author: str,
         body: str,
         parent_id=None,
@@ -254,8 +252,6 @@ class _InMemoryStore(RegistryStore):
             "id": str(len(self._comments) + 1),
             "folder": folder,
             "version": version,
-            "anchor_type": anchor_type or "domain",
-            "anchor_ref": anchor_ref or "",
             "parent_id": str(parent_id) if parent_id else "",
             "author": author or "",
             "body": body or "",
@@ -270,8 +266,6 @@ class _InMemoryStore(RegistryStore):
         folder: str,
         version=None,
         *,
-        anchor_type=None,
-        anchor_ref=None,
         include_resolved: bool = True,
     ) -> List[Dict[str, Any]]:
         return [
@@ -279,8 +273,6 @@ class _InMemoryStore(RegistryStore):
             for c in self._comments
             if c["folder"] == folder
             and (version is None or c["version"] == version)
-            and (anchor_type is None or c["anchor_type"] == anchor_type)
-            and (anchor_ref is None or c["anchor_ref"] == anchor_ref)
             and (include_resolved or not c["resolved"])
         ]
 
@@ -601,36 +593,18 @@ class TestStoreContract:
 
     def test_comments_round_trip_oldest_first(self, store):
         store.insert_comment(
-            "demo", "1", anchor_type="domain", anchor_ref="",
-            author="a@a.com", body="first",
+            "demo", "1", author="a@a.com", body="first",
         )
         store.insert_comment(
-            "demo", "1", anchor_type="domain", anchor_ref="",
-            author="b@a.com", body="second",
+            "demo", "1", author="b@a.com", body="second",
         )
         comments = store.list_comments("demo", "1")
         assert [c["body"] for c in comments] == ["first", "second"]
         assert comments[0]["resolved"] is False
 
-    def test_comments_filter_by_anchor(self, store):
-        store.insert_comment(
-            "demo", "1", anchor_type="ontology_class",
-            anchor_ref="http://x/Person", author="a@a.com", body="cls",
-        )
-        store.insert_comment(
-            "demo", "1", anchor_type="domain", anchor_ref="",
-            author="a@a.com", body="dom",
-        )
-        anchored = store.list_comments(
-            "demo", "1", anchor_type="ontology_class",
-            anchor_ref="http://x/Person",
-        )
-        assert [c["body"] for c in anchored] == ["cls"]
-
     def test_resolve_comment_flips_flag_and_filters(self, store):
         c = store.insert_comment(
-            "demo", "1", anchor_type="domain", anchor_ref="",
-            author="a@a.com", body="hi",
+            "demo", "1", author="a@a.com", body="hi",
         )
         ok, _ = store.resolve_comment("demo", c["id"], resolved=True)
         assert ok
@@ -1329,8 +1303,7 @@ class TestLakebaseCollab:
                     "contains": "INSERT INTO",
                     "fetchone": {
                         "id": "c-1", "version": "2",
-                        "anchor_type": "ontology_class",
-                        "anchor_ref": "http://x/Person", "parent_id": None,
+                        "parent_id": None,
                         "author": "a@a.com", "body": "rename",
                         "resolved": False,
                         "created_at": datetime(2026, 1, 1, 0, 0, 0),
@@ -1340,11 +1313,10 @@ class TestLakebaseCollab:
         )
         store = _collab_store(monkeypatch, cur)
         out = store.insert_comment(
-            "demo", "2", anchor_type="ontology_class",
-            anchor_ref="http://x/Person", author="a@a.com", body="rename",
+            "demo", "2", author="a@a.com", body="rename",
         )
         assert out["id"] == "c-1"
-        assert out["anchor_type"] == "ontology_class"
+        assert out["body"] == "rename"
         assert out["folder"] == "demo"
         assert out["resolved"] is False
         assert out["created_at"].startswith("2026-01-01")
@@ -1354,8 +1326,7 @@ class TestLakebaseCollab:
         cur = _ScriptedCursor([])
         store = _collab_store(monkeypatch, cur)
         assert store.insert_comment(
-            "ghost", "2", anchor_type="domain", anchor_ref="",
-            author="a@a.com", body="x",
+            "ghost", "2", author="a@a.com", body="x",
         ) is None
 
     def test_list_comments_maps_rows_and_filters(self, monkeypatch):
@@ -1366,7 +1337,6 @@ class TestLakebaseCollab:
                     "fetchall": [
                         {
                             "id": "c-1", "folder": "demo", "version": "2",
-                            "anchor_type": "domain", "anchor_ref": "",
                             "parent_id": None, "author": "a@a.com",
                             "body": "hi", "resolved": False,
                             "created_at": datetime(2026, 1, 1),
@@ -1377,15 +1347,14 @@ class TestLakebaseCollab:
         )
         store = _collab_store(monkeypatch, cur)
         rows = store.list_comments(
-            "demo", "2", anchor_type="domain", anchor_ref="",
-            include_resolved=False,
+            "demo", "2", include_resolved=False,
         )
         assert [c["body"] for c in rows] == ["hi"]
-        # The anchor + resolved filters must reach the SQL params.
+        # The version + resolved filters must reach the SQL.
         sql, params = cur.executed[-1]
-        assert "anchor_type = %s" in sql
+        assert "c.version = %s" in sql
         assert "resolved = false" in sql
-        assert "domain" in params and "" in params
+        assert "2" in params
 
     def test_resolve_comment_not_found_returns_false(self, monkeypatch):
         cur = _ScriptedCursor([{"contains": "UPDATE", "rowcount": 0}])

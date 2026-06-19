@@ -24,12 +24,31 @@ marked ``done``.
 
 from __future__ import annotations
 
+import re
 import threading
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from back.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Removal/unmapping intent. The Auto SQL Mapper (the only mapping agent) can
+# only *add* mappings -- it has no "remove/unmap" operation -- so a task that
+# asks to unmap/remove/exclude a mapping must be refused rather than silently
+# triggering a full additive re-map. Scoped to the mapper at the call site.
+_MAPPING_REMOVAL_RE = re.compile(
+    r"\b(un-?map|un-?assign|un-?link|detach)\b"
+    r"|\b(remove|delete|drop|clear|exclude|strip|reset)\b[^.\n]{0,40}"
+    r"\b(mapping|map|assignment|assign|sql|quer(?:y|ies)|table|column)s?\b"
+    r"|\b(mapping|map|assignment|sql)s?\b[^.\n]{0,40}"
+    r"\b(remove|delete|drop|clear|exclude|strip|reset)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_unsupported_mapping_removal(text: str) -> bool:
+    """True when *text* asks to remove/unmap a mapping (unsupported by agents)."""
+    return bool(_MAPPING_REMOVAL_RE.search(text or ""))
 
 # Virtual assignee that means "let the AI figure out and run the right agent".
 # Not a real Databricks principal -- it never appears in domain permissions.
@@ -295,6 +314,30 @@ def _run_for_task(
         spec = get_agent(router_result.chosen_agent_key)
         if spec is None:
             _tm("fail_task", "Router chose an unknown agent")
+            return
+
+        # 1b) Refuse unsupported removal: the Auto SQL Mapper only *adds*
+        # mappings, so an "unmap / remove mapping / exclude" request would
+        # otherwise trigger a full additive re-map. Park (stay in_progress) with
+        # a helpful note so a rephrase can resume the same task.
+        if spec.key == "auto_assignment" and _is_unsupported_mapping_removal(
+            f"{title}\n{description}"
+        ):
+            _set_status(svc, folder, domain_task_id, "in_progress")
+            _report(
+                svc, folder, version, domain_task_id, comment_id,
+                body=(
+                    f"**AI Agent — {spec.label}**\n\n"
+                    "I can't **remove or unmap** mappings automatically — the Auto "
+                    "SQL Mapper only *adds* SQL mappings, and no agent supports "
+                    "removal yet. To clear a mapping, open the **Mapping** page and "
+                    "remove it there. If you meant to *map* a specific entity, reply "
+                    "with a rephrased request and I'll continue."
+                ),
+                event="agent_progress",
+            )
+            _tm("complete_task", {"agent": spec.key, "state": "waiting_input"},
+                "Cannot unmap — waiting for a rephrase")
             return
 
         # 2) Plan against the conversation reconstructed from the thread.
@@ -578,14 +621,21 @@ def _dispatch_agent(
         )
         if not res.success and res.error:
             raise RuntimeError(res.error)
+        # Persist directly (session-less): merge into the domain assignment and
+        # save to the registry, so the mappings survive a page reload. Existing
+        # ``excluded`` flags are preserved by the merge.
+        counts = mapping_svc.apply_agent_mappings(
+            res.entity_mappings, res.relationship_mappings
+        )
         summary = (
-            f"proposed {len(res.entity_mappings)} entity and "
-            f"{len(res.relationship_mappings)} relationship mapping(s)"
+            f"mapped {len(res.entity_mappings)} entity and "
+            f"{len(res.relationship_mappings)} relationship(s)"
         )
         report = (
-            f"Proposed {len(res.entity_mappings)} entity and "
-            f"{len(res.relationship_mappings)} relationship mapping(s). "
-            "Open the **Mapping** page to review and save them."
+            f"Applied SQL mappings — the domain now has "
+            f"**{counts['entities']} entity** and "
+            f"**{counts['relationships']} relationship** mapping(s). "
+            "Open the **Mapping** page to review them."
         )
         return summary, report, {
             "entity_mappings": res.entity_mappings,
@@ -629,14 +679,10 @@ def _report(
     Validation timeline. Both are best-effort.
     """
     try:
-        anchor_type, anchor_ref, parent_id = _resolve_anchor(
-            svc, folder, version, comment_id
-        )
+        parent_id = _resolve_thread_parent(svc, folder, version, comment_id)
         svc.insert_comment(
             folder,
             version,
-            anchor_type=anchor_type,
-            anchor_ref=anchor_ref,
             author=AI_AGENT_LABEL,
             body=body,
             parent_id=parent_id,
@@ -656,23 +702,17 @@ def _report(
         logger.debug("agent_task_runner: audit append skipped: %s", exc)
 
 
-def _resolve_anchor(
+def _resolve_thread_parent(
     svc: Any, folder: str, version: str, comment_id: str
-) -> Tuple[str, str, Optional[str]]:
-    """Pick where to post the report: reply under the originating comment when
-    available, otherwise a top-level domain note.
-
-    Returns ``(anchor_type, anchor_ref, parent_id)``.
+) -> Optional[str]:
+    """Reply under the originating comment when it still exists, otherwise
+    post a top-level note (``None``).
     """
     if comment_id:
         try:
             for c in svc.list_comments(folder, version):
                 if str(c.get("id")) == str(comment_id):
-                    return (
-                        c.get("anchor_type") or "domain",
-                        c.get("anchor_ref") or "",
-                        comment_id,
-                    )
+                    return comment_id
         except Exception:  # noqa: BLE001
             pass
-    return ("domain", "", None)
+    return None

@@ -22,7 +22,7 @@ def _request(body=None, *, user_role="admin"):
     return req
 
 
-async def test_list_comments_forwards_anchor_filter():
+async def test_list_comments_forwards_roles():
     with (
         patch.object(
             _comments.SettingsService, "resolve_domain_role",
@@ -36,39 +36,17 @@ async def test_list_comments_forwards_anchor_filter():
         result = await _comments.list_comments(
             "acme", "2",
             _request(user_role="app_user"),
-            anchor_type="ontology_class", anchor_ref="http://x/Person",
             session_mgr=MagicMock(), settings=MagicMock(),
         )
     assert result["success"] is True
-    assert lc.call_args.kwargs["anchor_type"] == "ontology_class"
-    assert lc.call_args.kwargs["anchor_ref"] == "http://x/Person"
+    assert "anchor_type" not in lc.call_args.kwargs
+    assert "anchor_ref" not in lc.call_args.kwargs
     assert lc.call_args.kwargs["user_role"] == "app_user"
     assert lc.call_args.kwargs["user_domain_role"] == "viewer"
 
 
-async def test_list_comments_empty_anchor_becomes_none():
-    with (
-        patch.object(
-            _comments.SettingsService, "resolve_domain_role",
-            return_value="viewer",
-        ),
-        patch.object(
-            _comments.CommentService, "list_comments",
-            return_value={"success": True, "comments": []},
-        ) as lc,
-    ):
-        await _comments.list_comments(
-            "acme", "2", _request(),
-            anchor_type="", anchor_ref="",
-            session_mgr=MagicMock(), settings=MagicMock(),
-        )
-    assert lc.call_args.kwargs["anchor_type"] is None
-    assert lc.call_args.kwargs["anchor_ref"] is None
-
-
 async def test_add_comment_forwards_body_fields():
     body = {
-        "anchor_type": "mapping", "anchor_ref": "http://x/map",
         "body": "fix this", "parent_id": "42",
     }
     with (
@@ -85,29 +63,11 @@ async def test_add_comment_forwards_body_fields():
             "acme", "2", _request(body, user_role="app_user"),
             session_mgr=MagicMock(), settings=MagicMock(),
         )
-    assert ac.call_args.kwargs["anchor_type"] == "mapping"
-    assert ac.call_args.kwargs["anchor_ref"] == "http://x/map"
+    assert "anchor_type" not in ac.call_args.kwargs
+    assert "anchor_ref" not in ac.call_args.kwargs
     assert ac.call_args.kwargs["body"] == "fix this"
     assert ac.call_args.kwargs["parent_id"] == "42"
     assert ac.call_args.kwargs["user_domain_role"] == "editor"
-
-
-async def test_add_comment_defaults_anchor_to_domain():
-    with (
-        patch.object(
-            _comments.SettingsService, "resolve_domain_role",
-            return_value="viewer",
-        ),
-        patch.object(
-            _comments.CommentService, "add_comment",
-            return_value={"success": True, "comment": {}},
-        ) as ac,
-    ):
-        await _comments.add_comment(
-            "acme", "2", _request({"body": "hi"}),
-            session_mgr=MagicMock(), settings=MagicMock(),
-        )
-    assert ac.call_args.kwargs["anchor_type"] == "domain"
 
 
 async def test_resolve_comment_forwards_flag():

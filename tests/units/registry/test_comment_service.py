@@ -1,6 +1,6 @@
 """Tests for the collaborative comments & tasks workflow (CommentService).
 
-Covers the orchestration layer: anchor validation, the DRAFT/IN-REVIEW
+Covers the orchestration layer: the DRAFT/IN-REVIEW
 write gate, per-action role rules, and the audit-log side effects when a
 task is created or completed. Collaborators (registry service, session)
 are mocked; the focus is the workflow rules and side effects.
@@ -48,25 +48,18 @@ def _make_svc(*, status="DRAFT", versions=("1", "2"), configured=True,
     svc.list_versions_sorted.return_value = list(versions)
     svc.read_version.return_value = (True, {"info": info}, "")
 
-    def _insert_comment(folder, version, *, anchor_type, anchor_ref,
-                        author, body, parent_id=None):
+    def _insert_comment(folder, version, *, author, body, parent_id=None):
         row = {
             "id": str(len(comment_rows) + 1), "folder": folder,
-            "version": version, "anchor_type": anchor_type,
-            "anchor_ref": anchor_ref, "parent_id": parent_id or "",
+            "version": version, "parent_id": parent_id or "",
             "author": author, "body": body, "resolved": False,
             "created_at": "2026-01-01T00:00:00",
         }
         comment_rows.append(row)
         return dict(row)
 
-    def _list_comments(folder, version=None, *, anchor_type=None,
-                       anchor_ref=None, include_resolved=True):
-        return [
-            dict(c) for c in comment_rows
-            if (anchor_type is None or c["anchor_type"] == anchor_type)
-            and (anchor_ref is None or c["anchor_ref"] == anchor_ref)
-        ]
+    def _list_comments(folder, version=None, *, include_resolved=True):
+        return [dict(c) for c in comment_rows]
 
     def _resolve_comment(folder, comment_id, *, resolved=True):
         for c in comment_rows:
@@ -136,17 +129,16 @@ def _call(method, svc, **kwargs):
 
 def test_add_comment_succeeds_on_draft():
     svc, comments, _, _ = _make_svc(status="DRAFT")
-    result = _call("add_comment", svc, anchor_type="ontology_class",
-                   anchor_ref="http://x/Person", body="rename this",
+    result = _call("add_comment", svc, body="rename this",
                    parent_id=None, user_role="", user_domain_role=ROLE_VIEWER)
     assert result["success"] is True
     assert result["comment"]["body"] == "rename this"
-    assert comments[-1]["anchor_type"] == "ontology_class"
+    assert comments[-1]["body"] == "rename this"
 
 
 def test_add_comment_allowed_in_review():
     svc, _, _, _ = _make_svc(status="IN-REVIEW")
-    result = _call("add_comment", svc, anchor_type="domain", anchor_ref="",
+    result = _call("add_comment", svc,
                    body="reviewing", parent_id=None,
                    user_role="", user_domain_role=ROLE_VIEWER)
     assert result["success"] is True
@@ -155,7 +147,7 @@ def test_add_comment_allowed_in_review():
 def test_add_comment_blocked_when_published():
     svc, _, _, _ = _make_svc(status="PUBLISHED")
     with pytest.raises(ConflictError):
-        _call("add_comment", svc, anchor_type="domain", anchor_ref="",
+        _call("add_comment", svc,
               body="late", parent_id=None,
               user_role=ROLE_ADMIN, user_domain_role=ROLE_NONE)
 
@@ -163,7 +155,7 @@ def test_add_comment_blocked_when_published():
 def test_add_comment_requires_member():
     svc, _, _, _ = _make_svc(status="DRAFT")
     with pytest.raises(AuthorizationError):
-        _call("add_comment", svc, anchor_type="domain", anchor_ref="",
+        _call("add_comment", svc,
               body="hi", parent_id=None,
               user_role="", user_domain_role=ROLE_NONE)
 
@@ -171,16 +163,8 @@ def test_add_comment_requires_member():
 def test_add_comment_requires_body():
     svc, _, _, _ = _make_svc(status="DRAFT")
     with pytest.raises(ValidationError):
-        _call("add_comment", svc, anchor_type="domain", anchor_ref="",
+        _call("add_comment", svc,
               body="   ", parent_id=None,
-              user_role=ROLE_ADMIN, user_domain_role=ROLE_NONE)
-
-
-def test_add_comment_rejects_bad_anchor_type():
-    svc, _, _, _ = _make_svc(status="DRAFT")
-    with pytest.raises(ValidationError):
-        _call("add_comment", svc, anchor_type="bogus", anchor_ref="",
-              body="hi", parent_id=None,
               user_role=ROLE_ADMIN, user_domain_role=ROLE_NONE)
 
 
@@ -194,7 +178,7 @@ def test_add_comment_resumes_active_ai_agent_task():
     }]
     svc, _, _, _ = _make_svc(status="DRAFT", tasks=prior)
     with patch.object(_mod, "resume_agent_task", return_value="bg7") as resume:
-        result = _call("add_comment", svc, anchor_type="domain", anchor_ref="",
+        result = _call("add_comment", svc,
                        body="any update?", parent_id="5",
                        user_role="", user_domain_role=ROLE_VIEWER)
     assert result["success"] is True
@@ -212,7 +196,7 @@ def test_add_comment_does_not_resume_done_task():
     }]
     svc, _, _, _ = _make_svc(status="DRAFT", tasks=prior)
     with patch.object(_mod, "resume_agent_task") as resume:
-        result = _call("add_comment", svc, anchor_type="domain", anchor_ref="",
+        result = _call("add_comment", svc,
                        body="any update?", parent_id="5",
                        user_role="", user_domain_role=ROLE_VIEWER)
     assert result["success"] is True
@@ -229,7 +213,7 @@ def test_add_comment_does_not_resume_human_task():
     }]
     svc, _, _, _ = _make_svc(status="DRAFT", tasks=prior)
     with patch.object(_mod, "resume_agent_task") as resume:
-        result = _call("add_comment", svc, anchor_type="domain", anchor_ref="",
+        result = _call("add_comment", svc,
                        body="any update?", parent_id="5",
                        user_role="", user_domain_role=ROLE_VIEWER)
     assert result["success"] is True
@@ -243,8 +227,8 @@ def test_add_comment_does_not_resume_human_task():
 
 def test_resolve_comment_by_author():
     prior = [{
-        "id": "1", "folder": "acme", "version": "2", "anchor_type": "domain",
-        "anchor_ref": "", "parent_id": "", "author": "alice@acme.com",
+        "id": "1", "folder": "acme", "version": "2",
+        "parent_id": "", "author": "alice@acme.com",
         "body": "x", "resolved": False, "created_at": "t",
     }]
     svc, comments, _, _ = _make_svc(status="DRAFT", comments=prior)
@@ -257,8 +241,8 @@ def test_resolve_comment_by_author():
 
 def test_resolve_comment_viewer_non_author_denied():
     prior = [{
-        "id": "1", "folder": "acme", "version": "2", "anchor_type": "domain",
-        "anchor_ref": "", "parent_id": "", "author": "bob@acme.com",
+        "id": "1", "folder": "acme", "version": "2",
+        "parent_id": "", "author": "bob@acme.com",
         "body": "x", "resolved": False, "created_at": "t",
     }]
     svc, _, _, _ = _make_svc(status="DRAFT", comments=prior)
@@ -270,8 +254,8 @@ def test_resolve_comment_viewer_non_author_denied():
 
 def test_resolve_comment_editor_allowed():
     prior = [{
-        "id": "1", "folder": "acme", "version": "2", "anchor_type": "domain",
-        "anchor_ref": "", "parent_id": "", "author": "bob@acme.com",
+        "id": "1", "folder": "acme", "version": "2",
+        "parent_id": "", "author": "bob@acme.com",
         "body": "x", "resolved": False, "created_at": "t",
     }]
     svc, comments, _, _ = _make_svc(status="DRAFT", comments=prior)
@@ -452,27 +436,24 @@ def test_update_unknown_task_raises_not_found():
 # ----------------------------------------------------------------------
 
 
-def test_list_comments_filters_by_anchor():
+def test_list_comments_returns_whole_domain_thread():
     prior = [
         {"id": "1", "folder": "acme", "version": "2",
-         "anchor_type": "ontology_class", "anchor_ref": "http://x/Person",
          "parent_id": "", "author": "a", "body": "cls", "resolved": False,
          "created_at": "t"},
-        {"id": "2", "folder": "acme", "version": "2",
-         "anchor_type": "domain", "anchor_ref": "", "parent_id": "",
+        {"id": "2", "folder": "acme", "version": "2", "parent_id": "",
          "author": "a", "body": "dom", "resolved": False, "created_at": "t"},
     ]
     svc, _, _, _ = _make_svc(status="DRAFT", comments=prior)
-    result = _call("list_comments", svc, anchor_type="ontology_class",
-                   anchor_ref="http://x/Person",
+    result = _call("list_comments", svc,
                    user_role="", user_domain_role=ROLE_VIEWER)
-    assert [c["body"] for c in result["comments"]] == ["cls"]
+    assert [c["body"] for c in result["comments"]] == ["cls", "dom"]
 
 
 def test_list_comments_requires_member():
     svc, _, _, _ = _make_svc(status="DRAFT")
     with pytest.raises(AuthorizationError):
-        _call("list_comments", svc, anchor_type=None, anchor_ref=None,
+        _call("list_comments", svc,
               user_role="", user_domain_role=ROLE_NONE)
 
 
@@ -487,7 +468,7 @@ def test_reads_allowed_on_published():
 def test_unknown_version_raises_not_found():
     svc, _, _, _ = _make_svc(status="DRAFT", versions=("1",))
     with pytest.raises(NotFoundError):
-        _call("add_comment", svc, anchor_type="domain", anchor_ref="",
+        _call("add_comment", svc,
               body="hi", parent_id=None,
               user_role=ROLE_ADMIN, user_domain_role=ROLE_NONE)
 

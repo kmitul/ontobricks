@@ -62,6 +62,20 @@
         return esc(text).replace(/"/g, '&quot;');
     }
 
+    // Render a comment body's markdown to HTML (same approach as the Discussion
+    // panel): use the global `marked` (loaded in base.html), with an escaped
+    // text + <br> fallback when it isn't available.
+    function renderMarkdown(text) {
+        const src = text || '';
+        if (typeof window.marked !== 'undefined' && window.marked.parse) {
+            try {
+                window.marked.setOptions({ breaks: true, gfm: true });
+                return window.marked.parse(src);
+            } catch (e) { /* fall through to plain text */ }
+        }
+        return esc(src).replace(/\n/g, '<br>');
+    }
+
     function note(msg, kind) {
         if (typeof window.showNotification === 'function') {
             window.showNotification(msg, kind || 'info');
@@ -106,13 +120,6 @@
         return d.toLocaleDateString(undefined, {
             weekday: 'short', year: 'numeric', month: 'short', day: 'numeric',
         });
-    }
-
-    function localName(ref) {
-        if (!ref) return '';
-        const s = String(ref);
-        const part = s.split('#').pop().split('/').pop();
-        return part || s;
     }
 
     function parsedTags(cm) {
@@ -373,9 +380,7 @@
         c.innerHTML = html;
 
         c.querySelectorAll('[data-open-thread]').forEach((row) => {
-            row.addEventListener('click', () => {
-                openThreadFor(row.dataset.anchorType, row.dataset.anchorRef, row.dataset.anchorLabel);
-            });
+            row.addEventListener('click', () => { openThreadFor(); });
         });
     }
 
@@ -464,10 +469,6 @@
             : { text: cm.body || '', tags: [] };
         const author = cm.author || 'unknown';
         const initials = author.replace(/@.*/, '').slice(0, 2).toUpperCase();
-        const kind = (window.OntoComments && OntoComments.anchorLabel)
-            ? OntoComments.anchorLabel(cm.anchor_type) : 'Item';
-        const refLabel = localName(cm.anchor_ref) ||
-            (cm.anchor_type === 'domain' ? 'Domain' : '');
         const isReply = !!cm.parent_id;
 
         const tagsHtml = (parsed.tags || []).map((t) =>
@@ -475,33 +476,25 @@
             esc(t.label || t.ref) + '</span>').join('');
 
         return '<div class="oc-tl-item" data-open-thread="1" ' +
-            'data-anchor-type="' + escAttr(cm.anchor_type) + '" ' +
-            'data-anchor-ref="' + escAttr(cm.anchor_ref) + '" ' +
-            'data-anchor-label="' + escAttr(refLabel || kind) + '" ' +
             'title="Open this thread">' +
             '<div class="oc-tl-marker"><span class="oc-avatar">' + esc(initials) + '</span></div>' +
             '<div class="oc-tl-body">' +
             '<div class="oc-tl-head">' +
             '<span class="oc-author">' + esc(author) + '</span>' +
             (isReply ? '<span class="badge bg-light text-muted border ms-2"><i class="bi bi-reply me-1"></i>reply</span>' : '') +
-            '<span class="badge oc-anchor-badge border ms-2">' + esc(kind) +
-            (refLabel ? ': ' + esc(refLabel) : '') + '</span>' +
             (cm.resolved ? '<span class="badge bg-success-subtle text-success border ms-2">Resolved</span>' : '') +
             '<span class="oc-time ms-auto">' + esc(relativeTime(cm.created_at)) + '</span>' +
             '</div>' +
-            '<div class="oc-tl-text">' + esc(parsed.text) + '</div>' +
+            '<div class="oc-tl-text oc-md">' + renderMarkdown(parsed.text) + '</div>' +
             (tagsHtml ? '<div class="oc-bubble-tags mt-1">' + tagsHtml + '</div>' : '') +
             '</div></div>';
     }
 
-    function openThreadFor(anchorType, anchorRef, anchorLabel) {
+    function openThreadFor() {
         if (!window.OntoComments || !domainCtx) return;
         OntoComments.openThread({
             folder: domainCtx.folder,
             version: domainCtx.version,
-            anchorType: anchorType || 'domain',
-            anchorRef: anchorRef || '',
-            anchorLabel: anchorLabel || anchorRef || '',
         });
     }
 

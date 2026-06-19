@@ -336,3 +336,99 @@ are written in markdown but the Discussion offcanvas showed the raw source
 
 **Test result:** Frontend-only; `node --check` + linter clean. `marked` is
 already loaded for all pages via `base.html`.
+
+## Tests: Discussion-panel front-end contract tests
+
+**Context:** The Discussion-panel work above (AI-Agent async status + answering,
+the `ontobricks:design-updated` refresh wiring, and markdown rendering) lives
+entirely in static JS/CSS, and the repo has no JS unit-test harness. Added
+Python contract tests that fetch the served assets through the app's `/static`
+mount and assert the wiring is present — same philosophy as
+`tests/units/api/test_ui_rendering.py` — so an accidental removal/rename of a
+key hook is caught by CI.
+
+**Changes:**
+1. `tests/units/api/test_discussion_panel_assets.py` (new) — 16 token-level
+   assertions across four classes:
+   - `TestDiscussionMarkdownRendering` — `renderMarkdown` via global `marked`
+     with a plain-text fallback, bubble renders into `.oc-md`, CSS present.
+   - `TestDiscussionAgentStatus` — `loadAiTasks`/`loadAgentRuns` (`task_router`),
+     `renderAgentStrip` + `oc-agent-strip`, the polling loop
+     (`panelPollTick`/`startPanelPolling`/`userIsComposing`), the per-thread
+     chip (`agentChipHtml`, "waiting for your reply"), and the strip/chip CSS.
+   - `TestAnswerTheAgent` — the "Answer the AI Agent" box, `data-agent-send` →
+     `ensureAgentTracking` wiring, and `.oc-agent-answer` CSS.
+   - `TestDesignUpdatedRefresh` — the panel dispatches
+     `ontobricks:design-updated` (`announceAgentCompletions`), and the ontology
+     page (`loadOntologyFromSession` + `_initSectionByName(...)`) and mapping
+     page (`/ontology/get-loaded-ontology` + `refreshMappingDesign`) listen for
+     it.
+
+**Modified files:**
+- `tests/units/api/test_discussion_panel_assets.py` (new)
+
+**Test result:** `pytest tests/units/api/test_discussion_panel_assets.py` →
+16 passed.
+
+## Feature: render markdown in the Domain → Discussions timeline
+
+**Context:** Markdown rendering was added to the Discussion offcanvas earlier,
+but the Domain → Discussions timeline (a separate surface) still showed raw
+markdown source for each comment. Rendered it there too for parity.
+
+**Changes:**
+1. `src/front/static/domain/js/domain-collaboration.js` — added a
+   `renderMarkdown()` helper (same approach as the panel: global `marked` with a
+   plain-text/`<br>` fallback) and `timelineEntry()` now renders the parsed body
+   through it into a `.oc-tl-text.oc-md` container instead of escaping verbatim.
+2. `src/front/static/global/css/review-modals.css` — broadened the markdown
+   white-space reset from `.oc-text.oc-md` to `.oc-md` so it also applies to the
+   timeline's `.oc-tl-text.oc-md` (which carried `white-space: pre-wrap`). The
+   Domain page already loads `review-modals.css`, so the shared `.oc-md` block
+   styles the timeline with no extra assets.
+3. `tests/units/api/test_discussion_panel_assets.py` — added
+   `TestDiscussionTimelineMarkdown` (3 tests): the timeline defines the marked
+   renderer, `timelineEntry` renders `renderMarkdown(parsed.text)` into `.oc-md`,
+   and the unscoped `.oc-md` reset is present.
+
+**Modified files:**
+- `src/front/static/domain/js/domain-collaboration.js`
+- `src/front/static/global/css/review-modals.css`
+- `tests/units/api/test_discussion_panel_assets.py`
+
+**Test result:** `pytest tests/units/api/test_discussion_panel_assets.py` →
+19 passed. `node --check` + linter clean.
+
+## Change: Discussion panel is a single domain-wide thread (no anchors/tags)
+
+**Context:** Opening the discussion from the Ontology page showed a header badge
+like "Domain · Whole ontology diagram" and separated threads by the selected
+anchor (class/property/mapping/graph). Discussions are meant to be about the
+Domain as a whole, so the per-anchor separation and the entity/relationship tag
+picker were confusing. Unified everything to the Domain.
+
+**Changes:**
+1. `src/front/static/global/js/comments-panel.js`:
+   - `openThread()` now always opens the Domain thread (`anchorType: 'domain'`,
+     `anchorRef: ''`) regardless of the caller's anchor hints, so every entry
+     point (ontology, mapping, graph, domain) shows the same discussion.
+   - `renderAnchorBadge()` dropped the "kind" badge that separated threads; the
+     header subtitle now just names the domain (`folder · vX`).
+   - Removed the entity/relationship tag picker from the compose and reply
+     boxes; new comments post the raw body (no embedded tag marker).
+   - Deleted the now-unused tag-input helpers (`tagWidgetHtml`,
+     `tagSelectOptions`, `setupTagbar`, `addTagChip`, `collectTags`,
+     `encodeBody`). Kept `TAG_MARK` + `parseBody` + `tagsHtml` so older comments
+     that embedded tags still display their chips (read-only). `openForSelection`
+     / `taggableFromOntology` remain as public API but their anchor/taggable
+     args are now ignored by the panel.
+2. `tests/units/api/test_discussion_panel_assets.py` — added
+   `TestDiscussionDomainScope` (4 tests): opens at the domain anchor, no kind
+   badge, no tag picker in compose, and no tag encoding on post.
+
+**Modified files:**
+- `src/front/static/global/js/comments-panel.js`
+- `tests/units/api/test_discussion_panel_assets.py`
+
+**Test result:** `pytest tests/units/api/test_discussion_panel_assets.py` →
+23 passed. `node --check` + linter clean.

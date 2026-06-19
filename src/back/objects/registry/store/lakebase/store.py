@@ -1925,8 +1925,6 @@ class LakebaseRegistryStore(RegistryStore):
                                     REFERENCES {sch}.domains(id)
                                     ON DELETE CASCADE,
                         version     text NOT NULL,
-                        anchor_type text NOT NULL DEFAULT 'domain',
-                        anchor_ref  text NOT NULL DEFAULT '',
                         parent_id   uuid
                                     REFERENCES {sch}.domain_comments(id)
                                     ON DELETE CASCADE,
@@ -1939,9 +1937,8 @@ class LakebaseRegistryStore(RegistryStore):
                 )
                 cur.execute(
                     f"""
-                    CREATE INDEX IF NOT EXISTS idx_domain_comments_anchor
-                        ON {sch}.domain_comments
-                           (domain_id, version, anchor_type, anchor_ref)
+                    CREATE INDEX IF NOT EXISTS idx_domain_comments_lookup
+                        ON {sch}.domain_comments (domain_id, version, created_at)
                     """
                 )
                 cur.execute(
@@ -1997,8 +1994,6 @@ class LakebaseRegistryStore(RegistryStore):
             "id": str(r.get("id") or ""),
             "folder": r.get("folder", folder) or folder,
             "version": r["version"],
-            "anchor_type": r["anchor_type"] or "domain",
-            "anchor_ref": r["anchor_ref"] or "",
             "parent_id": str(r["parent_id"]) if r.get("parent_id") else "",
             "author": r["author"] or "",
             "body": r["body"] or "",
@@ -2013,8 +2008,6 @@ class LakebaseRegistryStore(RegistryStore):
         folder: str,
         version: str,
         *,
-        anchor_type: str,
-        anchor_ref: str,
         author: str,
         body: str,
         parent_id: Optional[str] = None,
@@ -2028,18 +2021,15 @@ class LakebaseRegistryStore(RegistryStore):
                 cur.execute(
                     f"""
                     INSERT INTO {sch}.domain_comments
-                        (domain_id, version, anchor_type, anchor_ref,
-                         parent_id, author, body)
-                    SELECT d.id, %s, %s, %s, %s, %s, %s
+                        (domain_id, version, parent_id, author, body)
+                    SELECT d.id, %s, %s, %s, %s
                     FROM {sch}.domains d
                     WHERE d.registry_id = %s AND d.folder = %s
-                    RETURNING id, version, anchor_type, anchor_ref,
-                              parent_id, author, body, resolved, created_at
+                    RETURNING id, version, parent_id, author, body,
+                              resolved, created_at
                     """,
                     (
                         version,
-                        anchor_type,
-                        anchor_ref or "",
                         parent_id or None,
                         author or "",
                         body or "",
@@ -2062,8 +2052,6 @@ class LakebaseRegistryStore(RegistryStore):
         folder: str,
         version: Optional[str] = None,
         *,
-        anchor_type: Optional[str] = None,
-        anchor_ref: Optional[str] = None,
         include_resolved: bool = True,
     ) -> List[DomainComment]:
         if not self._ensure_collab_tables():
@@ -2076,21 +2064,14 @@ class LakebaseRegistryStore(RegistryStore):
             if version:
                 clauses.append("c.version = %s")
                 params.append(version)
-            if anchor_type:
-                clauses.append("c.anchor_type = %s")
-                params.append(anchor_type)
-            if anchor_ref is not None:
-                clauses.append("c.anchor_ref = %s")
-                params.append(anchor_ref)
             if not include_resolved:
                 clauses.append("c.resolved = false")
             where = " AND ".join(clauses)
             with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     f"""
-                    SELECT c.id, d.folder, c.version, c.anchor_type,
-                           c.anchor_ref, c.parent_id, c.author, c.body,
-                           c.resolved, c.created_at
+                    SELECT c.id, d.folder, c.version, c.parent_id,
+                           c.author, c.body, c.resolved, c.created_at
                     FROM {sch}.domain_comments c
                     JOIN {sch}.domains d ON d.id = c.domain_id
                     WHERE {where}

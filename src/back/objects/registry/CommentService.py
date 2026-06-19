@@ -65,18 +65,6 @@ from back.objects.session import SessionManager, get_domain
 
 logger = get_logger(__name__)
 
-# Canonical anchor kinds (mirror the schema CHECK constraint).
-ANCHOR_TYPES = frozenset(
-    {
-        "ontology_class",
-        "ontology_property",
-        "mapping",
-        "graph_node",
-        "graph_edge",
-        "domain",
-    }
-)
-
 # Task status values (mirror the schema CHECK constraint).
 TASK_STATUSES = frozenset({"open", "in_progress", "done", "cancelled"})
 
@@ -103,22 +91,14 @@ class CommentService:
         folder: str,
         version: str,
         *,
-        anchor_type: Optional[str],
-        anchor_ref: Optional[str],
         user_role: str,
         user_domain_role: str,
     ) -> Dict[str, Any]:
-        """Comments for ``(folder, version)`` — optionally one anchor."""
+        """All comments for the domain-wide ``(folder, version)`` thread."""
         try:
             svc, _ = CommentService._load(session_mgr, settings, folder, version)
             CommentService._require_member(user_role, user_domain_role)
-            anchor_type = CommentService._norm_anchor_type(anchor_type)
-            comments = svc.list_comments(
-                folder,
-                version,
-                anchor_type=anchor_type,
-                anchor_ref=anchor_ref,
-            )
+            comments = svc.list_comments(folder, version)
             return {"success": True, "comments": comments}
         except OntoBricksError:
             raise
@@ -136,14 +116,12 @@ class CommentService:
         folder: str,
         version: str,
         *,
-        anchor_type: str,
-        anchor_ref: str,
         body: str,
         parent_id: Optional[str],
         user_role: str,
         user_domain_role: str,
     ) -> Dict[str, Any]:
-        """Add a comment (or a reply) anchored to a surface."""
+        """Add a comment (or a reply) to the domain discussion."""
         body = (body or "").strip()
         if not body:
             raise ValidationError("comment body is required")
@@ -151,7 +129,6 @@ class CommentService:
             raise ValidationError(
                 f"comment is too long (max {_MAX_BODY} characters)"
             )
-        anchor_type = CommentService._validate_anchor_type(anchor_type)
 
         svc, status = CommentService._load(session_mgr, settings, folder, version)
         CommentService._require_member(user_role, user_domain_role)
@@ -160,8 +137,6 @@ class CommentService:
         created = svc.insert_comment(
             folder,
             version,
-            anchor_type=anchor_type,
-            anchor_ref=(anchor_ref or "").strip(),
             author=CommentService._email(request),
             body=body,
             parent_id=(parent_id or None),
@@ -348,7 +323,6 @@ class CommentService:
             )
             kickoff = svc.insert_comment(
                 folder, version,
-                anchor_type="domain", anchor_ref="",
                 author=CommentService._email(request),
                 body=kickoff_body, parent_id=None,
             )
@@ -585,24 +559,6 @@ class CommentService:
         except Exception:  # noqa: BLE001
             return None
         return None
-
-    @staticmethod
-    def _validate_anchor_type(anchor_type: str) -> str:
-        anchor_type = (anchor_type or "").strip() or "domain"
-        if anchor_type not in ANCHOR_TYPES:
-            raise ValidationError(
-                "anchor_type must be one of: " + ", ".join(sorted(ANCHOR_TYPES))
-            )
-        return anchor_type
-
-    @staticmethod
-    def _norm_anchor_type(anchor_type: Optional[str]) -> Optional[str]:
-        """Normalise a *filter* anchor type — empty stays ``None`` (no
-        filter), an invalid value is rejected.
-        """
-        if not anchor_type:
-            return None
-        return CommentService._validate_anchor_type(anchor_type)
 
     @staticmethod
     def _require_member(user_role: str, user_domain_role: str) -> None:

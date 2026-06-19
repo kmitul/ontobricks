@@ -908,18 +908,14 @@ class RegistryService:
         folder: str,
         version: str,
         *,
-        anchor_type: str,
-        anchor_ref: str,
         author: str,
         body: str,
         parent_id: Optional[str] = None,
     ) -> Optional[dict]:
-        """Append a contextual comment; return the created row or None."""
+        """Append a discussion comment; return the created row or None."""
         return self._store.insert_comment(
             folder,
             version,
-            anchor_type=anchor_type,
-            anchor_ref=anchor_ref,
             author=author,
             body=body,
             parent_id=parent_id,
@@ -930,16 +926,12 @@ class RegistryService:
         folder: str,
         version: Optional[str] = None,
         *,
-        anchor_type: Optional[str] = None,
-        anchor_ref: Optional[str] = None,
         include_resolved: bool = True,
     ) -> list:
-        """Oldest-first comments for *folder* (optionally scoped/anchored)."""
+        """Oldest-first comments for *folder* (optionally scoped to version)."""
         return self._store.list_comments(
             folder,
             version,
-            anchor_type=anchor_type,
-            anchor_ref=anchor_ref,
             include_resolved=include_resolved,
         )
 

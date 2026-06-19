@@ -211,23 +211,17 @@ CREATE INDEX IF NOT EXISTS idx_review_events_domain_version
     ON domain_review_events(domain_id, version, created_at);
 
 -- ----------------------------------------------------------------
--- Collaborative comments — contextual threaded discussion anchored
--- to a DRAFT domain. The anchor (ontology class/property URI, mapping
--- URI, graph node/edge reference, or the whole domain) lets the same
--- thread component open from any surface. A non-empty ``parent_id``
--- makes the row a reply within a thread. Append-only; ``resolved``
--- closes a thread without losing history. Grain: (domain_id, version).
+-- Collaborative comments — domain-wide threaded discussion. Every
+-- comment belongs to the single per-(domain, version) thread. A
+-- non-empty ``parent_id`` makes the row a reply within a thread.
+-- Append-only; ``resolved`` closes a thread without losing history.
+-- Grain: (domain_id, version).
 -- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS domain_comments (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     domain_id   uuid NOT NULL
                 REFERENCES domains(id) ON DELETE CASCADE,
     version     text NOT NULL,
-    anchor_type text NOT NULL DEFAULT 'domain'
-                CHECK (anchor_type IN ('ontology_class', 'ontology_property',
-                                       'mapping', 'graph_node', 'graph_edge',
-                                       'domain')),
-    anchor_ref  text NOT NULL DEFAULT '',
     parent_id   uuid REFERENCES domain_comments(id) ON DELETE CASCADE,
     author      text NOT NULL,
     body        text NOT NULL DEFAULT '',
@@ -235,8 +229,8 @@ CREATE TABLE IF NOT EXISTS domain_comments (
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_domain_comments_anchor
-    ON domain_comments(domain_id, version, anchor_type, anchor_ref);
+CREATE INDEX IF NOT EXISTS idx_domain_comments_lookup
+    ON domain_comments(domain_id, version, created_at);
 
 -- ----------------------------------------------------------------
 -- Collaborative tasks — a personalised work item assigned to a
