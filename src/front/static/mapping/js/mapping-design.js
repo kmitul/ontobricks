@@ -1091,7 +1091,24 @@ function loadEntityPanelContent(classUri, className, targetPanelBody = null) {
                         </div>
                     </div>
                     ${attributes.length > 0
-                        ? '<div class="col-6"><div class="border rounded" style="max-height: 200px; overflow-y: auto;"><table class="table table-sm table-striped mb-0" style="font-size:0.78rem;"><thead class="table-light sticky-top"><tr><th style="width:32px;" title="Include in mapping"><i class="bi bi-check2-square text-muted"></i></th><th>Attribute</th><th class="text-center" style="width:70px;">Mapped</th></tr></thead><tbody>' + epOntologyRows + '</tbody></table></div></div>'
+                        ? `<div class="col-6">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <span class="text-muted small fw-semibold">Attributes</span>
+                                <button type="button" class="btn btn-link btn-sm py-0 px-0 text-muted"
+                                        style="font-size:0.72rem;" onclick="autoExcludeUnmappedEntityAttrs()"
+                                        title="Automatically exclude all attributes not yet assigned to a column">
+                                    <i class="bi bi-slash-circle me-1"></i>Exclude unmapped
+                                </button>
+                            </div>
+                            <div class="border rounded" style="max-height:185px;overflow-y:auto;">
+                                <table class="table table-sm table-striped mb-0" style="font-size:0.78rem;">
+                                    <thead class="table-light sticky-top">
+                                        <tr><th style="width:32px;" title="Include in mapping"><i class="bi bi-check2-square text-muted"></i></th><th>Attribute</th><th class="text-center" style="width:70px;">Mapped</th></tr>
+                                    </thead>
+                                    <tbody>${epOntologyRows}</tbody>
+                                </table>
+                            </div>
+                          </div>`
                         : ''}
                 </div>
             </div>
@@ -1285,7 +1302,24 @@ function loadRelationshipPanelContent(ontologyProperty, targetPanelBody = null) 
                         </div>
                     </div>
                     ${relAttributes.length > 0
-                        ? '<div class="col-6"><div class="border rounded" style="max-height: 200px; overflow-y: auto;"><table class="table table-sm table-striped mb-0" style="font-size:0.78rem;"><thead class="table-light sticky-top"><tr><th style="width:32px;" title="Include in mapping"><i class="bi bi-check2-square text-muted"></i></th><th>Attribute</th><th class="text-center" style="width:70px;">Mapped</th></tr></thead><tbody>' + rpOntologyRows + '</tbody></table></div></div>'
+                        ? `<div class="col-6">
+                            <div class="d-flex justify-content-between align-items-center mb-1">
+                                <span class="text-muted small fw-semibold">Attributes</span>
+                                <button type="button" class="btn btn-link btn-sm py-0 px-0 text-muted"
+                                        style="font-size:0.72rem;" onclick="autoExcludeUnmappedRelAttrs()"
+                                        title="Automatically exclude all attributes not yet assigned to a column">
+                                    <i class="bi bi-slash-circle me-1"></i>Exclude unmapped
+                                </button>
+                            </div>
+                            <div class="border rounded" style="max-height:185px;overflow-y:auto;">
+                                <table class="table table-sm table-striped mb-0" style="font-size:0.78rem;">
+                                    <thead class="table-light sticky-top">
+                                        <tr><th style="width:32px;" title="Include in mapping"><i class="bi bi-check2-square text-muted"></i></th><th>Attribute</th><th class="text-center" style="width:70px;">Mapped</th></tr>
+                                    </thead>
+                                    <tbody>${rpOntologyRows}</tbody>
+                                </table>
+                            </div>
+                          </div>`
                         : ''}
                 </div>
             </div>
@@ -2065,6 +2099,75 @@ function saveRelPanelMapping() {
     autoSaveMappings();
     closeMappingPanel();
     refreshMappingDesign();
+}
+
+// ==========================================================================
+// AUTO-EXCLUDE UNMAPPED ATTRIBUTES
+// ==========================================================================
+
+/**
+ * Exclude all entity attributes that have no column assigned in the current session.
+ * Mapped attributes (green checkmark) are left untouched.
+ */
+function autoExcludeUnmappedEntityAttrs() {
+    const attrs = EntityPanelState.attributes || [];
+    let changed = 0;
+    attrs.forEach(a => {
+        const name = a.name || a.localName || '';
+        if (!name) return;
+        const isMapped = !!EntityPanelState.attributeMappings[name];
+        const isAlreadyExcluded = EntityPanelState.excludedAttributes.includes(name);
+        if (!isMapped && !isAlreadyExcluded) {
+            EntityPanelState.excludedAttributes.push(name);
+            const cb = document.querySelector(`.ep-attr-include-cb[data-attr="${CSS.escape(name)}"]`);
+            if (cb) {
+                cb.checked = false;
+                const row = cb.closest('tr');
+                const nameCell = row?.querySelector('td:nth-child(2)');
+                const mappedCell = row?.querySelector('td:nth-child(3)');
+                if (nameCell) nameCell.innerHTML = `<span class="text-muted text-decoration-line-through">${name}</span>`;
+                if (mappedCell) mappedCell.innerHTML = '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>';
+            }
+            changed++;
+        }
+    });
+    if (changed > 0) {
+        showNotification(`${changed} unmapped attribute(s) excluded`, 'info', 2000);
+    } else {
+        showNotification('No unmapped attributes to exclude', 'info', 2000);
+    }
+}
+
+/**
+ * Exclude all relationship attributes that have no column assigned in the current session.
+ */
+function autoExcludeUnmappedRelAttrs() {
+    const attrs = RelPanelState.attributes || [];
+    let changed = 0;
+    attrs.forEach(a => {
+        const name = a.name || a.localName || '';
+        if (!name) return;
+        const isMapped = !!RelPanelState.attributeMappings[name];
+        const isAlreadyExcluded = RelPanelState.excludedAttributes.includes(name);
+        if (!isMapped && !isAlreadyExcluded) {
+            RelPanelState.excludedAttributes.push(name);
+            const cb = document.querySelector(`.rp-attr-include-cb[data-attr="${CSS.escape(name)}"]`);
+            if (cb) {
+                cb.checked = false;
+                const row = cb.closest('tr');
+                const nameCell = row?.querySelector('td:nth-child(2)');
+                const mappedCell = row?.querySelector('td:nth-child(3)');
+                if (nameCell) nameCell.innerHTML = `<span class="text-muted text-decoration-line-through">${name}</span>`;
+                if (mappedCell) mappedCell.innerHTML = '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>';
+            }
+            changed++;
+        }
+    });
+    if (changed > 0) {
+        showNotification(`${changed} unmapped attribute(s) excluded`, 'info', 2000);
+    } else {
+        showNotification('No unmapped attributes to exclude', 'info', 2000);
+    }
 }
 
 // ==========================================================================
