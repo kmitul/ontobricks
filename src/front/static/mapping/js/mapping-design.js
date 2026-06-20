@@ -1392,21 +1392,20 @@ function initEntityPanel(classUri, className, existingMapping, classInfo) {
     document.querySelectorAll('.ep-attr-include-cb').forEach(cb => {
         cb.addEventListener('change', function() {
             const attrName = this.dataset.attr;
-            if (this.checked) {
-                EntityPanelState.excludedAttributes = EntityPanelState.excludedAttributes.filter(a => a !== attrName);
-            } else {
-                if (!EntityPanelState.excludedAttributes.includes(attrName)) {
-                    EntityPanelState.excludedAttributes.push(attrName);
-                }
-                delete EntityPanelState.attributeMappings[attrName];
-            }
             const row = this.closest('tr');
             const nameCell = row.querySelector('td:nth-child(2)');
             const mappedCell = row.querySelector('td:nth-child(3)');
             if (this.checked) {
+                EntityPanelState.excludedAttributes = EntityPanelState.excludedAttributes.filter(a => a !== attrName);
+                const isMapped = !!EntityPanelState.attributeMappings[attrName];
                 nameCell.innerHTML = attrName;
-                mappedCell.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i>';
+                mappedCell.innerHTML = isMapped
+                    ? '<i class="bi bi-check-circle-fill text-success"></i>'
+                    : '<i class="bi bi-x-circle-fill text-danger"></i>';
             } else {
+                if (!EntityPanelState.excludedAttributes.includes(attrName)) {
+                    EntityPanelState.excludedAttributes.push(attrName);
+                }
                 nameCell.innerHTML = `<span class="text-muted text-decoration-line-through">${attrName}</span>`;
                 mappedCell.innerHTML = '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>';
             }
@@ -1689,21 +1688,20 @@ function initRelationshipPanel(ontologyProperty, existingMapping) {
     document.querySelectorAll('.rp-attr-include-cb').forEach(cb => {
         cb.addEventListener('change', function() {
             const attrName = this.dataset.attr;
-            if (this.checked) {
-                RelPanelState.excludedAttributes = RelPanelState.excludedAttributes.filter(a => a !== attrName);
-            } else {
-                if (!RelPanelState.excludedAttributes.includes(attrName)) {
-                    RelPanelState.excludedAttributes.push(attrName);
-                }
-                delete RelPanelState.attributeMappings[attrName];
-            }
             const row = this.closest('tr');
             const nameCell = row.querySelector('td:nth-child(2)');
             const mappedCell = row.querySelector('td:nth-child(3)');
             if (this.checked) {
+                RelPanelState.excludedAttributes = RelPanelState.excludedAttributes.filter(a => a !== attrName);
+                const isMapped = !!RelPanelState.attributeMappings[attrName];
                 nameCell.innerHTML = attrName;
-                mappedCell.innerHTML = '<i class="bi bi-x-circle-fill text-danger"></i>';
+                mappedCell.innerHTML = isMapped
+                    ? '<i class="bi bi-check-circle-fill text-success"></i>'
+                    : '<i class="bi bi-x-circle-fill text-danger"></i>';
             } else {
+                if (!RelPanelState.excludedAttributes.includes(attrName)) {
+                    RelPanelState.excludedAttributes.push(attrName);
+                }
                 nameCell.innerHTML = `<span class="text-muted text-decoration-line-through">${attrName}</span>`;
                 mappedCell.innerHTML = '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>';
             }
