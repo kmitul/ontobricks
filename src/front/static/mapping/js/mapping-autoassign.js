@@ -77,8 +77,91 @@ window.AutoAssignModule = {
         
         this.initialized = true;
         this.updateStatus();
+        this.checkMetadataQuality();
     },
-    
+
+    /**
+     * Fetch catalog metadata and warn when table/column descriptions are missing.
+     * Missing descriptions reduce AI mapping accuracy.
+     */
+    checkMetadataQuality: async function() {
+        const warningEl = document.getElementById('metadataQualityWarning');
+        if (!warningEl) return;
+
+        let metadata;
+        try {
+            const resp = await fetch('/domain/metadata', { credentials: 'same-origin' });
+            const data = await resp.json();
+            if (!data.success || !data.has_metadata) {
+                warningEl.style.display = 'none';
+                return;
+            }
+            metadata = data.metadata;
+        } catch (e) {
+            console.warn('[AutoAssign] Could not fetch metadata for quality check:', e);
+            return;
+        }
+
+        const tables = metadata.tables || [];
+        if (tables.length === 0) {
+            warningEl.style.display = 'none';
+            return;
+        }
+
+        const tablesNoDesc = [];
+        const columnsNoDesc = [];
+
+        for (const t of tables) {
+            const tName = t.full_name || t.name || '?';
+            if (!t.comment || !t.comment.trim()) {
+                tablesNoDesc.push(tName);
+            }
+            for (const col of (t.columns || [])) {
+                if (!col.comment || !col.comment.trim()) {
+                    columnsNoDesc.push({ table: tName, column: col.name || '?' });
+                }
+            }
+        }
+
+        const totalMissing = tablesNoDesc.length + columnsNoDesc.length;
+        if (totalMissing === 0) {
+            warningEl.style.display = 'none';
+            return;
+        }
+
+        const collapseId = 'metaQualityDetails';
+        const tableRows = tablesNoDesc.map(t =>
+            `<li><i class="bi bi-table text-muted me-1"></i><code>${t}</code> — no table description</li>`
+        ).join('');
+        const colRows = columnsNoDesc.map(c =>
+            `<li><i class="bi bi-columns text-muted me-1"></i><code>${c.table}</code> › <strong>${c.column}</strong> — no column description</li>`
+        ).join('');
+
+        warningEl.innerHTML = `
+            <div class="alert alert-warning mb-0 py-2">
+                <div class="d-flex align-items-start gap-2">
+                    <i class="bi bi-exclamation-triangle-fill mt-1 flex-shrink-0"></i>
+                    <div class="flex-grow-1">
+                        <strong>Incomplete data source descriptions may reduce mapping accuracy.</strong>
+                        <span class="ms-1">${tablesNoDesc.length} table(s) and ${columnsNoDesc.length} column(s) are missing descriptions.</span>
+                        <button class="btn btn-link btn-sm py-0 px-1 ms-1 text-warning-emphasis text-decoration-none"
+                                type="button" data-bs-toggle="collapse" data-bs-target="#${collapseId}">
+                            <i class="bi bi-chevron-down" style="font-size:0.75rem;"></i> Show details
+                        </button>
+                        <a href="/domain/?section=metadata" class="btn btn-link btn-sm py-0 px-1 ms-1 text-warning-emphasis text-decoration-none">
+                            <i class="bi bi-pencil-square"></i> Edit descriptions
+                        </a>
+                        <div class="collapse mt-2" id="${collapseId}">
+                            <ul class="list-unstyled mb-0 small" style="max-height:180px;overflow-y:auto;">
+                                ${tableRows}${colRows}
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        warningEl.style.display = 'block';
+    },
+
     /**
      * Check if a saved task is still running and resume monitoring
      */
