@@ -2911,35 +2911,8 @@ async function autoExcludeAll() {
     const allProperties = MappingState.loadedOntology?.properties || [];
     const objectProperties = _filterObjectProperties(allProperties);
 
-    // Build the same node-resolution map as buildMappingGraph() so domain/range
-    // references (which may be local-names or full URIs) resolve correctly.
-    const validNodeIds = new Set(classes.map(c => c.name || c.localName));
-    const nodeIdByLower = new Map(classes.map(c => [(c.name || c.localName).toLowerCase(), c.name || c.localName]));
-    const resolveNodeId = id => {
-        if (!id) return null;
-        if (validNodeIds.has(id)) return id;
-        const lower = id.toLowerCase();
-        if (nodeIdByLower.has(lower)) return nodeIdByLower.get(lower);
-        const localPart = id.includes('#') ? id.split('#').pop() : id.includes('/') ? id.split('/').pop() : null;
-        if (localPart) {
-            if (validNodeIds.has(localPart)) return localPart;
-            if (nodeIdByLower.has(localPart.toLowerCase())) return nodeIdByLower.get(localPart.toLowerCase());
-        }
-        return null;
-    };
-
-    // Collect node IDs connected by at least one non-excluded ObjectProperty.
-    const nodesWithRelationships = new Set();
-    objectProperties.forEach(prop => {
-        if (!prop.excluded && prop.domain && prop.range) {
-            const srcId = resolveNodeId(prop.domain);
-            const tgtId = resolveNodeId(prop.range);
-            if (srcId) nodesWithRelationships.add(srcId);
-            if (tgtId) nodesWithRelationships.add(tgtId);
-        }
-    });
-
-    // Mirror the graph's "truly mapped" definition (sql_query entries only).
+    // "Not normal" = not yet mapped (no SQL query defined).
+    // Mapped entities and relationships always stay visible regardless of topology.
     const mappedEntityUris = new Set(
         (MappingState.config.entities || [])
             .filter(m => m.sql_query)
@@ -2953,18 +2926,12 @@ async function autoExcludeAll() {
             .filter(Boolean)
     );
 
-    // Candidate entities: not already excluded AND (unmapped OR no relationships).
-    // Entities that are both mapped AND connected stay visible.
+    // Candidate entities: not already excluded AND not mapped.
     const candidateEntityUris = classes
-        .filter(c => {
-            if (c.excluded) return false;
-            const isMapped = mappedEntityUris.has(c.uri);
-            const hasRelationships = nodesWithRelationships.has(c.name || c.localName);
-            return !(isMapped && hasRelationships);
-        })
+        .filter(c => !c.excluded && !mappedEntityUris.has(c.uri))
         .map(c => c.uri);
 
-    // Candidate relationships: unmapped ObjectProperties not already excluded.
+    // Candidate relationships: not already excluded AND not mapped.
     const candidateRelUris = objectProperties
         .filter(p => !p.excluded && !mappedRelUris.has(p.uri))
         .map(p => p.uri);
