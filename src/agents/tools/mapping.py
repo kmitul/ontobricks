@@ -42,13 +42,38 @@ def tool_submit_entity_mapping(
         .rstrip(";")
     )
 
+    # Restrict attribute_mappings to attributes declared in the ontology for this entity.
+    # This prevents the LLM from inventing mappings for columns that are not ontology
+    # data properties (e.g. mapping all table columns when the entity has none).
+    declared_attrs: set = set()
+    for entity in (ctx.ontology or {}).get("entities", []):
+        if entity.get("uri") == class_uri or entity.get("name") == class_name:
+            declared_attrs = set(entity.get("attributes", []))
+            break
+
+    raw_attr_mappings = attribute_mappings or {}
+    if declared_attrs:
+        filtered_mappings = {k: v for k, v in raw_attr_mappings.items() if k in declared_attrs}
+    else:
+        # Entity has no ontology attributes — discard anything the LLM may have invented.
+        filtered_mappings = {}
+
+    if len(filtered_mappings) < len(raw_attr_mappings):
+        discarded = set(raw_attr_mappings) - set(filtered_mappings)
+        logger.warning(
+            "tool_submit_entity_mapping: '%s' — discarded %d non-ontology attribute mapping(s): %s",
+            class_name,
+            len(discarded),
+            discarded,
+        )
+
     mapping = {
         "ontology_class": class_uri,
         "class_name": class_name,
         "sql_query": clean_sql,
         "id_column": id_column,
         "label_column": label_column,
-        "attribute_mappings": attribute_mappings or {},
+        "attribute_mappings": filtered_mappings,
     }
 
     logger.debug(
