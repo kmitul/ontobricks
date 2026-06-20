@@ -2911,14 +2911,34 @@ async function autoExcludeAll() {
     const allProperties = MappingState.loadedOntology?.properties || [];
     const objectProperties = _filterObjectProperties(allProperties);
 
-    // "Not normal" = not yet mapped (no SQL query defined).
-    // Mapped entities and relationships always stay visible regardless of topology.
-    const mappedEntityUris = new Set(
-        (MappingState.config.entities || [])
-            .filter(m => m.sql_query)
-            .map(m => m.ontology_class || m.class_uri)
-            .filter(Boolean)
-    );
+    // Resolve domain/range references (local-name or full URI) to canonical node names.
+    const validNodeIds = new Set(classes.map(c => c.name || c.localName));
+    const nodeIdByLower = new Map(classes.map(c => [(c.name || c.localName).toLowerCase(), c.name || c.localName]));
+    const resolveNodeId = id => {
+        if (!id) return null;
+        if (validNodeIds.has(id)) return id;
+        const lower = id.toLowerCase();
+        if (nodeIdByLower.has(lower)) return nodeIdByLower.get(lower);
+        const local = id.includes('#') ? id.split('#').pop() : id.includes('/') ? id.split('/').pop() : null;
+        if (local) {
+            if (validNodeIds.has(local)) return local;
+            if (nodeIdByLower.has(local.toLowerCase())) return nodeIdByLower.get(local.toLowerCase());
+        }
+        return null;
+    };
+
+    // Entities that appear in at least one ObjectProperty (as domain OR range).
+    // Entities connected ONLY by inheritance (rdfs:subClassOf) are not counted.
+    const nodesWithRelationships = new Set();
+    objectProperties.forEach(prop => {
+        if (prop.domain && prop.range) {
+            const srcId = resolveNodeId(prop.domain);
+            const tgtId = resolveNodeId(prop.range);
+            if (srcId) nodesWithRelationships.add(srcId);
+            if (tgtId) nodesWithRelationships.add(tgtId);
+        }
+    });
+
     const mappedRelUris = new Set(
         (MappingState.config.relationships || [])
             .filter(m => m.sql_query)
@@ -2926,12 +2946,13 @@ async function autoExcludeAll() {
             .filter(Boolean)
     );
 
-    // Candidate entities: not already excluded AND not mapped.
+    // Entities to exclude: not already excluded AND not connected via any ObjectProperty.
+    // This covers both pure orphans and inheritance-only entities.
     const candidateEntityUris = classes
-        .filter(c => !c.excluded && !mappedEntityUris.has(c.uri))
+        .filter(c => !c.excluded && !nodesWithRelationships.has(c.name || c.localName))
         .map(c => c.uri);
 
-    // Candidate relationships: not already excluded AND not mapped.
+    // Relationships to exclude: not already excluded AND not mapped (no SQL query).
     const candidateRelUris = objectProperties
         .filter(p => !p.excluded && !mappedRelUris.has(p.uri))
         .map(p => p.uri);
