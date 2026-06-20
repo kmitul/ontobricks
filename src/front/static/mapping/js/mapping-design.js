@@ -1004,9 +1004,15 @@ function loadEntityPanelContent(classUri, className, targetPanelBody = null) {
     const existingMapping = MappingState.config.entities.find(m => m.ontology_class === classUri);
     const classInfo = MappingState.loadedOntology?.classes?.find(c => c.uri === classUri);
     
-    const attributes = classInfo?.dataProperties || [];
-    
     const epAttrMap = existingMapping?.attribute_mappings || {};
+    // Primary source: ontology dataProperties. Fallback: synthesize from already-saved
+    // attribute_mappings so mapped attributes always appear even if the ontology config
+    // hasn't had sync_class_data_properties applied.
+    const ontologyAttrs = classInfo?.dataProperties || [];
+    const mappedOnlyAttrs = Object.keys(epAttrMap)
+        .filter(k => !ontologyAttrs.some(a => (a.name || a.localName) === k))
+        .map(k => ({ name: k }));
+    const attributes = [...ontologyAttrs, ...mappedOnlyAttrs];
     const epHasSql = !!(existingMapping?.sql_query);
     const epHasId = !!(existingMapping?.id_column);
     const epHasLabel = !!(existingMapping?.label_column);
@@ -1179,7 +1185,12 @@ function loadRelationshipPanelContent(ontologyProperty, targetPanelBody = null) 
     const hasSrcId = !!(existingMapping?.source_id_column);
     const hasTgtId = !!(existingMapping?.target_id_column);
     const relAttrMap = existingMapping?.attribute_mappings || {};
-    const relAttributes = ontologyProperty?.properties || [];
+    // Primary source: ontology properties. Fallback: synthesize from saved attribute_mappings.
+    const ontologyRelAttrs = ontologyProperty?.properties || [];
+    const relMappedOnlyAttrs = Object.keys(relAttrMap)
+        .filter(k => !ontologyRelAttrs.some(a => (a.name || a.localName) === k))
+        .map(k => ({ name: k }));
+    const relAttributes = [...ontologyRelAttrs, ...relMappedOnlyAttrs];
     const mappedAttrCount = relAttributes.filter(a => {
         const n = a.name || a.localName || '';
         return n && relAttrMap[n];
@@ -1373,7 +1384,11 @@ function initEntityPanel(classUri, className, existingMapping, classInfo) {
     EntityPanelState.idColumn = existingMapping?.id_column || null;
     EntityPanelState.labelColumn = existingMapping?.label_column || null;
     EntityPanelState.attributeMappings = existingMapping?.attribute_mappings ? {...existingMapping.attribute_mappings} : {};
-    EntityPanelState.attributes = classInfo?.dataProperties || [];
+    const _epOntAttrs = classInfo?.dataProperties || [];
+    const _epMappedOnly = Object.keys(EntityPanelState.attributeMappings)
+        .filter(k => !_epOntAttrs.some(a => (a.name || a.localName) === k))
+        .map(k => ({ name: k }));
+    EntityPanelState.attributes = [..._epOntAttrs, ..._epMappedOnly];
     EntityPanelState.excludedAttributes = existingMapping?.excluded_attributes ? [...existingMapping.excluded_attributes] : [];
     
     updateEntityPanelSaveBtn();
@@ -1669,7 +1684,11 @@ function initRelationshipPanel(ontologyProperty, existingMapping) {
     RelPanelState.sourceIdColumn = existingMapping?.source_id_column || null;
     RelPanelState.targetIdColumn = existingMapping?.target_id_column || null;
     RelPanelState.attributeMappings = existingMapping?.attribute_mappings ? {...existingMapping.attribute_mappings} : {};
-    RelPanelState.attributes = ontologyProperty?.properties || [];
+    const _rpOntAttrs = ontologyProperty?.properties || [];
+    const _rpMappedOnly = Object.keys(RelPanelState.attributeMappings)
+        .filter(k => !_rpOntAttrs.some(a => (a.name || a.localName) === k))
+        .map(k => ({ name: k }));
+    RelPanelState.attributes = [..._rpOntAttrs, ..._rpMappedOnly];
     RelPanelState.excludedAttributes = existingMapping?.excluded_attributes ? [...existingMapping.excluded_attributes] : [];
     
     updateRelPanelSaveBtn();
