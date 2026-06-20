@@ -2939,23 +2939,14 @@ async function autoExcludeAll() {
         }
     });
 
-    const mappedRelUris = new Set(
-        (MappingState.config.relationships || [])
-            .filter(m => m.sql_query)
-            .map(m => m.property)
-            .filter(Boolean)
-    );
-
     // Entities to exclude: not already excluded AND not connected via any ObjectProperty.
     // This covers both pure orphans and inheritance-only entities.
     const candidateEntityUris = classes
         .filter(c => !c.excluded && !nodesWithRelationships.has(c.name || c.localName))
         .map(c => c.uri);
 
-    // Relationships to exclude: not already excluded AND not mapped (no SQL query).
-    const candidateRelUris = objectProperties
-        .filter(p => !p.excluded && !mappedRelUris.has(p.uri))
-        .map(p => p.uri);
+    // Relationships are never auto-excluded.
+    const candidateRelUris = [];
 
     if (candidateEntityUris.length === 0 && candidateRelUris.length === 0) {
         showNotification('Nothing to auto-exclude', 'info', 2000);
