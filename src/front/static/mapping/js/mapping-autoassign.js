@@ -270,6 +270,12 @@ window.AutoAssignModule = {
             });
         });
         
+        // Excluded counts
+        const excludedEntityCount = allClasses.filter(c => c.excluded).length;
+        const excludedRelCount = allProperties.filter(p =>
+            p.excluded || excludedNames.has(p.domain) || excludedNames.has(p.range)
+        ).length;
+
         // Update UI - show assigned / total (non-excluded)
         const assignedEntityCount = classes.length - unassignedEntities.length;
         const assignedRelCount = properties.length - unassignedRels.length;
@@ -278,24 +284,28 @@ window.AutoAssignModule = {
         const attrCountEl = document.getElementById('autoAssignAttrCount');
         const reassignBtn = document.getElementById('reassignAttrsBtn');
 
-        if (entityCountEl) entityCountEl.textContent = `${assignedEntityCount} / ${classes.length}`;
-        if (relCountEl) relCountEl.textContent = `${assignedRelCount} / ${properties.length}`;
+        const _excl = (n) => n > 0 ? ` <span class="text-warning-emphasis" title="${n} excluded" style="font-size:0.72rem;">· ${n} excl.</span>` : '';
+        if (entityCountEl) entityCountEl.innerHTML = `${assignedEntityCount} / ${classes.length}${_excl(excludedEntityCount)}`;
+        if (relCountEl) relCountEl.innerHTML = `${assignedRelCount} / ${properties.length}${_excl(excludedRelCount)}`;
 
-        // Compute attribute completion across mapped entities
+        // Compute attribute completion across mapped entities (non-excluded)
         let totalAttributes = 0;
         let mappedAttributes = 0;
+        let excludedAttrCount = 0;
         for (const cls of classes) {
             const dataProps = cls.dataProperties || [];
             if (dataProps.length === 0) continue;
             totalAttributes += dataProps.length;
             const em = mappingByClass[cls.uri] || {};
             const attrMap = em.attribute_mappings || {};
+            const exclAttrs = new Set(em.excluded_attributes || []);
+            excludedAttrCount += exclAttrs.size;
             for (const dp of dataProps) {
                 const name = dp.name || dp.localName || '';
                 if (name && attrMap[name]) mappedAttributes++;
             }
         }
-        if (attrCountEl) attrCountEl.textContent = `${mappedAttributes} / ${totalAttributes}`;
+        if (attrCountEl) attrCountEl.innerHTML = `${mappedAttributes} / ${totalAttributes}${_excl(excludedAttrCount)}`;
 
         // Draw gauges (reuses _drawMappingGauge from mapping-information.js)
         const entityPct = classes.length > 0 ? (assignedEntityCount / classes.length) * 100 : null;
