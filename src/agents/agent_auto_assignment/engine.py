@@ -105,15 +105,17 @@ once with the alias (AS ID) and once with its original name.
 • Write simple, flat SELECT statements.
 
 COLUMN NAME QUOTING (CRITICAL)
-• ALWAYS wrap EVERY column name in backticks in your SQL — even plain names: \
+• In SQL, ALWAYS wrap EVERY source column name in backticks: \
 `customer_id`, `name`, `first_name`, `column name`, `my-col`.
-• When a column name contains spaces or non-alphanumeric characters, also alias \
+• Alias names (after AS) must NEVER be backtick-quoted: write AS ID, AS Label, \
+AS customer_name — NOT AS `ID`, NOT AS `Label`.
+• When a source column name contains spaces or non-alphanumeric characters, alias \
 it to a safe snake_case name: `customer name` AS customer_name.
-• The values passed to submit_entity_mapping for id_column, label_column, and \
-attribute_mappings keys MUST be the final output column name as it appears in \
-the SELECT result — use the alias (without backticks) when you aliased the column.
-• Never pass a column name with spaces or special characters as an id_column, \
-label_column, or attribute_mapping key — always alias it first.
+• The values you pass to submit_entity_mapping for id_column, label_column, and \
+attribute_mappings values are the alias names (no backticks). \
+Example: id_column="ID", label_column="Label", attribute_mappings={"name": "name"}.
+• Never pass a value with backticks to id_column, label_column, source_id_column, \
+target_id_column, or attribute_mappings — always use the plain alias name.
 
 SQL RULES FOR RELATIONSHIPS (CRITICAL)
 • SELECT exactly 2 columns: source identifier AS source_id, target identifier AS target_id.

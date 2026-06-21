@@ -19,6 +19,13 @@ logger = get_logger(__name__)
 # =====================================================
 
 
+def _strip_backticks(value: str) -> str:
+    """Remove surrounding backticks from a column name if present."""
+    if value and value.startswith("`") and value.endswith("`") and len(value) > 1:
+        return value[1:-1]
+    return value
+
+
 def tool_submit_entity_mapping(
     ctx: ToolContext,
     *,
@@ -31,6 +38,12 @@ def tool_submit_entity_mapping(
     **_kwargs,
 ) -> str:
     """Record a completed entity mapping."""
+    # Normalise column names: strip any surrounding backticks the LLM may have added.
+    id_column = _strip_backticks(id_column)
+    label_column = _strip_backticks(label_column)
+    if attribute_mappings:
+        attribute_mappings = {k: _strip_backticks(v) for k, v in attribute_mappings.items()}
+
     logger.info("tool_submit_entity_mapping: '%s' (uri=%s)", class_name, class_uri)
     if not class_uri or not sql_query:
         logger.warning("tool_submit_entity_mapping: missing required fields")
@@ -152,6 +165,10 @@ def tool_submit_relationship_mapping(
     **_kwargs,
 ) -> str:
     """Record a completed relationship mapping."""
+    # Normalise column names: strip any surrounding backticks the LLM may have added.
+    source_id_column = _strip_backticks(source_id_column)
+    target_id_column = _strip_backticks(target_id_column)
+
     logger.info(
         "tool_submit_relationship_mapping: '%s' (uri=%s)", property_name, property_uri
     )
