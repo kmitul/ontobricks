@@ -51,6 +51,21 @@ def tool_submit_entity_mapping(
             declared_attrs = set(entity.get("attributes", []))
             break
 
+    # Retrieve the existing mapping so we can preserve user-set excluded_attributes.
+    existing_idx = next(
+        (
+            i
+            for i, m in enumerate(ctx.entity_mappings)
+            if m.get("ontology_class") == class_uri
+        ),
+        -1,
+    )
+    existing_excl: list = (
+        ctx.entity_mappings[existing_idx].get("excluded_attributes", [])
+        if existing_idx >= 0
+        else []
+    )
+
     raw_attr_mappings = attribute_mappings or {}
     if declared_attrs:
         filtered_mappings = {k: v for k, v in raw_attr_mappings.items() if k in declared_attrs}
@@ -58,10 +73,15 @@ def tool_submit_entity_mapping(
         # Entity has no ontology attributes — discard anything the LLM may have invented.
         filtered_mappings = {}
 
+    # Honour user-excluded attributes: remove them even if the agent tried to map them.
+    if existing_excl:
+        filtered_mappings = {k: v for k, v in filtered_mappings.items() if k not in existing_excl}
+
     if len(filtered_mappings) < len(raw_attr_mappings):
         discarded = set(raw_attr_mappings) - set(filtered_mappings)
         logger.warning(
-            "tool_submit_entity_mapping: '%s' — discarded %d non-ontology attribute mapping(s): %s",
+            "tool_submit_entity_mapping: '%s' — discarded %d attribute mapping(s) "
+            "(non-ontology or user-excluded): %s",
             class_name,
             len(discarded),
             discarded,
@@ -75,23 +95,19 @@ def tool_submit_entity_mapping(
         "label_column": label_column,
         "attribute_mappings": filtered_mappings,
     }
+    # Preserve user-set excluded_attributes across auto-map runs.
+    if existing_excl:
+        mapping["excluded_attributes"] = existing_excl
 
     logger.debug(
-        "tool_submit_entity_mapping: '%s' — ID=%s, Label=%s, attrs=%d",
+        "tool_submit_entity_mapping: '%s' — ID=%s, Label=%s, attrs=%d, excl=%d",
         class_name,
         id_column,
         label_column,
         len(mapping["attribute_mappings"]),
+        len(existing_excl),
     )
 
-    existing_idx = next(
-        (
-            i
-            for i, m in enumerate(ctx.entity_mappings)
-            if m.get("ontology_class") == class_uri
-        ),
-        -1,
-    )
     if existing_idx >= 0:
         ctx.entity_mappings[existing_idx] = mapping
         logger.debug(
@@ -165,6 +181,21 @@ def tool_submit_relationship_mapping(
     else:
         src_class, tgt_class = domain, range_class
 
+    # Preserve user-set excluded_attributes from the existing relationship mapping.
+    existing_idx = next(
+        (
+            i
+            for i, m in enumerate(ctx.relationships)
+            if m.get("property") == property_uri
+        ),
+        -1,
+    )
+    existing_excl: list = (
+        ctx.relationships[existing_idx].get("excluded_attributes", [])
+        if existing_idx >= 0
+        else []
+    )
+
     mapping = {
         "property": property_uri,
         "property_name": property_name,
@@ -180,23 +211,18 @@ def tool_submit_relationship_mapping(
         "source_class_label": _extract_label(src_class),
         "target_class_label": _extract_label(tgt_class),
     }
+    if existing_excl:
+        mapping["excluded_attributes"] = existing_excl
 
     logger.debug(
-        "tool_submit_relationship_mapping: '%s' — src_col=%s, tgt_col=%s, direction=%s",
+        "tool_submit_relationship_mapping: '%s' — src_col=%s, tgt_col=%s, direction=%s, excl=%d",
         property_name,
         source_id_column,
         target_id_column,
         direction,
+        len(existing_excl),
     )
 
-    existing_idx = next(
-        (
-            i
-            for i, m in enumerate(ctx.relationships)
-            if m.get("property") == property_uri
-        ),
-        -1,
-    )
     if existing_idx >= 0:
         ctx.relationships[existing_idx] = mapping
         logger.debug(

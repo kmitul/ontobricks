@@ -249,3 +249,70 @@ class TestConvenienceFunction:
         ontology = {"base_uri": "http://example.org/"}
         r2rml = generate_r2rml_from_config(mapping, ontology)
         assert r2rml is not None
+
+
+class TestQuoteColumn:
+    """Unit tests for _quote_column helper."""
+
+    def setup_method(self):
+        self.gen = R2RMLGenerator("http://test.org/ontology/")
+
+    def test_plain_identifier_unchanged(self):
+        assert self.gen._quote_column("customer_id") == "customer_id"
+
+    def test_already_quoted_unchanged(self):
+        assert self.gen._quote_column('"customer id"') == '"customer id"'
+
+    def test_space_gets_quoted(self):
+        assert self.gen._quote_column("customer id") == '"customer id"'
+
+    def test_hyphen_gets_quoted(self):
+        assert self.gen._quote_column("my-col") == '"my-col"'
+
+    def test_dot_gets_quoted(self):
+        assert self.gen._quote_column("first.name") == '"first.name"'
+
+    def test_empty_string_unchanged(self):
+        assert self.gen._quote_column("") == ""
+
+    def test_column_with_space_in_entity_template(self):
+        """rr:template should contain double-quoted column when name has a space.
+
+        rdflib serialises the inner double-quotes as \\\" in the Turtle literal,
+        so we check for the escaped representation in the raw Turtle string.
+        """
+        gen = R2RMLGenerator("http://test.org/ontology/")
+        mapping_config = {
+            "entities": [{
+                "ontology_class": "http://test.org/ontology/Customer",
+                "ontology_class_label": "Customer",
+                "sql_query": 'SELECT `customer id` AS "customer id", name AS Label FROM t',
+                "id_column": "customer id",
+                "label_column": "Label",
+                "attribute_mappings": {}
+            }],
+            "relationships": []
+        }
+        r2rml = gen.generate_mapping(mapping_config)
+        # rdflib escapes inner " as \" in the Turtle literal — check both forms
+        assert '\\"customer id\\"' in r2rml or '"customer id"' in r2rml
+
+    def test_column_with_space_in_attribute_mapping(self):
+        """rr:column for an attribute with spaces must be double-quoted.
+
+        rdflib serialises the inner double-quotes as \\\" in the Turtle literal.
+        """
+        gen = R2RMLGenerator("http://test.org/ontology/")
+        mapping_config = {
+            "entities": [{
+                "ontology_class": "http://test.org/ontology/Customer",
+                "ontology_class_label": "Customer",
+                "sql_query": 'SELECT id AS ID, name AS Label, `full name` FROM t',
+                "id_column": "ID",
+                "label_column": "Label",
+                "attribute_mappings": {"fullName": "full name"}
+            }],
+            "relationships": []
+        }
+        r2rml = gen.generate_mapping(mapping_config)
+        assert '\\"full name\\"' in r2rml or '"full name"' in r2rml

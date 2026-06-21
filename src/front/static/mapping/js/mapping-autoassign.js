@@ -264,9 +264,11 @@ window.AutoAssignModule = {
             if (dataProps.length === 0) return false;
             const em = mappingByClass[cls.uri] || {};
             const attrMap = em.attribute_mappings || {};
+            const exclAttrs = new Set(em.excluded_attributes || []);
+            // Only count included attributes as missing.
             return dataProps.some(dp => {
                 const name = dp.name || dp.localName || '';
-                return name && !attrMap[name];
+                return name && !exclAttrs.has(name) && !attrMap[name];
             });
         });
         
@@ -289,20 +291,23 @@ window.AutoAssignModule = {
         if (relCountEl) relCountEl.innerHTML = `${assignedRelCount} / ${properties.length}${_excl(excludedRelCount)}`;
 
         // Compute attribute completion across mapped entities (non-excluded)
+        // Only included attributes (not in excluded_attributes) count towards the total.
         let totalAttributes = 0;
         let mappedAttributes = 0;
         let excludedAttrCount = 0;
         for (const cls of classes) {
             const dataProps = cls.dataProperties || [];
             if (dataProps.length === 0) continue;
-            totalAttributes += dataProps.length;
             const em = mappingByClass[cls.uri] || {};
             const attrMap = em.attribute_mappings || {};
             const exclAttrs = new Set(em.excluded_attributes || []);
             excludedAttrCount += exclAttrs.size;
             for (const dp of dataProps) {
                 const name = dp.name || dp.localName || '';
-                if (name && attrMap[name]) mappedAttributes++;
+                if (!name) continue;
+                if (exclAttrs.has(name)) continue;  // excluded — don't count in total
+                totalAttributes++;
+                if (attrMap[name]) mappedAttributes++;
             }
         }
         if (attrCountEl) attrCountEl.innerHTML = `${mappedAttributes} / ${totalAttributes}${_excl(excludedAttrCount)}`;
@@ -525,7 +530,11 @@ window.AutoAssignModule = {
         }
         
         const entities = unassignedClasses.map(entity => {
-            const attributes = (entity.dataProperties || []).map(a => a.name || a.localName || a);
+            const existingMapping = entityMappings.find(m => m.ontology_class === entity.uri);
+            const exclAttrs = new Set(existingMapping?.excluded_attributes || []);
+            const attributes = (entity.dataProperties || [])
+                .map(a => a.name || a.localName || a)
+                .filter(a => !exclAttrs.has(a));
             return {
                 uri: entity.uri,
                 name: entity.label || entity.name || entity.localName,
@@ -610,16 +619,17 @@ window.AutoAssignModule = {
             if (uri) mappingByClass[uri] = m;
         });
         
-        // Find non-excluded entities with missing attributes
+        // Find non-excluded entities with missing included attributes
         const partialEntities = classes.filter(cls => {
             if (!assignedEntityUris.has(cls.uri)) return false;
             const dataProps = cls.dataProperties || [];
             if (dataProps.length === 0) return false;
             const em = mappingByClass[cls.uri] || {};
             const attrMap = em.attribute_mappings || {};
+            const exclAttrs = new Set(em.excluded_attributes || []);
             return dataProps.some(dp => {
                 const name = dp.name || dp.localName || '';
-                return name && !attrMap[name];
+                return name && !exclAttrs.has(name) && !attrMap[name];
             });
         });
         
@@ -628,9 +638,13 @@ window.AutoAssignModule = {
             return;
         }
         
-        // Build data for backend (same format as start())
+        // Build data for backend (same format as start()) — exclude user-excluded attributes
         const entities = partialEntities.map(entity => {
-            const attributes = (entity.dataProperties || []).map(a => a.name || a.localName || a);
+            const existingMapping = entityMappings.find(m => m.ontology_class === entity.uri);
+            const exclAttrs = new Set(existingMapping?.excluded_attributes || []);
+            const attributes = (entity.dataProperties || [])
+                .map(a => a.name || a.localName || a)
+                .filter(a => !exclAttrs.has(a));
             return {
                 uri: entity.uri,
                 name: entity.label || entity.name || entity.localName,

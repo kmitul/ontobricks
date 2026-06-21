@@ -405,23 +405,46 @@ FROM main.default.person_collaboration
 
 Click **Manual** in the sidebar for a tree-based view of all entities and relationships organized by mapping status. The bottom panel shares the same UI and functionality as the Designer view panel — clicking an item opens the same Wizard/SQL/Mapping tabs.
 
+#### Excluding and Including Attributes
+
+By default every ontology attribute is **included** in the mapping. The **Status** tab of the bottom panel shows an attributes table where each row has a checkbox:
+
+- **Checked (✓)** — attribute is included; it must be assigned to a SQL column and will be emitted in the R2RML export.
+- **Unchecked** — attribute is excluded; it is shown with strikethrough, skipped in gap reporting, never mapped by Auto-Map, and not emitted in the R2RML export.
+
+To exclude attributes:
+
+1. Open an entity panel (click a node on the canvas).
+2. Select the **Status** tab.
+3. Uncheck any attributes you do not want to map.
+4. Click **Save** — exclusions are persisted immediately.
+
+To bulk-exclude all attributes that have no column assignment yet, click the **Auto-Exclude unmapped** button at the bottom of the attributes table.
+
+> **Tip:** Exclusions survive an Unmap / re-map cycle. If you right-click an entity and choose **Unmap**, the SQL and column assignments are cleared but the attribute checkboxes stay as you left them. Auto-Map also respects exclusions — it will never map or re-include an excluded attribute.
+
+**Effect on the canvas:** An entity node is green only when every *included* attribute has a column assigned. Excluded attributes do not count towards the orange "attributes missing" indicator.
+
+**Effect on the Auto-Map KPI page:** The Attribute gauge and tile count only included attributes. If you have 14 attributes and exclude 1, the tile shows `13 / 13` (100%) rather than `13 / 14`.
+
 ### Auto-Map (Sidebar)
 
 Click **Auto-Map** in the sidebar to batch-assign all unmapped entities and relationships:
 
-1. The page shows counts of unassigned entities and relationships
-2. Click **Start Auto-Map** to launch an asynchronous task
-3. Progress is tracked with a progress bar — you can navigate away and return later
-4. Results are displayed in a report table showing success/failure per item
+1. The page shows counts of unassigned entities and relationships, including how many are excluded (`· N excl.`).
+2. If tables or columns are missing `COMMENT` descriptions, a **metadata quality warning** is displayed with a collapsible list and a link to the Domain → Metadata editor. Poor descriptions reduce LLM mapping accuracy.
+3. Click **Start Auto-Map** to launch an asynchronous task.
+4. Progress is tracked with a progress bar — you can navigate away and return later.
+5. Results are displayed in a report table showing success/failure per item.
 
-**Re-Assign Missing Attributes**: If some entities are assigned but have incomplete attribute mappings, a third card appears showing the count and a **Re-Assign Missing Attributes** button. This re-runs auto-mapping only for those specific entities to fill in the missing attribute mappings.
+**Re-Assign Missing Attributes**: If some entities are assigned but have incomplete attribute mappings, a third card appears showing the count and a **Re-Assign Missing Attributes** button. This re-runs auto-mapping only for those specific entities to fill in the missing *included* attribute mappings (excluded attributes are ignored).
 
 ### Validate Your Mappings
 
 Mapping validation checks:
 - All ontology classes have entity mappings
 - All object properties have relationship mappings
-- All attributes of mapped entities are assigned to columns
+- All *included* attributes of mapped entities are assigned to columns (excluded attributes are ignored)
 - No missing or incomplete mappings
 
 A green checkmark appears in the navbar when all mappings are complete.
@@ -782,6 +805,9 @@ Domains are saved in a versioned JSON format and can be stored in Unity Catalog 
 2. **Verify ID Columns**: Ensure IDs are unique and stable
 3. **Test SQL Queries**: Always test relationship queries before saving
 4. **Use Consistent Column Types**: Source/target columns should match entity IDs
+5. **Exclude Irrelevant Attributes Early**: Before running Auto-Map, open each entity's Status tab and uncheck attributes you don't need. Auto-Map will skip excluded attributes, producing leaner SQL with no extra columns.
+6. **Quote Special Column Names**: If a source column contains spaces, hyphens, or dots, use backtick quoting in your SQL (`` `column name` AS column_name ``) so the mapping and R2RML export work correctly.
+7. **Use Metadata Quality Warning**: Check the Auto-Map page for the metadata quality warning before running Auto-Map — adding table and column descriptions in Domain → Metadata significantly improves mapping accuracy.
 
 ### Digital Twin Tips
 

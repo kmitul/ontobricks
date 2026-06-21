@@ -1,0 +1,39 @@
+# Documentation Update — Attribute Include/Exclude, Column Quoting, Auto-Map Improvements
+
+## Context
+
+Documentation refresh following the complete implementation of per-attribute include/exclude
+in the Mapping Designer, Auto-Map KPI excluded counts, metadata quality warning, column-name
+quoting in SQL and R2RML, Auto-Exclude canvas logic refinement, and all related bug fixes.
+No code changes were made in this session — documentation only.
+
+## Changes
+
+1. `docs/features.md`
+   - Updated **Data Mapping** section to document per-attribute include/exclude, Auto-Exclude
+     unmapped attributes button, includes-aware Partial Mapping Detection, Auto-Map KPI excluded
+     counts, Metadata Quality Warning, column-name quoting (backtick SQL + R2RML double-quote),
+     and R2RML excluded-attribute suppression.
+
+2. `docs/user-guide.md`
+   - Added **Excluding and Including Attributes** subsection under Step 2 (Map Data Sources)
+     covering the Status tab checkbox workflow, Auto-Exclude unmapped, canvas colour semantics,
+     and KPI impact.
+   - Updated **Auto-Map** subsection to mention excluded-counts badge and Metadata Quality Warning.
+   - Updated **Validate Your Mappings** to clarify that only included attributes are checked.
+   - Extended **Mapping Strategy** tips with three new items: exclude irrelevant attributes early,
+     quote special column names, and use the metadata quality warning.
+
+3. `docs/sphinx/changelog.rst`
+   - Added v0.6.0 section covering all features, bug fixes, and new tests from this development
+     cycle.
+
+## Modified Files
+
+- `docs/features.md`
+- `docs/user-guide.md`
+- `docs/sphinx/changelog.rst`
+
+## Test Results
+
+108 / 108 passed (`tests/units/mapping/`) — no regressions.

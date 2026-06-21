@@ -95,7 +95,7 @@ SQL RULES FOR ENTITIES (CRITICAL)
 • The FIRST column MUST be aliased AS ID (the entity identifier).
 • The SECOND column MUST be aliased AS Label (human-readable name).
 • If the entity has attributes (non-empty "attributes" list), add one column per \
-attribute after ID and Label (use original column names, no alias).
+attribute after ID and Label.
 • If the entity has NO attributes, select ONLY ID and Label — no extra columns.
 • If the same column serves as both an alias and an attribute, include it twice: \
 once with the alias (AS ID) and once with its original name.
@@ -104,10 +104,22 @@ once with the alias (AS ID) and once with its original name.
 • Do NOT use ORDER BY, CTEs, or subqueries unless absolutely necessary.
 • Write simple, flat SELECT statements.
 
+COLUMN NAME QUOTING (CRITICAL)
+• Always wrap column names that contain spaces, hyphens, dots or other non-alphanumeric \
+characters with backticks: `column name`, `my-col`, `first.name`.
+• When a column name would be unsafe in a URI or as a mapping key, alias it to a \
+safe snake_case name without spaces: `customer name` AS customer_name.
+• The values passed to submit_entity_mapping for id_column, label_column, and \
+attribute_mappings keys MUST be the final output column name as it appears in \
+the SELECT result — use the alias when you aliased the column.
+• Never pass a column name with spaces or special characters as an id_column, \
+label_column, or attribute_mapping key — always alias it first.
+
 SQL RULES FOR RELATIONSHIPS (CRITICAL)
 • SELECT exactly 2 columns: source identifier AS source_id, target identifier AS target_id.
 • If both columns are in the SAME table, query only that table (no joins).
 • Do NOT add LIMIT or ORDER BY.
+• Apply the same backtick-quoting rules as for entity SQL.
 
 ATTRIBUTE MAPPING
 • In submit_entity_mapping, provide attribute_mappings: a JSON object mapping each \
