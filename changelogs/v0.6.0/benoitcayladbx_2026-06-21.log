@@ -24,3 +24,35 @@ as soon as data sources are loaded or edited.
 
 ### Test results
 2615 passed, 57 skipped — 5 pre-existing failures (lakebase dependency + SHACL service, unrelated)
+
+---
+
+# Mapping Information page: attribute KPI now honours excluded_attributes
+
+## Context
+
+The Mapping Information page (mapping-information.js) was computing
+totalAttributes/mappedAttributes across all dataProperties, ignoring
+excluded_attributes — showing wrong percentages and counts in the gauges.
+
+## Changes
+
+1. `src/front/static/global/js/mapping-information.js`
+   - `updateMappingCompletionStatus`: excluded attributes are now skipped
+     when computing totalAttributes/mappedAttributes, matching the Auto-Map
+     page logic.
+   - Added `· N excl.` badges on entity, relationship, and attribute count
+     spans when items are excluded (same pattern as mapping-autoassign.js).
+   - `renderSummaryDetailLists`: entity detail-list badge now shows
+     `attrMapped / includedProps.length` (excluded attrs stripped), and
+     appends `· N excl.` when the entity has excluded attributes.
+   - `isMapped` check now requires `em.sql_query` (a stub mapping with only
+     excluded_attributes no longer counts as "mapped").
+
+## Modified Files
+
+- `src/front/static/global/js/mapping-information.js`
+
+## Test Results
+
+2418 / 2418 passed — no regressions.
