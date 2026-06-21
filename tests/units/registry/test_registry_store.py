@@ -1260,8 +1260,13 @@ from datetime import datetime  # noqa: E402
 def _collab_store(monkeypatch, cur):
     """A Lakebase store whose ``_connect`` yields *cur* and whose collab
     tables are already marked present (skips the lazy DDL probe).
+
+    Also stubs ``_require_psycopg`` so the tests pass without psycopg
+    installed: _ScriptedConn.cursor() already accepts and ignores the
+    ``row_factory`` kwarg, so (None, None) is a safe stub.
     """
     from contextlib import contextmanager
+    import back.objects.registry.store.lakebase.store as _store_mod
 
     store = _make_lakebase_store(monkeypatch)
     store._registry_id = "rid-1"          # skip registry-id resolution
@@ -1272,6 +1277,9 @@ def _collab_store(monkeypatch, cur):
         yield _ScriptedConn(cur)
 
     monkeypatch.setattr(store, "_connect", fake_connect)
+    # Stub out the psycopg import guard — _ScriptedConn.cursor() ignores
+    # row_factory so None is a safe placeholder for dict_row.
+    monkeypatch.setattr(_store_mod, "_require_psycopg", lambda: (None, None))
     return store
 
 
