@@ -37,3 +37,46 @@ No code changes were made in this session — documentation only.
 ## Test Results
 
 108 / 108 passed (`tests/units/mapping/`) — no regressions.
+
+---
+
+# Always-Quote Column Names in R2RML and Agent SQL
+
+## Context
+
+User noted that the conditional quoting in `_quote_column` (only quote when not a plain
+identifier) could still miss edge cases: SQL reserved words, digit-leading names, or any
+future naming convention. Simpler and safer to always quote.
+
+## Changes
+
+1. `src/back/core/w3c/r2rml/R2RMLGenerator.py`
+   - `_quote_column`: removed the conditional check — now unconditionally wraps every
+     column name in double-quotes per R2RML spec §7.4.
+
+2. `src/back/core/w3c/r2rml/R2RMLParser.py`
+   - Added `_unquote_column()` helper that strips double-quotes when reading column names
+     back from R2RML.
+   - Applied `_unquote_column` to `id_column` (from `rr:template`), `object_column`
+     (from `rr:column`), and `target_id_column` (from relationship templates).
+
+3. `src/agents/agent_auto_assignment/engine.py`
+   - Updated `COLUMN NAME QUOTING` section of the system prompt: agent is now instructed
+     to ALWAYS backtick-quote every column name in SQL, even plain identifiers.
+
+4. `tests/units/mapping/test_r2rml_generator.py`
+   - `test_plain_identifier_unchanged` renamed to `test_plain_identifier_always_quoted`;
+     expectation updated to `"customer_id"`.
+   - Relationship URI template assertion updated to check presence of the class path
+     and column name rather than the exact unquoted template string.
+
+## Modified Files
+
+- `src/back/core/w3c/r2rml/R2RMLGenerator.py`
+- `src/back/core/w3c/r2rml/R2RMLParser.py`
+- `src/agents/agent_auto_assignment/engine.py`
+- `tests/units/mapping/test_r2rml_generator.py`
+
+## Test Results
+
+108 / 108 passed (`tests/units/mapping/`) — no regressions.

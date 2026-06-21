@@ -105,13 +105,13 @@ once with the alias (AS ID) and once with its original name.
 • Write simple, flat SELECT statements.
 
 COLUMN NAME QUOTING (CRITICAL)
-• Always wrap column names that contain spaces, hyphens, dots or other non-alphanumeric \
-characters with backticks: `column name`, `my-col`, `first.name`.
-• When a column name would be unsafe in a URI or as a mapping key, alias it to a \
-safe snake_case name without spaces: `customer name` AS customer_name.
+• ALWAYS wrap EVERY column name in backticks in your SQL — even plain names: \
+`customer_id`, `name`, `first_name`, `column name`, `my-col`.
+• When a column name contains spaces or non-alphanumeric characters, also alias \
+it to a safe snake_case name: `customer name` AS customer_name.
 • The values passed to submit_entity_mapping for id_column, label_column, and \
 attribute_mappings keys MUST be the final output column name as it appears in \
-the SELECT result — use the alias when you aliased the column.
+the SELECT result — use the alias (without backticks) when you aliased the column.
 • Never pass a column name with spaces or special characters as an id_column, \
 label_column, or attribute_mapping key — always alias it first.
 
@@ -119,7 +119,7 @@ SQL RULES FOR RELATIONSHIPS (CRITICAL)
 • SELECT exactly 2 columns: source identifier AS source_id, target identifier AS target_id.
 • If both columns are in the SAME table, query only that table (no joins).
 • Do NOT add LIMIT or ORDER BY.
-• Apply the same backtick-quoting rules as for entity SQL.
+• Apply the same always-backtick-quote rule as for entity SQL.
 
 ATTRIBUTE MAPPING
 • In submit_entity_mapping, provide attribute_mappings: a JSON object mapping each \

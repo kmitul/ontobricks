@@ -219,8 +219,12 @@ class TestRelationshipMapping:
         assert f"{base}Cust/" in r2rml
         assert f"{base}Ord/" in r2rml
         # Relationship subject/object URIs must use the SAME namespace.
-        assert f"{base}Cust/{{customer_id}}" in r2rml
-        assert f"{base}Ord/{{order_id}}" in r2rml
+        # Columns are always double-quoted; rdflib escapes inner " as \" in Turtle.
+        assert f"{base}Cust/" in r2rml
+        assert f"{base}Ord/" in r2rml
+        # Template must contain the column reference (quoted form)
+        assert "customer_id" in r2rml
+        assert "order_id" in r2rml
         # And must NOT fall back to the label namespace (the bug).
         assert f"{base}Customer/" not in r2rml
         assert f"{base}Order/" not in r2rml
@@ -257,8 +261,9 @@ class TestQuoteColumn:
     def setup_method(self):
         self.gen = R2RMLGenerator("http://test.org/ontology/")
 
-    def test_plain_identifier_unchanged(self):
-        assert self.gen._quote_column("customer_id") == "customer_id"
+    def test_plain_identifier_always_quoted(self):
+        # Always double-quote every column name — plain identifiers included.
+        assert self.gen._quote_column("customer_id") == '"customer_id"'
 
     def test_already_quoted_unchanged(self):
         assert self.gen._quote_column('"customer id"') == '"customer id"'

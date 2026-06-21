@@ -649,9 +649,11 @@ class R2RMLGenerator:
         return "UnknownEntity"
 
     def _quote_column(self, col: str) -> str:
-        """Return the column name, double-quoted per R2RML spec when it is not a
-        plain SQL identifier (i.e. contains spaces, hyphens, dots, or any other
-        character outside [A-Za-z0-9_]).
+        """Return the column name always double-quoted per R2RML spec §7.4.
+
+        Double-quoting every column name is unconditionally safe and avoids
+        edge cases with reserved words, digit-leading names, or any future
+        column naming convention.
 
         Already-quoted names (surrounded by double-quotes) are returned as-is.
         Empty strings are returned unchanged.
@@ -660,10 +662,8 @@ class R2RMLGenerator:
             return col
         if col.startswith('"') and col.endswith('"'):
             return col
-        if not re.match(r'^[A-Za-z_][A-Za-z0-9_]*$', col):
-            inner = col.replace('"', '""')  # escape any embedded double-quotes
-            return f'"{inner}"'
-        return col
+        inner = col.replace('"', '""')  # escape any embedded double-quotes
+        return f'"{inner}"'
 
     def _sanitize_name(self, name: str) -> str:
         """Sanitize a name for use in URIs."""
