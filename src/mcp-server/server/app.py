@@ -35,6 +35,7 @@ Three operating modes controlled by the ``mode`` argument:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -423,6 +424,10 @@ def _get_auth_headers(mode: str) -> dict:
     return {}
 
 
+_RETRY_STATUSES = {502, 503}
+_RETRY_DELAYS = (5, 10, 20)  # seconds between attempts; total max ~35 s
+
+
 async def _get(
     client: httpx.AsyncClient, path: str, params: dict | None = None
 ) -> dict:
@@ -433,17 +438,35 @@ async def _get(
     empty payloads in the Apps log stream. On non-2xx responses we
     log a body excerpt before re-raising so the caller (and the LLM)
     sees an actionable error instead of a bare ``HTTPStatusError``.
+
+    Retries up to 3 times on 502/503 (Databricks Apps cold-start window)
+    with exponential back-off: 5 s → 10 s → 20 s.
     """
     logger.info("GET %s%s params=%s", client.base_url, path, params or {})
-    resp = await client.get(path, params=params, timeout=120)
+    resp: httpx.Response | None = None
+    for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
+        resp = await client.get(path, params=params, timeout=120)
+        if resp.status_code not in _RETRY_STATUSES:
+            break
+        body_excerpt = resp.text[:300].replace("\n", " ") if resp.text else ""
+        if delay is None:
+            logger.warning(
+                "GET %s%s → %s (attempt %d/%d, giving up) body=%r",
+                client.base_url, path, resp.status_code,
+                attempt, len(_RETRY_DELAYS) + 1, body_excerpt,
+            )
+        else:
+            logger.warning(
+                "GET %s%s → %s (attempt %d/%d, retrying in %ds) body=%r",
+                client.base_url, path, resp.status_code,
+                attempt, len(_RETRY_DELAYS) + 1, delay, body_excerpt,
+            )
+            await asyncio.sleep(delay)
     if resp.status_code >= 400:
         body_excerpt = resp.text[:500].replace("\n", " ") if resp.text else ""
         logger.warning(
             "GET %s%s → %s body=%r",
-            client.base_url,
-            path,
-            resp.status_code,
-            body_excerpt,
+            client.base_url, path, resp.status_code, body_excerpt,
         )
     else:
         logger.info("GET %s%s → %s", client.base_url, path, resp.status_code)
@@ -454,9 +477,31 @@ async def _get(
 async def _post(
     client: httpx.AsyncClient, path: str, json: dict | None = None
 ) -> dict:
-    """POST *path* on *client* with optional JSON body and return the JSON response."""
+    """POST *path* on *client* with optional JSON body and return the JSON response.
+
+    Retries up to 3 times on 502/503 (Databricks Apps cold-start window)
+    with exponential back-off: 5 s → 10 s → 20 s.
+    """
     logger.info("POST %s%s", client.base_url, path)
-    resp = await client.post(path, json=json or {}, timeout=120)
+    resp: httpx.Response | None = None
+    for attempt, delay in enumerate((*_RETRY_DELAYS, None), start=1):
+        resp = await client.post(path, json=json or {}, timeout=120)
+        if resp.status_code not in _RETRY_STATUSES:
+            break
+        body_excerpt = resp.text[:300].replace("\n", " ") if resp.text else ""
+        if delay is None:
+            logger.warning(
+                "POST %s%s → %s (attempt %d/%d, giving up) body=%r",
+                client.base_url, path, resp.status_code,
+                attempt, len(_RETRY_DELAYS) + 1, body_excerpt,
+            )
+        else:
+            logger.warning(
+                "POST %s%s → %s (attempt %d/%d, retrying in %ds) body=%r",
+                client.base_url, path, resp.status_code,
+                attempt, len(_RETRY_DELAYS) + 1, delay, body_excerpt,
+            )
+            await asyncio.sleep(delay)
     if resp.status_code >= 400:
         body_excerpt = resp.text[:500].replace("\n", " ") if resp.text else ""
         logger.warning("POST %s%s → %s body=%r", client.base_url, path, resp.status_code, body_excerpt)
