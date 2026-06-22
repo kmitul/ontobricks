@@ -197,28 +197,30 @@ function updateMappingCompletionStatus() {
     const totalClasses = activeClasses.length;
     const totalProperties = activeProperties.length;
     
-    // Count entity mappings that match existing non-excluded ontology classes
-    let mappedClasses = 0;
+    // Build lookup maps (same pattern as Auto-Map page)
+    // Only count entities / relationships that have a real SQL query — stubs
+    // (excluded_attributes only, no sql_query) must not inflate the mapped count.
+    const entityMappings = MappingState.config.entities || [];
+    const relationshipMappings = MappingState.config.relationships || [];
+
+    const assignedEntityUris = new Set(
+        entityMappings.filter(m => m.sql_query).map(m => m.ontology_class || m.class_uri)
+    );
+    const assignedRelUris = new Set(
+        relationshipMappings.filter(m => m.sql_query).map(m => m.property)
+    );
+
+    // Build mappingByClass from ALL config entries (needed for attribute lookup)
     const mappingByClass = {};
-    if (MappingState.config.entities && activeClasses.length > 0) {
-        const classUris = new Set(activeClasses.map(c => c.uri));
-        MappingState.config.entities.forEach(m => {
-            const uri = m.ontology_class || m.class_uri;
-            if (classUris.has(uri)) {
-                mappedClasses++;
-                mappingByClass[uri] = m;
-            }
-        });
-    }
-    
-    // Count relationship mappings that match existing non-excluded ObjectProperties
-    let mappedProperties = 0;
-    if (MappingState.config.relationships && activeProperties.length > 0) {
-        const propUris = new Set(activeProperties.map(p => p.uri));
-        mappedProperties = MappingState.config.relationships.filter(m => 
-            propUris.has(m.property)
-        ).length;
-    }
+    entityMappings.forEach(m => {
+        const uri = m.ontology_class || m.class_uri;
+        if (uri) mappingByClass[uri] = m;
+    });
+
+    // Count from the ONTOLOGY side (same direction as Auto-Map) so any URI
+    // mismatch or stub entry can't inflate the denominator.
+    const mappedClasses = activeClasses.filter(c => assignedEntityUris.has(c.uri)).length;
+    const mappedProperties = activeProperties.filter(p => assignedRelUris.has(p.uri)).length;
     
     // Count attribute mappings across all mapped non-excluded entities.
     // Excluded attributes (excluded_attributes in the mapping) are not counted.
