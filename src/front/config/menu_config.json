@@ -174,27 +174,6 @@
                     ]
                 },
                 {
-                    "id": "domain-design",
-                    "title": "Design",
-                    "icon": "bi-pencil-square",
-                    "items": [
-                        {
-                            "id": "ontology-link",
-                            "label": "Ontology",
-                            "icon": "bi-bezier2",
-                            "route": "/ontology/",
-                            "requires": "domain_saved"
-                        },
-                        {
-                            "id": "mapping-link",
-                            "label": "Mapping",
-                            "icon": "bi-shuffle",
-                            "route": "/mapping/",
-                            "requires": "domain_saved"
-                        }
-                    ]
-                },
-                {
                     "id": "domain-collaboration",
                     "title": "Collaboration",
                     "icon": "bi-chat-left-text",

@@ -178,6 +178,35 @@ Viewer (Sigma.js), which auto-filters on the clicked entity's local name.
 ### Modified files
 - `src/front/templates/partials/dtwin/_query_analytics.html`
 
+<<<<<<< Updated upstream
+=======
+### Test result
+2420 passed, 15 skipped — all green.
+
+---
+
+## Graph Analytics — click bar → navigate to Graph Viewer
+
+### Context
+Users can now click any bar in the analytics charts to jump directly to the Graph
+Viewer (Sigma.js), which auto-filters on the clicked entity's local name.
+
+### Changes
+1. `src/front/templates/partials/dtwin/_query_analytics.html` —
+   - Added `_navigateToGraph(uri)` helper: clicks `[data-section="sigmagraph"]` nav
+     link, then after 400 ms sets `sgFilterValue` to the entity's local name and calls
+     `SigmaGraph.executeGraphFilter()` — same pattern used by data-quality and reasoning
+     pages.
+   - Chart `onClick` callback captures the `sorted` URI array at render time (IIFE
+     closure) and calls `_navigateToGraph` with the clicked bar's URI.
+   - Chart `onHover` switches canvas cursor to `pointer` when over a bar, `default`
+     otherwise.
+   - Tooltip `afterLabel` shows "Click to open in Graph Viewer" hint.
+
+### Modified files
+- `src/front/templates/partials/dtwin/_query_analytics.html`
+
+>>>>>>> Stashed changes
 ### Test results
 No backend change; 38/38 tests still pass.
 
@@ -580,3 +609,22 @@ Mandatory post-change code review run per `.cursorrules`. Covers all changes mer
 
 ### Test results
 2450 passed, 15 skipped in ~17s (0 regressions).
+<<<<<<< Updated upstream
+=======
+
+---
+
+## Remove Domain DESIGN menu — 2026-06-23
+
+### Context
+User request: remove the "Design" section from the domain left sidebar menu.
+
+### Changes
+1. `src/front/config/menu_config.json` — Removed the `domain-design` section (Ontology + Mapping quick-links). These pages remain accessible via their own top-level navigation items.
+
+### Modified files
+- `src/front/config/menu_config.json`
+
+### Test results
+2450 passed, 15 skipped (no regressions).
+>>>>>>> Stashed changes
