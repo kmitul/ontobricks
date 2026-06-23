@@ -583,6 +583,7 @@
             "icon": "bi-box",
             "route": "/dtwin/",
             "requires_domain_saved": true,
+            "navbar_hidden": true,
             "status_indicator": null,
             "navbar_actions": [],
             "groups": [
