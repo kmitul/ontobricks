@@ -1,4 +1,4 @@
-"""Internal helper that drives a single Digital Twin build.
+"""Internal helper that drives a single Knowledge Graph build.
 
 Extracted from :class:`back.objects.digitaltwin.DigitalTwin.run_build_task`
 (formerly an 839-line method) to make each phase — prepare → view →
@@ -155,7 +155,7 @@ def step_times_from_task(task) -> Dict[str, float]:
 
 
 class _BuildPipeline:
-    """One run of the Digital Twin build/sync pipeline.
+    """One run of the Knowledge Graph build/sync pipeline.
 
     Constructed once per build with the same arguments as the legacy
     :meth:`DigitalTwin.run_build_task`. Call :meth:`run` to execute the
@@ -571,7 +571,7 @@ class _BuildPipeline:
         apply_msg = (
             "Applying changes to graph..."
             if self.is_api
-            else "Applying changes to the knowledge graph..."
+            else "Applying changes to the graph viewer..."
         )
         self.tm.advance_step(self.task_id, apply_msg)
 
@@ -1027,7 +1027,7 @@ class _BuildPipeline:
             )
             return False
 
-        _adv()  # → "Creating knowledge graph union view"
+        _adv()  # → "Creating graph viewer union view"
 
         # Step 6 — create/refresh the union view.
         t_step = time.time()
@@ -1071,7 +1071,7 @@ class _BuildPipeline:
             )
             return False
 
-        _adv()  # → "Finalizing knowledge graph"
+        _adv()  # → "Finalizing graph viewer"
 
         # Step 7 — truncate companion for a clean reasoning slate.
         t_step = time.time()

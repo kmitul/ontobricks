@@ -588,7 +588,7 @@
     /**
      * Build the comment tag vocabulary ({type, ref, label}[]) from an
      * ontology config ({ classes, properties }). Shared by every surface
-     * (ontology designer, mapping, digital twin) so the entity/relationship
+     * (ontology designer, mapping, graph viewer) so the entity/relationship
      * tag picker is built identically everywhere.
      */
     function taggableFromOntology(config) {

@@ -217,7 +217,7 @@ class ReviewService:
                         ""
                         if last_build
                         else "This version has never been built. "
-                        "Run a Digital Twin build first."
+                        "Run a Knowledge Graph build first."
                     ),
                     "can_approve": (
                         status == STATUS_IN_REVIEW and is_member and not already
@@ -354,7 +354,7 @@ class ReviewService:
         if not last_build:
             raise ValidationError(
                 "Cannot submit for review: this version has never been "
-                "built. Run a Digital Twin build first."
+                "built. Run a Knowledge Graph build first."
             )
 
         ReviewService._set_status(

@@ -143,7 +143,7 @@ CREATE INDEX IF NOT EXISTS idx_schedule_runs_domain
     ON schedule_runs(registry_id, domain_name, run_ts DESC);
 
 -- ----------------------------------------------------------------
--- Build-run trace (one immutable row per Digital Twin build, all
+-- Build-run trace (one immutable row per Knowledge Graph build, all
 -- paths: UI session / external API / scheduler). Linked to the
 -- domain row; grain is the tuple (domain_id, version). Many rows per
 -- tuple are expected — the "active" build for a (domain, version) is

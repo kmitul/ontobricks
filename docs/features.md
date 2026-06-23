@@ -11,7 +11,7 @@
 - **Ontology Pitfalls Detector**: Detect 19 structural, logical, and semantic pitfalls (P1.1–P4.7) in four categories via the **Ontology → Pitfalls** sidebar panel. Fast/graph-only checks run immediately; ML-heavy checks (semantic similarity, NLP naming) require the optional `[pitfalls]` extra (`uv sync --extra pitfalls`). Each check shows a description tooltip and ⚡/💻 speed indicator. Results group by category with an accordion display.
 - **OWL Generation**: Automatic generation of W3C-compliant OWL/Turtle from visual design.
 - **LLM-Powered Auto-Map Icons**: Automatically assign emoji icons to entities based on their names using the project's configured LLM serving endpoint (Ontology Designer toolbar).
-- **Dashboard Mapping**: Assign Databricks dashboards to entity types with parameter mapping for embedded display in the Knowledge Graph.
+- **Dashboard Mapping**: Assign Databricks dashboards to entity types with parameter mapping for embedded display in the Graph Viewer.
 
 ## Data Mapping
 - **Visual Mapping Designer**: Map ontology classes and relationships to Databricks tables with an interactive designer interface.
@@ -32,18 +32,18 @@
 - **Relationship Direction**: Control forward, reverse, or bidirectional relationships with visual indicators.
 - **R2RML Generation**: Automatic generation of W3C-compliant R2RML mappings from visual configuration. Excluded attributes are never emitted as `rr:predicateObjectMap` triples.
 
-## Digital Twin (Sync & Explore)
+## Knowledge Graph (Sync & Explore)
 - **Two Layers**: Every build materializes a Delta view (Unity Catalog, governance) and a Graph DB engine (Lakebase Postgres today; pluggable behind `GraphDBFactory`).
 - **Readiness Status**: Validates ontology, entity mappings, relationship mappings, and attribute mapping completeness before enabling sync and explore actions.
 - **Triple Store Sync**: Synchronize generated triples to a Unity Catalog table — SQL is generated automatically from R2RML mappings (no manual query writing required).
 - **Last Updated Timestamp**: Triple store status displays the last modification date and time retrieved from Unity Catalog Delta table metadata (`DESCRIBE DETAIL`).
-- **Auto-Load Triple Store**: Triples and Knowledge Graph views automatically load data from the triple store on navigation (no manual button click required).
+- **Auto-Load Triple Store**: Triples and Graph Viewer views automatically load data from the triple store on navigation (no manual button click required).
 - **Async Quality Checks**: Validate data against ontology constraints (cardinality, value, property characteristics, global rules) asynchronously with progress tracking.
 - **SHACL Validation**: Run SHACL shapes against the triple store — shapes are compiled to SQL for execution with violation reporting, or validated in-memory via PySHACL for small datasets.
 - **Triples Grid**: Interactive data grid with sorting, filtering, and grouping capabilities to browse triple store contents.
-- **Knowledge Graph**: Interactive sigma.js WebGL-powered graph to explore entities and relationships visually with search, filtering, depth control, and entity detail panels.
-- **Data Cluster Detection**: Detect communities in the knowledge graph using Louvain, Label Propagation, or Greedy Modularity algorithms — client-side (Graphology) for the visible subgraph and server-side (NetworkX) for the full graph; color-by-cluster mode, adjustable resolution slider, cluster collapse/expand into super-nodes, and cluster member details on click.
-- **Dashboard Embedding**: View assigned Databricks dashboards with entity-specific parameters directly in the Knowledge Graph.
+- **Graph Viewer**: Interactive sigma.js WebGL-powered graph to explore entities and relationships visually with search, filtering, depth control, and entity detail panels.
+- **Data Cluster Detection**: Detect communities in the graph viewer using Louvain, Label Propagation, or Greedy Modularity algorithms — client-side (Graphology) for the visible subgraph and server-side (NetworkX) for the full graph; color-by-cluster mode, adjustable resolution slider, cluster collapse/expand into super-nodes, and cluster member details on click.
+- **Dashboard Embedding**: View assigned Databricks dashboards with entity-specific parameters directly in the Graph Viewer.
 - **Violation Details**: View quality check violations in a detailed modal with entity information.
 
 ## Project Management
@@ -51,7 +51,7 @@
 - **Version Control**: Create, list, and load multiple versions of a project with automatic versioning. Which version is **Active** (exposed via API / MCP) is managed from **Registry → Browse**; the Domain → Versions page shows that status as a read-only badge.
 - **Domain Cockpit (Validation)**: Readiness tiles including **Active Version** — the version currently exposed via API/MCP (from the registry), with a *(not loaded)* hint when it differs from the version open in the session. Distinct from “latest on disk” vs read-only UI gating (still driven by whether the loaded version is the latest).
 - **New-domain loading**: After **New Domain** from the navbar, a full-page spinner runs until Domain Information has finished its initial fetches (LLM endpoints, version status, domain info).
-- **Domain Information — Digital Twin fields**: Triple-store FQN and Graph DB table name (e.g. Lakebase `g_<domain>_v<version>`) refresh when the domain name is **committed** (blur / `change`) or the version changes, so previews match naming rules before save.
+- **Domain Information — Knowledge Graph fields**: Triple-store FQN and Graph DB table name (e.g. Lakebase `g_<domain>_v<version>`) refresh when the domain name is **committed** (blur / `change`) or the version changes, so previews match naming rules before save.
 - **Duplicate domain names**: Save to registry is blocked when the sanitized name already exists (`/domain/check-name` + guard on **Save to UC**); inline validation clears when the name is cleared or the check errors.
 - **Navbar domain identity**: Top bar name/version invalidate cached `/navbar/state` (and related caches) after domain mutations so reloads and navigations do not show stale labels for up to 15 seconds.
 - **Import/Export**: Import OWL and RDFS ontologies, import industry-standard ontologies (FIBO, CDISC, IOF, HL7 FHIR R4/R4B/R5), import/export R2RML mappings, and export OWL files.
@@ -73,8 +73,8 @@
 - **Per-Project Schemas**: Each project gets its own schema, cached and automatically invalidated on ontology changes.
 
 ## MCP Server (AI Integration)
-- **Model Context Protocol**: Expose the knowledge graph to LLM agents via MCP (Streamable HTTP + stdio transports).
-- **Project Selection**: Two-step workflow — `list_projects` to browse available knowledge graphs, `select_project` to activate one.
+- **Model Context Protocol**: Expose the graph viewer to LLM agents via MCP (Streamable HTTP + stdio transports).
+- **Project Selection**: Two-step workflow — `list_projects` to browse available graph viewers, `select_project` to activate one.
 - **Entity Discovery**: `list_entity_types` and `describe_entity` provide human-readable text descriptions with BFS traversal.
 - **GraphQL via MCP**: `get_graphql_schema` and `query_graphql` tools let LLM agents introspect and query the typed GraphQL API.
 - **Databricks Playground**: Deployed as `mcp-ontobricks`, auto-discoverable by LLM agents in the Databricks Playground.

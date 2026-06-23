@@ -1,6 +1,6 @@
 /**
  * OntoBricks - query-sigmagraph.js
- * Sigma.js + Graphology graph view for the Digital Twin section.
+ * Sigma.js + Graphology graph view for the Knowledge Graph section.
  * Reuses the same data (lastQueryResults / d3NodesData / d3LinksData) built by query.js.
  */
 
@@ -2303,7 +2303,7 @@ var SigmaGraph = (function () {
                 placeholder.innerHTML =
                     '<div class="text-muted">' +
                     '<i class="bi bi-diagram-3 " style="font-size:2.5rem;"></i>' +
-                    '<p class="mt-2 mb-1 fw-semibold">Knowledge Graph</p>' +
+                    '<p class="mt-2 mb-1 fw-semibold">Graph Viewer</p>' +
                     '<p class="small">Use the filter panel to search and explore entities.</p>' +
                     '</div>';
                 container.appendChild(placeholder);

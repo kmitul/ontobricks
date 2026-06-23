@@ -11,7 +11,7 @@ Storage layout (one Postgres schema, default ``ontobricks_registry``):
 - ``schedules``         — one row per scheduled domain
 - ``schedule_runs``     — append-only, capped per domain
 - ``build_runs``        — append-only build-run trace, one row per
-                          Digital Twin build (all paths), keyed by
+                          Knowledge Graph build (all paths), keyed by
                           ``(domain_id, version)``
 
 Authentication:

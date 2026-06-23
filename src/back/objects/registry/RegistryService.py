@@ -676,6 +676,10 @@ class RegistryService:
         logger.info("recursive_delete: listing %s", dir_path)
         ok, items, msg = self._uc.list_directory(dir_path)
         if not ok:
+            # Directory doesn't exist — nothing to delete, not an error.
+            if "not found" in msg.lower() or "404" in msg:
+                logger.info("recursive_delete: %s does not exist, skipping", dir_path)
+                return errors
             logger.warning("recursive_delete: cannot list %s: %s", dir_path, msg)
             errors.append(f"Cannot list {dir_path}: {msg}")
             return errors
