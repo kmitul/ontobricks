@@ -1098,11 +1098,18 @@ function loadEntityPanelContent(classUri, className, targetPanelBody = null) {
                         ? `<div class="col-6">
                             <div class="d-flex justify-content-between align-items-center mb-1">
                                 <span class="text-muted small fw-semibold">Attributes</span>
-                                <button type="button" class="btn btn-link btn-sm py-0 px-0 text-muted"
-                                        style="font-size:0.72rem;" onclick="autoExcludeUnmappedEntityAttrs()"
-                                        title="Automatically exclude all attributes not yet assigned to a column">
-                                    <i class="bi bi-slash-circle me-1"></i>Exclude unmapped
-                                </button>
+                                <div class="d-flex align-items-center gap-2">
+                                    <button id="epAttrToggleAllBtn" type="button" class="btn btn-link btn-sm py-0 px-0 text-muted"
+                                            style="font-size:0.72rem;" onclick="toggleAllEntityAttrs()"
+                                            title="Include or exclude all attributes">
+                                        <i class="bi bi-x-square me-1"></i>Exclude all
+                                    </button>
+                                    <button type="button" class="btn btn-link btn-sm py-0 px-0 text-muted"
+                                            style="font-size:0.72rem;" onclick="autoExcludeUnmappedEntityAttrs()"
+                                            title="Automatically exclude all attributes not yet assigned to a column">
+                                        <i class="bi bi-slash-circle me-1"></i>Exclude unmapped
+                                    </button>
+                                </div>
                             </div>
                             <div class="border rounded" style="max-height:185px;overflow-y:auto;">
                                 <table class="table table-sm table-striped mb-0" style="font-size:0.78rem;">
@@ -1309,11 +1316,18 @@ function loadRelationshipPanelContent(ontologyProperty, targetPanelBody = null) 
                         ? `<div class="col-6">
                             <div class="d-flex justify-content-between align-items-center mb-1">
                                 <span class="text-muted small fw-semibold">Attributes</span>
-                                <button type="button" class="btn btn-link btn-sm py-0 px-0 text-muted"
-                                        style="font-size:0.72rem;" onclick="autoExcludeUnmappedRelAttrs()"
-                                        title="Automatically exclude all attributes not yet assigned to a column">
-                                    <i class="bi bi-slash-circle me-1"></i>Exclude unmapped
-                                </button>
+                                <div class="d-flex align-items-center gap-2">
+                                    <button id="rpAttrToggleAllBtn" type="button" class="btn btn-link btn-sm py-0 px-0 text-muted"
+                                            style="font-size:0.72rem;" onclick="toggleAllRelAttrs()"
+                                            title="Include or exclude all attributes">
+                                        <i class="bi bi-x-square me-1"></i>Exclude all
+                                    </button>
+                                    <button type="button" class="btn btn-link btn-sm py-0 px-0 text-muted"
+                                            style="font-size:0.72rem;" onclick="autoExcludeUnmappedRelAttrs()"
+                                            title="Automatically exclude all attributes not yet assigned to a column">
+                                        <i class="bi bi-slash-circle me-1"></i>Exclude unmapped
+                                    </button>
+                                </div>
                             </div>
                             <div class="border rounded" style="max-height:185px;overflow-y:auto;">
                                 <table class="table table-sm table-striped mb-0" style="font-size:0.78rem;">
@@ -1462,8 +1476,10 @@ function initEntityPanel(classUri, className, existingMapping, classInfo) {
                 nameCell.innerHTML = `<span class="text-muted text-decoration-line-through">${attrName}</span>`;
                 mappedCell.innerHTML = '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>';
             }
+            _updateEntityAttrToggleBtn();
         });
     });
+    _updateEntityAttrToggleBtn();
 
     // Auto-load query data in background when there is an existing mapping with SQL
     if (existingMapping?.sql_query) {
@@ -1774,8 +1790,10 @@ function initRelationshipPanel(ontologyProperty, existingMapping) {
                 nameCell.innerHTML = `<span class="text-muted text-decoration-line-through">${attrName}</span>`;
                 mappedCell.innerHTML = '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>';
             }
+            _updateRelAttrToggleBtn();
         });
     });
+    _updateRelAttrToggleBtn();
 
     // Auto-load query data in background when there is an existing mapping with SQL
     if (existingMapping?.sql_query) {
@@ -2252,6 +2270,116 @@ function _syncRelColAssignments() {
 }
 
 // ==========================================================================
+// SELECT / UNSELECT ALL ATTRIBUTES
+// ==========================================================================
+
+/**
+ * Update the entity-panel toggle-all button label to reflect current state.
+ * - All included  → button offers "Exclude all"
+ * - Any excluded  → button offers "Include all"
+ */
+function _updateEntityAttrToggleBtn() {
+    const btn = document.getElementById('epAttrToggleAllBtn');
+    if (!btn) return;
+    const anyExcluded = EntityPanelState.excludedAttributes.length > 0;
+    if (anyExcluded) {
+        btn.innerHTML = '<i class="bi bi-check2-all me-1"></i>Include all';
+        btn.title = 'Include all attributes in the mapping';
+    } else {
+        btn.innerHTML = '<i class="bi bi-x-square me-1"></i>Exclude all';
+        btn.title = 'Exclude all attributes from the mapping';
+    }
+}
+
+/**
+ * Toggle all entity attributes: include all if any are excluded, otherwise exclude all.
+ */
+function toggleAllEntityAttrs() {
+    const cbs = document.querySelectorAll('.ep-attr-include-cb');
+    if (!cbs.length) return;
+    const includeAll = EntityPanelState.excludedAttributes.length > 0;
+    cbs.forEach(cb => {
+        const attrName = cb.dataset.attr;
+        const row = cb.closest('tr');
+        const nameCell = row?.querySelector('td:nth-child(2)');
+        const mappedCell = row?.querySelector('td:nth-child(3)');
+        if (includeAll) {
+            cb.checked = true;
+            EntityPanelState.excludedAttributes = EntityPanelState.excludedAttributes.filter(a => a !== attrName);
+            const isMapped = !!EntityPanelState.attributeMappings[attrName];
+            if (nameCell) nameCell.innerHTML = attrName;
+            if (mappedCell) mappedCell.innerHTML = isMapped
+                ? '<i class="bi bi-check-circle-fill text-success"></i>'
+                : '<i class="bi bi-x-circle-fill text-danger"></i>';
+        } else {
+            cb.checked = false;
+            if (!EntityPanelState.excludedAttributes.includes(attrName)) {
+                EntityPanelState.excludedAttributes.push(attrName);
+            }
+            if (nameCell) nameCell.innerHTML = `<span class="text-muted text-decoration-line-through">${attrName}</span>`;
+            if (mappedCell) mappedCell.innerHTML = '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>';
+        }
+    });
+    _updateEntityAttrToggleBtn();
+    const classUri = document.getElementById('panelEntityClass')?.value;
+    _syncEntityAttrExclusions(classUri);
+    const msg = includeAll ? 'All attributes included' : `${cbs.length} attribute(s) excluded — click Save to persist`;
+    showNotification(msg, 'info', 2000);
+}
+
+/**
+ * Update the relationship-panel toggle-all button label to reflect current state.
+ */
+function _updateRelAttrToggleBtn() {
+    const btn = document.getElementById('rpAttrToggleAllBtn');
+    if (!btn) return;
+    const anyExcluded = RelPanelState.excludedAttributes.length > 0;
+    if (anyExcluded) {
+        btn.innerHTML = '<i class="bi bi-check2-all me-1"></i>Include all';
+        btn.title = 'Include all attributes in the mapping';
+    } else {
+        btn.innerHTML = '<i class="bi bi-x-square me-1"></i>Exclude all';
+        btn.title = 'Exclude all attributes from the mapping';
+    }
+}
+
+/**
+ * Toggle all relationship attributes: include all if any are excluded, otherwise exclude all.
+ */
+function toggleAllRelAttrs() {
+    const cbs = document.querySelectorAll('.rp-attr-include-cb');
+    if (!cbs.length) return;
+    const includeAll = RelPanelState.excludedAttributes.length > 0;
+    cbs.forEach(cb => {
+        const attrName = cb.dataset.attr;
+        const row = cb.closest('tr');
+        const nameCell = row?.querySelector('td:nth-child(2)');
+        const mappedCell = row?.querySelector('td:nth-child(3)');
+        if (includeAll) {
+            cb.checked = true;
+            RelPanelState.excludedAttributes = RelPanelState.excludedAttributes.filter(a => a !== attrName);
+            const isMapped = !!RelPanelState.attributeMappings[attrName];
+            if (nameCell) nameCell.innerHTML = attrName;
+            if (mappedCell) mappedCell.innerHTML = isMapped
+                ? '<i class="bi bi-check-circle-fill text-success"></i>'
+                : '<i class="bi bi-x-circle-fill text-danger"></i>';
+        } else {
+            cb.checked = false;
+            if (!RelPanelState.excludedAttributes.includes(attrName)) {
+                RelPanelState.excludedAttributes.push(attrName);
+            }
+            if (nameCell) nameCell.innerHTML = `<span class="text-muted text-decoration-line-through">${attrName}</span>`;
+            if (mappedCell) mappedCell.innerHTML = '<i class="bi bi-dash text-muted" title="Excluded from mapping"></i>';
+        }
+    });
+    _updateRelAttrToggleBtn();
+    const propertyUri = RelPanelState.propertyUri;
+    _syncRelAttrExclusions(propertyUri);
+    const msg = includeAll ? 'All attributes included' : `${cbs.length} attribute(s) excluded — click Save to persist`;
+    showNotification(msg, 'info', 2000);
+}
+
+// ==========================================================================
 // AUTO-EXCLUDE UNMAPPED ATTRIBUTES
 // ==========================================================================
 
@@ -2281,6 +2409,7 @@ function autoExcludeUnmappedEntityAttrs() {
             changed++;
         }
     });
+    _updateEntityAttrToggleBtn();
     if (changed > 0) {
         showNotification(`${changed} unmapped attribute(s) excluded — click Save to persist`, 'info', 2500);
     } else {
@@ -2313,6 +2442,7 @@ function autoExcludeUnmappedRelAttrs() {
             changed++;
         }
     });
+    _updateRelAttrToggleBtn();
     if (changed > 0) {
         showNotification(`${changed} unmapped attribute(s) excluded — click Save to persist`, 'info', 2500);
     } else {

@@ -635,6 +635,25 @@ and the project+branch pair. This means `lakebase_project` or
 
 ---
 
+### Build uses `app_managed` even though `managed_synced` is configured in Settings
+
+**Symptom:** The build log shows `sync_mode=app_managed` and iterates triples
+through the app process. The Settings → Graph DB page correctly displays the
+saved config with `"sync_mode": "managed_synced"`.
+
+**Cause (fixed in v0.6.0):** On cold start, if the Lakebase store was briefly
+unavailable (typical the first few seconds after the app container started), the
+`GlobalConfigService` in-memory cache was populated with the empty template
+(`_empty()`). Subsequent reads within the 5-minute cache TTL returned the empty
+config, so the build resolved `sync_mode` as missing and silently fell back to
+`app_managed`. The Settings page was not affected because it always forces a
+fresh read.
+
+**Fix:** Upgrade to v0.6.0 — `_resolve_lakebase_mode` now bypasses the cache
+via `force=True`.  No configuration change needed; simply redeploy.
+
+---
+
 ### Settings → Graph DB: catalog list is empty
 
 The UC catalog dropdown uses the configured SQL Warehouse. If the warehouse is not

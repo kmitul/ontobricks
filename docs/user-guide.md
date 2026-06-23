@@ -419,7 +419,10 @@ To exclude attributes:
 3. Uncheck any attributes you do not want to map.
 4. Click **Save** — exclusions are persisted immediately.
 
-To bulk-exclude all attributes that have no column assignment yet, click the **Auto-Exclude unmapped** button at the bottom of the attributes table.
+Two bulk-action buttons are available at the top of the attributes table:
+
+- **Exclude all / Include all** — toggles all attributes at once. When all attributes are currently included the button reads *Exclude all*; once any are excluded it switches to *Include all* so you can restore them in one click.
+- **Exclude unmapped** — excludes only attributes that have no column assignment yet, leaving already-mapped attributes untouched.
 
 > **Tip:** Exclusions survive an Unmap / re-map cycle. If you right-click an entity and choose **Unmap**, the SQL and column assignments are cleared but the attribute checkboxes stay as you left them. Auto-Map also respects exclusions — it will never map or re-include an excluded attribute.
 

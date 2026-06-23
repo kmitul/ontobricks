@@ -524,6 +524,14 @@ async function resetAllMappings() {
             entities: [],
             relationships: []
         };
+
+        // Re-stamp excluded flags so the ontology objects reflect the now-empty
+        // mapping config.  Without this the designer still shows previously
+        // excluded classes/properties as excluded because the flags live on the
+        // MappingState.loadedOntology objects and are only cleared by this call.
+        if (typeof _stampExcludedFlags === 'function') {
+            _stampExcludedFlags();
+        }
         
         await fetch('/mapping/save', {
             method: 'POST',
