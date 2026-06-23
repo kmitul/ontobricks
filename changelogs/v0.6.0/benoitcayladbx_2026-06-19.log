@@ -1,408 +1,400 @@
-## UX: Discussion panel opens immediately; copy-comment-as-task-name; Data Sources & Documents buttons
+# Per-Attribute Include/Exclude in Mapping Designer
 
-**Context:** Several UX improvements made on top of the collaborative
-comments/tasks feature before merging to develop.
+## Context
+Users needed the ability to intentionally exclude specific ontology attributes from the mapping,
+rather than having all unmapped attributes flagged as gaps. This adds a checkbox per attribute in
+the Designer bottom pane (Status tab, Attributes table) — checked = included (default),
+unchecked = excluded from mapping, validation and gap reporting.
 
-**Changes:**
-1. `src/front/static/global/js/comments-panel.js` — `showLoadingPanel()`
-   opens the offcanvas immediately with a spinner (exposed on
-   `OntoComments`); `openForSelection` calls it before async context
-   resolution; `openThread` skips re-show if already visible.
-   Added "Copy from comment" button in the task creation form: stores raw
-   comment text on `data-raw-text`, truncates to 200 chars + `…` on copy.
-2. `src/front/static/domain/js/domain-collaboration.js` — exposed
-   `window.openDomainDiscussion()` (immediate panel + async context);
-   uses `OntoComments.showLoadingPanel()` before `resolveDomainCtx()`.
-3. `src/front/templates/partials/domain/_domain_metadata.html` — added
-   Discussion button to Data Sources section header.
-4. `src/front/templates/partials/domain/_domain_documents.html` — added
-   Discussion button to Document Management section header.
-5. `.cursor/07-project-conventions.mdc` — added Merge Safety rules.
+## Changes
 
-**Modified files:**
-- `src/front/static/global/js/comments-panel.js`
-- `src/front/static/domain/js/domain-collaboration.js`
-- `src/front/templates/partials/domain/_domain_metadata.html`
-- `src/front/templates/partials/domain/_domain_documents.html`
-- `.cursor/07-project-conventions.mdc`
+1. **`src/front/static/mapping/js/mapping-design.js`**
+   - Added `excludedAttributes: []` field to `EntityPanelState` and `RelPanelState`
+   - `initEntityPanel()` / `initRelationshipPanel()`: initialise `excludedAttributes` from
+     `existingMapping.excluded_attributes` on panel open
+   - `epOntologyRows` / `rpOntologyRows`: replaced static index+icon rows with checkbox rows
+     (`ep-attr-include-cb` / `rp-attr-include-cb`); excluded attributes render with
+     strikethrough and a dash icon
+   - Updated table headers: `#` column replaced with a `bi-check2-square` icon column
+   - `initEntityPanel()` / `initRelationshipPanel()`: added `change` event listeners on
+     per-attribute checkboxes; unchecking also removes the attribute from `attributeMappings`
+     and updates the row DOM in place (no full re-render)
+   - `saveEntityPanelMapping()` / `saveRelPanelMapping()`: filters excluded attributes out of
+     `attribute_mappings` before saving, and writes `excluded_attributes` array into the
+     mapping object when non-empty
 
-**Test result:** `pytest tests/units/ tests/back/ -q` → 2553 passed, 15
-skipped, 5 pre-existing optional-extra failures (psycopg, pyshacl).
+2. **`src/back/objects/mapping/Mapping.py`**
+   - `build_entity_mapping()`: propagates `excluded_attributes` list when present in input data
+   - `build_relationship_mapping()`: same
+   - `compute_mapping_gaps()`: attributes listed in `excluded_attributes` are no longer reported
+     as unmapped gaps
 
----
-
-## Tests: Multi-user review/comment/task collaboration scenarios
-
-**Context:** The review/validation workflow (`ReviewService`) and the
-collaborative comments/tasks workflow (`CommentService`) were well covered for
-single-actor rules, but the *interactions between distinct users* that the
-audit trail and sign-off quorum exist for were under-tested: distinct reviewers
-accumulating sign-offs toward a quorum end-to-end, a change-request from one
-reviewer discarding another's approval, a full lifecycle chain driven by four
-different users, and the cross-domain `my_tasks` worklist resolving a real
-per-domain role (not the admin short-circuit). Added two focused test modules
-that drive several sequential calls against a shared review-event / comment /
-task list so the rules run as a real multi-user sequence.
-
-**Changes:**
-1. `tests/units/registry/test_review_multiuser.py` (new) — 9 tests:
-   - two distinct reviewers meeting a quorum of 2 then a builder publishing
-     (no override, distinct approvers recorded in order);
-   - a single reviewer / a duplicate sign-off (incl. case-insensitive email)
-     failing to satisfy the quorum and blocking publish;
-   - a change-request discarding a prior approval and reopening to DRAFT;
-   - a full DRAFT -> IN-REVIEW -> PUBLISHED -> reopen -> resubmit chain
-     (builder + two reviewers + admin) with the interleaved audit log asserted;
-   - `my_tasks` resolving a real per-domain role via a stubbed
-     `permission_service.get_domain_role` — listing only domains where the
-     caller has a role, and gating the builder's "publish" action on a
-     distinct-approver quorum.
-2. `tests/units/registry/test_comment_multiuser.py` (new) — 9 tests:
-   - a threaded conversation (root + replies) authored by three members with
-     `parent_id` anchoring asserted;
-   - author vs editor vs stranger resolution rules on another user's thread;
-   - a task created by one user, assigned to a second, completed only by the
-     assignee (stranger refused, creator + admin allowed), with the linked
-     `commented` audit rows (`task_created` / `task_done`) asserted;
-   - collaboration blocked once the version is PUBLISHED.
-
-No production code changed — tests only.
-
-**Modified files:**
-- `tests/units/registry/test_review_multiuser.py` (new)
-- `tests/units/registry/test_comment_multiuser.py` (new)
-
-**Test result:** `pytest tests/units/registry/test_review_multiuser.py
-tests/units/registry/test_comment_multiuser.py` → 18 passed. Full
-`pytest tests/units` → 2432 passed, 1 warning.
-
----
-
-## Change: Drop the comment `anchor_type` / `anchor_ref` columns
-
-**Context:** Discussions are now a single domain-wide thread per
-`(domain_id, version)` (see the 2026-06-18 "single domain-wide thread"
-change). The per-anchor columns on `domain_comments` — `anchor_type`
-(class/property/mapping/graph node/edge/domain) and `anchor_ref` — were dead
-weight: every row was effectively `('domain', '')` and nothing read them back.
-Removed them end-to-end (schema, store, service, API, frontend) and added a
-migration to drop them on existing registries.
-
-**Changes:**
-1. `src/back/objects/registry/store/lakebase/schema.sql` — dropped the
-   `anchor_type` column (and its CHECK), the `anchor_ref` column, and the
-   `idx_domain_comments_anchor` index; replaced the index with
-   `idx_domain_comments_lookup (domain_id, version, created_at)` to keep the
-   domain-thread listing query fast.
-2. `src/back/objects/registry/store/lakebase/store.py` — same column/index
-   changes in the lazy `_ensure_collab_tables()` self-heal DDL; dropped
-   `anchor_type` / `anchor_ref` from the row mapper, the `insert_comment`
-   INSERT/RETURNING, and the `list_comments` SELECT + filters.
-3. `src/back/objects/registry/store/base.py` — removed the anchor fields from
-   the `DomainComment` TypedDict and from the `insert_comment` /
-   `list_comments` abstract signatures + docstrings.
-4. `src/back/objects/registry/RegistryService.py` — dropped the anchor params
-   from the `insert_comment` / `list_comments` pass-through wrappers.
-5. `src/back/objects/registry/CommentService.py` — removed the `ANCHOR_TYPES`
-   constant, the `_validate_anchor_type` / `_norm_anchor_type` validators, and
-   the anchor params from `add_comment` / `list_comments` and the AI-Agent
-   kickoff-comment insert.
-6. `src/api/routers/internal/comments.py` — removed the `anchor_type` /
-   `anchor_ref` query params (GET) and body fields (POST).
-7. `src/back/objects/registry/agent_task_runner.py` — replaced `_resolve_anchor`
-   (returned `(anchor_type, anchor_ref, parent_id)`) with
-   `_resolve_thread_parent` (returns just the parent comment id); the agent
-   report no longer passes anchors.
-8. `src/front/static/global/js/comments-panel.js` — stopped sending
-   `anchor_type` / `anchor_ref` to the `/comments` API (GET query + POST body);
-   trimmed `ctx` to `{ folder, version }`; removed the `ANCHOR_LABELS` map and
-   the public `anchorLabel()` helper; `openForSelection` now ignores its legacy
-   anchor args.
-9. `src/front/static/domain/js/domain-collaboration.js` — the Discussions
-   timeline no longer renders the anchor "kind" badge or `data-anchor-*`
-   attributes; `openThreadFor()` opens the domain thread with no anchor; removed
-   the now-unused `localName()` helper.
-10. `scripts/upgrade_lakebase_0.6_drop_comment_anchor.sql` (new) — destructive,
-    idempotent migration: drops `idx_domain_comments_anchor`, drops the two
-    anchor columns (the CHECK drops with `anchor_type`), and creates
-    `idx_domain_comments_lookup`. Comment bodies/authors/threading/resolved
-    state are untouched.
-11. `scripts/bootstrap-lakebase-perms.sh` — owner-provision DDL aligned to the
-    anchorless `domain_comments` shape + new lookup index.
-12. `docs/architecture.md` — updated the `domain_comments` table row to describe
-    the domain-wide thread.
-13. Tests — updated `tests/units/registry/test_registry_store.py`,
-    `tests/units/registry/test_comment_service.py`,
-    `tests/units/api/test_comment_endpoints.py`, and
-    `tests/units/api/test_discussion_panel_assets.py` to drop anchor params /
-    assertions (e.g. the per-anchor filter tests become whole-thread tests; the
-    panel test now asserts no anchor fields are sent).
-
-**Modified files:**
-- `src/back/objects/registry/store/lakebase/schema.sql`
-- `src/back/objects/registry/store/lakebase/store.py`
-- `src/back/objects/registry/store/base.py`
-- `src/back/objects/registry/RegistryService.py`
-- `src/back/objects/registry/CommentService.py`
-- `src/api/routers/internal/comments.py`
-- `src/back/objects/registry/agent_task_runner.py`
-- `src/front/static/global/js/comments-panel.js`
-- `src/front/static/domain/js/domain-collaboration.js`
-- `scripts/upgrade_lakebase_0.6_drop_comment_anchor.sql` (new)
-- `scripts/bootstrap-lakebase-perms.sh`
-- `docs/architecture.md`
-- `tests/units/registry/test_registry_store.py`
-- `tests/units/registry/test_comment_service.py`
-- `tests/units/api/test_comment_endpoints.py`
-- `tests/units/api/test_discussion_panel_assets.py`
-
-**Test result:** `pytest tests/units/registry/test_comment_service.py
-tests/units/api/test_comment_endpoints.py
-tests/units/registry/test_agent_task_runner.py
-tests/units/api/test_discussion_panel_assets.py` → all passed. The
-`TestLakebaseCollab` cases in `test_registry_store.py` require the optional
-`psycopg` extra (not installed in this env) and are skipped/failing for that
-reason only — unrelated to this change.
-
----
-
-## Change: Fix AI-Agent "unmap" misfire — guard removal + persist mappings
-
-**Context:** A task "unmap Customer" assigned to the AI Agent was routed to the
-Auto SQL Mapper (`auto_assignment`), which then "unmapped Person and other
-relationships, re-included already-excluded entities, and after a page reload no
-changes were there". Root cause was two compounding defects in the
-`agent_task_runner` dispatch:
-1. The mapper is **additive-only** — it has no "remove/unmap" operation — yet a
-   removal request silently triggered a full-ontology re-map. The dispatch also
-   never passed the task text, so the user's intent was discarded.
-2. The `auto_assignment` branch only **proposed** mappings (it called the bare
-   `auto_assign_with_agent` and returned them in the payload) and never applied
-   them, so nothing was persisted — a reload reverted everything. (Contrast
-   `ontology_assistant`, which calls `apply_agent_ontology_changes` to save.)
-
-Fix per the chosen "guard-and-persist" direction: (a) refuse removal/unmap
-requests routed to the mapper and park the task for a rephrase; (b) when the
-mapper does run, merge + persist its mappings to the registry, preserving any
-existing `excluded` flag so a re-map never re-includes an excluded entity.
-
-**Changes:**
-1. `src/back/objects/registry/agent_task_runner.py` — added `_MAPPING_REMOVAL_RE`
-   + `_is_unsupported_mapping_removal()`; `_run_for_task` now short-circuits
-   (before planning/dispatch) when the chosen agent is `auto_assignment` and the
-   task asks to unmap/remove/exclude a mapping, posting a helpful note and
-   parking the task (`in_progress`) so a rephrase can resume it. The
-   `auto_assignment` dispatch branch now calls `mapping_svc.apply_agent_mappings`
-   to persist, and reports "Applied SQL mappings" with the post-merge totals
-   instead of "Proposed … review and save them".
-2. `src/back/objects/mapping/Mapping.py` — added `apply_agent_mappings()`
-   (session-less persist: merge into `domain.assignment` + `domain.save()`) and
-   extracted the upsert logic into reusable static helpers
-   `_merge_entity_mappings` / `_merge_relationship_mappings` (keyed by class
-   URI / `property`, preserving `excluded`); `save_mappings_to_session` now
-   reuses those helpers (dedupe).
-3. Tests — `tests/units/registry/test_agent_task_runner.py`: added
-   `test_is_unsupported_mapping_removal_detects_removal_intent`,
-   `test_run_for_task_refuses_unmap_and_parks`, and
-   `test_dispatch_auto_assignment_persists_mappings`.
-   `tests/units/mapping/test_mapping_service.py`: added `TestApplyAgentMappings`
-   (add+persist, upsert-by-URI, excluded-flag preservation, None payloads).
-
-**Modified files:**
-- `src/back/objects/registry/agent_task_runner.py`
+## Modified Files
+- `src/front/static/mapping/js/mapping-design.js`
 - `src/back/objects/mapping/Mapping.py`
-- `tests/units/registry/test_agent_task_runner.py`
-- `tests/units/mapping/test_mapping_service.py`
 
-**Test result:** `pytest tests/units/registry/test_agent_task_runner.py
-tests/units/mapping/test_mapping_service.py` → 63 passed. Full
-`pytest tests/units` → 2408 passed, 15 skipped, 4 failed; the 4 failures are the
-`TestLakebaseCollab` cases that need the optional `psycopg` extra (not installed
-in this env) — unrelated to this change.
+## Test Results
+- 132 mapping-specific tests: all passed
+- Full unit suite (excluding e2e / property tests requiring optional deps): 2573 passed, 5 pre-existing failures (Lakebase/psycopg not installed), 57 skipped
 
 ---
 
-## Fix: Interactive Build Does Not Persist last_build to Registry
+# Bug Fix: Attribute Exclusion State Not Persisted
 
-**Context:** Backport from `fix/v0.5.1` / `develop`. On the Validation page,
-"Submit for Review" was blocked with "This version has never been built." even
-after a successful interactive Digital Twin build. Root cause: the shared build
-completion path (`_BuildPipeline._complete_task`) never called `write_version()`
-to flush `domain.last_build` to the `domain_versions.last_build` DB column.
-Only the scheduled-build path did. The Submit gate reads that column; the
-Consistency-checks panel reads live triple-store state — so both indicators
-disagreed.
+## Context
+When a user toggled an attribute's include/exclude checkbox in the Designer Status tab, the change
+was stored only in the transient `EntityPanelState` / `RelPanelState`. If the panel was closed
+(or the user switched to another entity) without clicking "Save", the checkbox state was lost and
+reverted to the last persisted value on next open.
 
-**Changes:**
-1. `src/back/objects/digitaltwin/_build_pipeline.py` — added
-   `_persist_last_build_to_registry()` (best-effort registry write); called
-   from `_complete_task()` after `_record_build_run()`, covering both
-   `build_kind="session"` (UI) and `build_kind="api"` (REST).
-2. `tests/back/core/digitaltwin/test_build_pipeline_units.py` — added
-   `TestPersistLastBuildToRegistry` (6 regression tests).
+## Changes
 
-**Modified files:**
-- `src/back/objects/digitaltwin/_build_pipeline.py`
-- `tests/back/core/digitaltwin/test_build_pipeline_units.py`
+1. **`src/front/static/mapping/js/mapping-design.js`**
+   - Added `_syncEntityAttrExclusions(classUri)` helper: writes
+     `EntityPanelState.excludedAttributes` directly into the matching entry of
+     `MappingState.config.entities` (creating a lightweight stub if no full mapping exists yet)
+     and calls `autoSaveMappings()`.
+   - Added `_syncRelAttrExclusions(propertyUri)` helper: same for relationships, using
+     `MappingState.config.relationships`.
+   - `initEntityPanel()` checkbox handler: calls `_syncEntityAttrExclusions(classUri)` after
+     every toggle so the state is immediately reflected in the global config and persisted to the
+     backend session.
+   - `initRelationshipPanel()` checkbox handler: calls `_syncRelAttrExclusions(ontologyProperty.uri)`
+     on every toggle.
+   - `initRelationshipPanel()`: stores `ontologyProperty.uri` into `RelPanelState.propertyUri` so
+     the auto-exclude button can reference it outside the closure.
+   - `autoExcludeUnmappedEntityAttrs()`: calls `_syncEntityAttrExclusions(classUri)` after
+     bulk-excluding unmapped attributes.
+   - `autoExcludeUnmappedRelAttrs()`: calls `_syncRelAttrExclusions(RelPanelState.propertyUri)`
+     after bulk-excluding unmapped attributes.
 
-**Test result:** `pytest tests/back/core/digitaltwin/test_build_pipeline_units.py`
-→ 22 passed.
+## Modified Files
+- `src/front/static/mapping/js/mapping-design.js`
 
----
-
-## Change: Remove AI Agent task capability (discussion & tasks)
-
-**Context:** The `feat/Collaborative-Comments-Tasks` branch introduced
-an experimental feature that allowed collaborative tasks to be assigned to a
-virtual "AI Agent" (`agent://router`). The feature included a route →
-plan → clarify → dispatch loop backed by `agent_task_runner.py`,
-`agent_task_planner/`, and `agent_task_router/`. The decision was made to drop
-this capability before the v0.6 merge to keep the feature surface focused.
-
-**Changes:**
-
-1. `src/agents/agent_task_planner/` (3 files) — deleted entirely.
-2. `src/agents/agent_task_router/` (3 files) — deleted entirely.
-3. `src/agents/registry.py` — deleted (only used by the two modules above).
-4. `src/back/objects/registry/agent_task_runner.py` — deleted.
-5. `src/back/objects/registry/CommentService.py` — removed import of
-   agent_task_runner constants; removed AI Agent entry from `list_assignees`;
-   removed kickoff-comment block and `start_agent_task` call from
-   `create_task`; removed `_maybe_resume_agent` method and its call from
-   `add_comment`.
-6. `src/back/objects/mapping/Mapping.py` — removed `apply_agent_mappings()`
-   method (session-less counterpart used only by the runner).
-7. `src/front/static/global/js/comments-panel.js` — removed all AI-Agent
-   state variables, live-status functions (`loadAiTasks`, `loadAgentRuns`,
-   `renderAgentStrip`, `ensureAgentTracking`, `announceAgentCompletions`,
-   `panelPollTick`, `agentChipHtml`, `agentAnswerHtml`), agent thread CSS
-   classes, polling timer, and `data-agent-send` handler; simplified
-   `taskFormHtml` and `syncDueVisibility`; simplified `listSignature`.
-8. `src/front/static/ontology/js/ontology-init.js` — removed
-   `ontobricks:design-updated` event listener.
-9. `src/front/static/mapping/js/mapping-init.js` — removed
-   `ontobricks:design-updated` event listener.
-10. `src/front/static/global/css/review-modals.css` — removed all
-    `.oc-agent-*` and `.oc-thread-agent` rules and the `@keyframes oc-agent-spin` block.
-11. `tests/units/agents/test_agent_task_planner.py` — deleted.
-12. `tests/units/agents/test_agent_task_router.py` — deleted.
-13. `tests/units/registry/test_agent_task_runner.py` — deleted.
-14. `tests/units/registry/test_comment_service.py` — removed 7 AI-agent test
-    functions; updated `test_list_assignees_returns_domain_holders_sorted` to
-    no longer expect the AI Agent as first entry.
-15. `tests/units/mapping/test_mapping_service.py` — removed
-    `TestApplyAgentMappings` class (4 tests).
-16. `tests/units/api/test_discussion_panel_assets.py` — removed
-    `TestDiscussionAgentStatus`, `TestAnswerTheAgent`, `TestDesignUpdatedRefresh`
-    classes; updated module docstring.
-17. `docs/architecture.md` — removed `registry.py`, `agent_task_router/`,
-    `agent_task_planner/` from the tree; removed the `task_router` row from
-    the task-type table; removed the entire "AI Agent task assignment" section.
-18. `docs/superpowers/plans/2026-06-18-ai-agent-clarifying-questions.md` — deleted.
-19. `docs/superpowers/specs/2026-06-18-ai-agent-clarifying-questions-design.md` — deleted.
-
-**Modified files:**
-- `src/back/objects/registry/CommentService.py`
-- `src/back/objects/mapping/Mapping.py`
-- `src/front/static/global/js/comments-panel.js`
-- `src/front/static/ontology/js/ontology-init.js`
-- `src/front/static/mapping/js/mapping-init.js`
-- `src/front/static/global/css/review-modals.css`
-- `docs/architecture.md`
-- `tests/units/registry/test_comment_service.py`
-- `tests/units/mapping/test_mapping_service.py`
-- `tests/units/api/test_discussion_panel_assets.py`
-
-**Test result:** `pytest tests/units tests/back -q` → 2132 passed, 15 skipped,
-1 pre-existing lakebase/psycopg failure unrelated to these changes.
+## Test Results
+- Full unit suite (excluding e2e / property tests requiring optional deps): 2141 passed,
+  1 pre-existing failure (Lakebase/psycopg not installed), 15 skipped
 
 ---
 
-## Fix: Discussion panel crashes on open — `stopPanelPolling` not defined
+# Bug Fix: Column Assignments in Mapping Tab Not Persisted + Mapping Tab Disable State
 
-**Context:** Clicking the Discussion button on the Designer (and any other
-surface calling `OntoComments.openForSelection`) silently failed after a fresh
-page load. The `build()` function in `comments-panel.js` referenced
-`stopPanelPolling` as an event listener callback on the `hidden.bs.offcanvas`
-event, but that function was never defined — it was a stale reference left when
-the AI-Agent polling loop was removed. The `ReferenceError` was thrown inside
-the async `openThread` promise, aborting the whole flow before the offcanvas
-ever opened.
+## Context
+Two issues in the Designer bottom pane Mapping tab:
+1. Column assignments (ID / Label / Attribute → column) made via the dropdown in the Mapping
+   tab were lost if the user closed the panel without clicking Save, because they only lived in
+   `EntityPanelState` / `RelPanelState` and were never written back to `MappingState.config`.
+2. The Mapping tab button was only disabled when there was no `existingMapping` object at all —
+   it remained enabled for mappings that had an empty `sql_query` (e.g. stub entries).
 
-**Changes:**
-1. `src/front/static/global/js/comments-panel.js` — replaced the
-   `stopPanelPolling` reference with an explicit no-op arrow function
-   (`() => {}`).  The listener is kept as a hook for future cleanup (e.g.
-   clearing a future auto-refresh timer) without breaking anything today.
+## Changes
 
-**Modified files:**
-- `src/front/static/global/js/comments-panel.js`
+1. **`src/front/static/mapping/js/mapping-design.js`**
+   - Added `_syncEntityColAssignments()` helper: reads `idColumn`, `labelColumn`,
+     `attributeMappings` (filtered for excluded attrs) from `EntityPanelState` and writes
+     them into the existing `MappingState.config.entities` entry, then calls
+     `autoSaveMappings()`. No-op when no existing entry is found.
+   - Added `_syncRelColAssignments()` helper: same for relationships, using
+     `RelPanelState.propertyUri`.
+   - `showEntityColumnMenu()` dropdown click handler: calls `_syncEntityColAssignments()`
+     after every column role assignment (ID / Label / Attribute / Clear).
+   - `showRelColumnMenu()` dropdown click handler: calls `_syncRelColAssignments()` after
+     every column role assignment.
+   - `runEntityPanelQuery()`: calls `_syncEntityColAssignments()` after
+     `autoMapEntityColumns()` + `renderEntityPanelGrid()` so auto-mapped columns are
+     immediately persisted.
+   - `runRelPanelQuery()`: same with `_syncRelColAssignments()`.
+   - Entity Mapping tab button: changed disabled condition from `!existingMapping` to
+     `!existingMapping?.sql_query` so the tab is disabled whenever there is no SQL query,
+     regardless of whether a partial mapping object exists.
+   - Relationship Mapping tab button: same fix.
 
-**Test result:** `pytest tests/units -q` → 2372 passed, 15 skipped, 4
-pre-existing lakebase/psycopg failures unrelated to this change.
+## Modified Files
+- `src/front/static/mapping/js/mapping-design.js`
 
----
-
-## Chore: Add Merge Safety rule to project conventions
-
-**Context:** During the conflict resolution of PR #67
-(`feat/Collaborative-Comments-Tasks` ← `develop`), git auto-merged
-`base.html`, `domain.html`, `menu_config.json`, and
-`routers/internal/__init__.py` without conflict markers, silently
-discarding all collaboration UI wiring added by the feature branch.
-Documented the pattern so it isn't repeated.
-
-**Changes:**
-1. `.cursor/07-project-conventions.mdc` — added a **Merge Safety** section
-   (6 rules): feature branch priority, auto-merge risk, a diff checklist for
-   the 4 most-at-risk files, restoration procedure, test requirement, and
-   commit message guidance.
-
-**Modified files:**
-- `.cursor/07-project-conventions.mdc`
-
-**Test result:** documentation/rule change only — no code modified.
+## Test Results
+- No new tests added (UI-only change).
+- Full unit suite (excluding e2e / property tests requiring optional deps): 2141 passed,
+  1 pre-existing failure (Lakebase/psycopg not installed), 15 skipped
 
 ---
 
-## Feature: Add Discussion button to Ontology/Information page
+# Fix: Save Button Always Available for Mapped Entities (Replaces Auto-Save)
 
-**Context:** The Discussion button (opening the domain-wide comments panel via
-`openOntologyDiscussion()`) was only present on the Visual Designer tab. The
-Information tab had no way to open it, forcing the user to navigate to a
-different tab.
+## Context
+Auto-save on checkbox/column-assignment changes was not working: changes were lost on page
+refresh. The root cause was that `savePanelBtn` is disabled by default and only re-enabled by
+`renderEntityPanelGrid()` (called only when the Mapping tab is opened and query run). A user
+staying on the Status tab to toggle attribute exclusions could never save. Separately, if the
+auto-load query returned different columns than saved, idColumn was reset to null and the Save
+button was permanently disabled.
 
-**Changes:**
-1. `src/front/templates/partials/ontology/_ontology_information.html` — wrapped
-   the existing Reset button in a flex group and added the Discussion button
-   (`btn-outline-primary onto-discuss-btn`) with the same markup and
-   `onclick="openOntologyDiscussion()"` as the Designer tab.
+The approach is changed to: remove all auto-save calls, make the Save button always available
+for entities/relationships that already have a saved mapping.
 
-**Modified files:**
-- `src/front/templates/partials/ontology/_ontology_information.html`
+## Changes
 
-**Test result:** no JS/Python logic changed — existing test suite unaffected.
+1. **`src/front/static/mapping/js/mapping-design.js`**
+   - Removed all `_syncEntityAttrExclusions`, `_syncRelAttrExclusions`,
+     `_syncEntityColAssignments`, `_syncRelColAssignments` calls from event handlers
+     (checkbox change, column dropdown click, autoMap, auto-exclude buttons).
+   - `updateEntityPanelSaveBtn()`: now looks up the existing config entry by `panelEntityClass`
+     and uses `existingInConfig?.id_column` as a fallback when `EntityPanelState.idColumn`
+     is null (e.g. after auto-load with mismatched columns). Shows a warning status message
+     instead of disabling Save.
+   - `updateRelPanelSaveBtn()`: same fallback using `RelPanelState.propertyUri` and
+     `existingInConfig?.source_id_column` / `target_id_column`.
+   - `saveEntityPanelMapping()`: uses `effectiveSql` and `effectiveIdCol` (with fallback to
+     existing config values) so the save works when the user only changed attribute exclusions
+     on the Status tab without touching the Mapping tab. Also preserves existing `excluded`
+     flag from config.
+   - `saveRelPanelMapping()`: same fallbacks for `effectiveSql`, `effectiveSrc`, `effectiveTgt`.
+   - Auto-exclude button notifications updated to say "click Save to persist".
+
+## Modified Files
+- `src/front/static/mapping/js/mapping-design.js`
+
+## Test Results
+- Full unit suite (excluding e2e / property tests requiring optional deps): 2141 passed,
+  1 pre-existing failure (Lakebase/psycopg not installed), 15 skipped
 
 ---
 
-## Fix: Suppress spurious `[Map] Skipping property` warnings for data-type attributes
+# Fix: Allow Saving Attribute Exclusions Without a Full Mapping
 
-**Context:** The ontology graph map was logging `console.warn` for every
-data-type attribute property (range = `string`, `integer`, `double`,
-`boolean`, `date`, etc.) because it tried to resolve the range as a class node
-and failed. These are not errors — data-type attributes are intentionally
-absent from the graph. The noisy warnings made it hard to spot real problems
-(a range that names a class but can't be resolved).
+## Context
+When an entity has no SQL mapping yet, the Save button showed "SQL + ID column required"
+and blocked saving. The user needs to be able to set attribute exclusion preferences
+(include/exclude checkboxes in Status tab) before the SQL is configured.
 
-**Changes:**
-1. `src/front/static/ontology/js/ontology-map.js` — added a `PRIMITIVE_TYPES`
-   set covering common XSD/OWL literal types. In the property-link loop,
-   properties whose `range` matches a primitive are skipped silently (no
-   `console.warn`); only genuine misconfigured object properties (range looks
-   like a class name but isn't found) still log a warning.
+The backend already skips stubs with empty `sql_query` in R2RML generation, gap computation,
+and validation (`if m.get("sql_query")`), so lightweight stub entries are safe.
 
-**Modified files:**
-- `src/front/static/ontology/js/ontology-map.js`
+## Changes
 
-**Test result:** `pytest tests/units -q` → 2372 passed, 15 skipped, 4
-pre-existing lakebase/psycopg failures unrelated to this change.
+1. **`src/front/static/mapping/js/mapping-design.js`**
+   - `saveEntityPanelMapping()`: when `effectiveSql` or `effectiveIdCol` is empty, saves
+     only `excluded_attributes` without showing a warning. Updates the existing config entry
+     if one exists; otherwise creates a lightweight stub
+     `{ ontology_class, ontology_class_label, sql_query: '', excluded_attributes: [...] }`.
+     Shows "Attribute selections saved" notification, closes panel, refreshes canvas.
+   - `saveRelPanelMapping()`: same pattern for relationship panels.
+   - `updateEntityPanelSaveBtn()` / `updateRelPanelSaveBtn()`: Save button is now always
+     enabled (never disabled by these functions, except for inactive-version mode).
+     Status line shows informational text when no ID column is configured.
+   - Removed `saveBtn.disabled = true` on panel open (was overriding the always-enabled logic).
+   - Removed `disabled` attribute from `savePanelBtn` in HTML template.
+
+2. **`src/front/templates/partials/mapping/_mapping_design.html`**
+   - Removed `disabled` from `savePanelBtn` button element.
+
+## Modified Files
+- `src/front/static/mapping/js/mapping-design.js`
+- `src/front/templates/partials/mapping/_mapping_design.html`
+
+## Test Results
+- Full unit suite (excluding e2e / property tests requiring optional deps): 2141 passed,
+  1 pre-existing failure (Lakebase/psycopg not installed), 15 skipped
+
+---
+
+# Bug Fix: Auto-Map Overwrites User Attribute Exclusions
+
+## Context
+When the auto-mapping agent ran for an entity that already had user-excluded attributes
+(saved in `excluded_attributes`), it would:
+1. Re-include excluded attributes in the generated `attribute_mappings` (since it reads from
+   the ontology's declared attributes without checking exclusions).
+2. Drop the `excluded_attributes` field entirely when replacing the existing mapping entry
+   in `ctx.entity_mappings`.
+
+The result: excluded attributes were silently re-mapped and their exclusion state was lost.
+
+## Changes
+
+1. **`src/agents/tools/mapping.py`**
+   - `tool_submit_entity_mapping()`: now reads the existing mapping's `excluded_attributes`
+     before building the new mapping. Applies a second filter on `filtered_mappings` to
+     remove any agent-assigned mappings for user-excluded attributes. Copies
+     `excluded_attributes` into the new mapping dict so the field survives the update.
+   - `tool_submit_relationship_mapping()`: same — preserves `excluded_attributes` from the
+     existing relationship mapping when updating.
+
+2. **`src/agents/tools/ontology.py`**
+   - `tool_get_ontology()`: before returning an entity's `attributes` list to the agent,
+     strips out any attributes that appear in the existing mapping's `excluded_attributes`.
+     This prevents the agent from even seeing excluded attributes, providing defence-in-depth.
+
+## Modified Files
+- `src/agents/tools/mapping.py`
+- `src/agents/tools/ontology.py`
+
+## Test Results
+- Full unit suite (excluding e2e / property tests requiring optional deps): 2141 passed,
+  1 pre-existing failure (Lakebase/psycopg not installed), 15 skipped
+
+---
+
+# Bug Fix: Unmap Clears Attribute Exclusions + Auto-Map Result Drops excluded_attributes
+
+## Context
+Two related issues caused attribute exclusion state to be lost silently:
+
+1. **Unmap action** — right-clicking an entity on the canvas and choosing "Unmap" called
+   `MappingState.config.entities.splice(existingIndex, 1)`, which deleted the entire entry
+   including any `excluded_attributes`. After an Unmap + re-map cycle the exclusion state
+   appeared reset.
+
+2. **Auto-map result** — `_saveEntityAgentResult()` / `_saveRelAgentResult()` constructed a
+   new mapping object from the agent result without carrying forward `excluded_attributes`.
+   Even though `tool_submit_entity_mapping` now preserves `excluded_attributes` in the backend
+   `ctx.entity_mappings`, the frontend silently dropped it when writing back to
+   `MappingState.config`.
+
+   Additionally `_buildAgentEntityItem()` sent the full attribute list to the single-entity
+   auto-map endpoint — user-excluded attributes were visible to the agent.
+
+## Changes
+
+1. **`src/front/static/mapping/js/mapping-design.js`**
+   - `contextMenuUnassignEntity()`: instead of always splicing the entry, checks if
+     `excluded_attributes` is non-empty. If so, replaces the entry with a lightweight stub
+     `{ ontology_class, ontology_class_label, sql_query: '', excluded_attributes: [...] }`,
+     preserving exclusion state across an Unmap + re-map cycle.
+   - `contextMenuUnassignRelationship()`: same pattern for relationships.
+   - `_saveEntityAgentResult()`: reads `excluded_attributes` from the agent result (`m`),
+     falls back to `existingEntry.excluded_attributes` in `MappingState.config`, and writes
+     the field into the new mapping object when non-empty.
+   - `_saveRelAgentResult()`: same fallback for relationships.
+   - `_buildAgentEntityItem()`: filters out user-excluded attributes before building the item
+     payload sent to the single-entity auto-map endpoint, so the agent never sees them.
+
+## Modified Files
+- `src/front/static/mapping/js/mapping-design.js`
+
+## Test Results
+- Full unit suite (excluding e2e / property tests requiring optional deps): 2141 passed,
+  1 pre-existing failure (Lakebase/psycopg not installed), 15 skipped
+
+---
+
+# Bug Fix: Attribute KPI and Canvas Node Color Ignore Excluded Attributes
+
+## Context
+Two UI components used all `dataProperties` (including user-excluded ones) when computing
+attribute coverage, causing the gauge and node colour to show less than 100% even when every
+*included* attribute was mapped.
+
+- **Auto-Map page KPI** (`updateStatus`): `totalAttributes` was the raw count of all attributes.
+  With 1 excluded attribute out of 14, the gauge showed 13/14 ≈ 93 % instead of 13/13 = 100 %.
+- **Designer canvas node colour**: the `partial` (orange) status was set when any `dataProperty`
+  had no column assigned, even excluded ones.
+  
+Secondary issues in the same files:
+- `entitiesWithMissingAttrs` (drives the "Re-assign" button visibility) used excluded attrs.
+- `startPartial()` would queue entities for re-mapping because excluded attrs appeared missing.
+- `start()` and `startPartial()` sent the full attribute list to the backend, so the agent saw
+  excluded attributes again.
+
+## Changes
+
+1. **`src/front/static/mapping/js/mapping-autoassign.js`**
+   - `updateStatus()` / attribute loop: skip attributes present in `em.excluded_attributes`
+     before incrementing `totalAttributes` and `mappedAttributes`. The gauge denominator now
+     equals only included attributes.
+   - `entitiesWithMissingAttrs` filter: also skips excluded attributes when deciding whether
+     an entity has "missing" attributes (affects "Re-assign" button visibility).
+   - `startPartial()` entity filter: same fix — excluded attrs no longer trigger a re-map.
+   - `start()` entity builder: filters `excluded_attributes` out of the `attributes` array
+     before sending to `/mapping/auto-assign/start`.
+   - `startPartial()` entity builder: same filter.
+
+2. **`src/front/static/mapping/js/mapping-design.js`**
+   - Canvas node status logic: builds `includedProps` by filtering `dataProperties` against
+     `em.excluded_attributes`, then checks only `includedProps` for column completeness.
+     A fully-mapped entity with some excluded attributes now shows green instead of orange.
+
+## Modified Files
+- `src/front/static/mapping/js/mapping-autoassign.js`
+- `src/front/static/mapping/js/mapping-design.js`
+
+## Test Results
+- Full unit suite (excluding e2e / property tests requiring optional deps): 2141 passed,
+  1 pre-existing failure (Lakebase/psycopg not installed), 15 skipped
+
+---
+
+# Feature: Column Names with Spaces / Special Characters in SQL and R2RML
+
+## Context
+Column names in source tables (Databricks Delta / UC) may contain spaces, hyphens,
+dots or other characters that are invalid in plain SQL identifiers or R2RML column
+references. Without quoting, the generated SQL would be syntactically invalid and
+the R2RML `rr:column` / `rr:template` references would not resolve correctly.
+
+## Changes
+
+1. **`src/agents/agent_auto_assignment/engine.py`** — system prompt
+   - Added a new "COLUMN NAME QUOTING (CRITICAL)" section instructing the agent to:
+     - Wrap unsafe column names with backticks: `` `customer name` ``.
+     - Alias backtick-quoted columns to safe snake_case names:
+       `` `customer name` AS customer_name ``.
+     - Pass only the final output column name (the alias) as `id_column`,
+       `label_column`, and `attribute_mappings` keys to `submit_entity_mapping`.
+     - Never pass a column name with spaces as a mapping key.
+   - Added "Apply the same backtick-quoting rules" note to the relationship SQL rules.
+
+2. **`src/back/core/w3c/r2rml/R2RMLGenerator.py`**
+   - Added `_quote_column(col)` helper: wraps a column name in double-quotes (per
+     R2RML spec §7.4) when it is not a plain SQL identifier (`[A-Za-z_][A-Za-z0-9_]*`).
+     Already-quoted names and empty strings are returned unchanged.
+   - Applied `_quote_column` to every `rr:column` Literal (label and attribute
+     object maps) and every column reference inside `rr:template` curly-braces
+     (entity subject, relationship source/target subject).
+
+3. **`tests/units/mapping/test_r2rml_generator.py`**
+   - Added `TestQuoteColumn` class with 8 tests covering: plain identifiers, already-
+     quoted names, spaces, hyphens, dots, empty strings, end-to-end entity template
+     quoting, and end-to-end attribute-mapping column quoting.
+
+## Modified Files
+- `src/agents/agent_auto_assignment/engine.py`
+- `src/back/core/w3c/r2rml/R2RMLGenerator.py`
+- `tests/units/mapping/test_r2rml_generator.py`
+
+## Test Results
+- R2RML generator tests: 20 passed (8 new)
+- Full mapping suite: 139 passed, 1 skipped
+- Full unit suite (excluding e2e / property tests): 2141 passed,
+  1 pre-existing failure (Lakebase/psycopg not installed), 15 skipped
+
+---
+
+# Tests: Attribute Include/Exclude Coverage
+
+## Context
+No unit tests existed for the per-attribute exclusion feature that spans
+the model layer, gap reporting, R2RML export, and all three agent tools.
+
+## Changes
+
+1. **`tests/units/mapping/test_attribute_exclusion.py`** (new file — 33 tests)
+
+   | Class | Tests | What is verified |
+   |---|---|---|
+   | `TestBuildEntityMappingExcludedAttributes` | 5 | `excluded_attributes` propagated, empty list omitted, absent key omitted, copy isolation, coexists with `excluded` flag |
+   | `TestBuildRelationshipMappingExcludedAttributes` | 4 | Same for relationship mappings |
+   | `TestComputeMappingGapsExcludedAttributes` | 6 | Excluded attrs not in gap list; all excluded → no gaps; mapped+excluded → no gap; unmapped entity not checked |
+   | `TestR2RMLExcludedAttributes` | 3 | Included attr present in R2RML; absent attr_mapping → no predicate/column; end-to-end with excluded_attributes field |
+   | `TestToolSubmitEntityMappingExcludedAttributes` | 6 | No existing excl → field absent; existing excl preserved on re-map; agent mapping for excluded attr stripped; multiple exclusions; no attrs submitted; updates existing entry |
+   | `TestToolSubmitRelationshipMappingExcludedAttributes` | 3 | No excl → absent; excl preserved; updates existing entry |
+   | `TestToolGetOntologyExcludedAttributes` | 6 | All attrs visible; one excl hidden; multiple excl hidden; all excl → empty list; entity count unchanged; exclusion scoped to correct entity |
+
+## Modified Files
+- `tests/units/mapping/test_attribute_exclusion.py` (created)
+
+## Test Results
+- New suite: 33 passed
+- Full mapping suite: 172 passed, 1 skipped
+- Full unit suite (excluding e2e / property tests): 2174 passed,
+  1 pre-existing failure (Lakebase/psycopg not installed), 15 skipped

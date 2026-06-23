@@ -272,8 +272,8 @@ async def start_triplestore_sync(
     try:
         from back.core.triplestore.TripleStoreFactory import TripleStoreFactory
 
-        _engine = TripleStoreFactory._resolve_graph_engine(domain, settings) or ""
-        _ecfg = TripleStoreFactory._resolve_graph_engine_config(domain, settings) or {}
+        _engine = TripleStoreFactory._resolve_graph_engine(domain, settings, force=True) or ""
+        _ecfg = TripleStoreFactory._resolve_graph_engine_config(domain, settings, force=True) or {}
     except Exception as _exc:  # noqa: BLE001
         logger.debug("Engine config resolution failed, defaulting to non-synced: %s", _exc)
         _engine = ""

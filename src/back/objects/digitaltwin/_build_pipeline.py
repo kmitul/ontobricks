@@ -252,11 +252,17 @@ class _BuildPipeline:
 
         logger.debug("[DT-BUILD %s] resolving graph engine mode…", self.task_id)
         try:
+            # force=True bypasses the GlobalConfigService in-memory cache.
+            # At cold start, a transiently unavailable Lakebase can cause the
+            # cache to hold _empty() (no sync_mode), while the Settings UI
+            # always shows the correct value because it also uses force=True.
+            # Without this flag the build silently falls back to app_managed
+            # even when managed_synced is configured.
             engine = TripleStoreFactory._resolve_graph_engine(
-                self.domain, self.settings
+                self.domain, self.settings, force=True
             )
             cfg = TripleStoreFactory._resolve_graph_engine_config(
-                self.domain, self.settings
+                self.domain, self.settings, force=True
             ) or {}
         except Exception as exc:  # noqa: BLE001
             logger.warning(

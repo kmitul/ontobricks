@@ -18,14 +18,19 @@
 - **Direct Edit Mode**: Clicking an already-assigned entity or relationship immediately loads the editable column-mapping grid (no extra Edit button click needed).
 - **AI-Powered Wizard**: Generate SQL queries using an LLM endpoint with table context from project metadata.
 - **Attribute-Level Mapping**: Map individual ontology attributes to SQL columns with multi-pass matching (exact, normalized, substring, positional).
-- **Partial Mapping Detection**: Entities with incomplete attribute mappings are highlighted with an orange indicator on the Designer view.
+- **Per-Attribute Include / Exclude**: Each attribute in the **Status tab** of the bottom panel has a checkbox. Unchecking an attribute excludes it from the mapping — excluded attributes are shown with strikethrough styling and a dash icon, are skipped in gap reporting, are not generated in the R2RML export, and are hidden from the auto-mapping agent. Exclusions survive Unmap/re-map cycles and are never overwritten by Auto-Map.
+- **Auto-Exclude Unmapped Attributes**: The Status tab exposes an **Auto-Exclude unmapped** button that bulk-excludes all attributes that have no column assignment yet. Useful for quickly scoping a mapping to only the attributes you care about.
+- **Partial Mapping Detection (includes-aware)**: Entities with incomplete attribute mappings are highlighted orange on the Designer canvas. The check now considers only *included* attributes — an entity is green when every included attribute has a column assignment, regardless of how many attributes are excluded.
 - **Auto-Map**: Batch-map all unmapped entities and relationships asynchronously with progress tracking.
-- **Re-Assign Missing Attributes**: Targeted re-mapping for entities that have some attributes unmapped.
+- **Auto-Map KPI — Excluded Counts**: Entity, Relationship, and Attribute KPI tiles on the Auto-Map page show the number of excluded items alongside mapped/total counts (e.g. `13 / 13 · 1 excl.`).
+- **Metadata Quality Warning**: The Auto-Map page detects tables and columns with missing `COMMENT` descriptions and displays a collapsible warning. Poor metadata quality reduces LLM mapping accuracy; a direct link opens the Domain → Metadata editor.
+- **Re-Assign Missing Attributes**: Targeted re-mapping for entities that have some included attributes unmapped (excluded attributes are ignored by this check).
+- **Column Names with Spaces / Special Characters**: The auto-mapping agent is instructed to backtick-quote unsafe column names and alias them to safe `snake_case` names. The R2RML generator double-quotes column names (per R2RML spec §7.4) in `rr:column` values and `rr:template` column references whenever a name is not a plain SQL identifier.
 - **Preview Limit**: Control the number of preview rows displayed in the Mapping grid; SQL is stored without LIMIT clause.
 - **Unified Panel UI**: Designer and Manual views share the same panel design (tabs, forms, tables) for a consistent experience.
 - **SQL Query Testing**: Test and validate SQL queries directly in the mapping interface before saving.
 - **Relationship Direction**: Control forward, reverse, or bidirectional relationships with visual indicators.
-- **R2RML Generation**: Automatic generation of W3C-compliant R2RML mappings from visual configuration.
+- **R2RML Generation**: Automatic generation of W3C-compliant R2RML mappings from visual configuration. Excluded attributes are never emitted as `rr:predicateObjectMap` triples.
 
 ## Digital Twin (Sync & Explore)
 - **Two Layers**: Every build materializes a Delta view (Unity Catalog, governance) and a Graph DB engine (Lakebase Postgres today; pluggable behind `GraphDBFactory`).

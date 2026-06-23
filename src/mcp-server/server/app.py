@@ -35,6 +35,7 @@ Three operating modes controlled by the ``mode`` argument:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -423,6 +424,14 @@ def _get_auth_headers(mode: str) -> dict:
     return {}
 
 
+_RETRYABLE_STATUSES = {502, 503}
+_RETRY_DELAYS = (5, 10, 20)  # seconds between successive attempts (3 retries)
+
+
+def _retryable(status: int) -> bool:
+    return status in _RETRYABLE_STATUSES
+
+
 async def _get(
     client: httpx.AsyncClient, path: str, params: dict | None = None
 ) -> dict:
@@ -433,37 +442,82 @@ async def _get(
     empty payloads in the Apps log stream. On non-2xx responses we
     log a body excerpt before re-raising so the caller (and the LLM)
     sees an actionable error instead of a bare ``HTTPStatusError``.
+
+    502/503 responses (Databricks Apps cold-start / proxy transient
+    errors) are retried up to 3 times with increasing delays before
+    the error is propagated.
     """
-    logger.info("GET %s%s params=%s", client.base_url, path, params or {})
-    resp = await client.get(path, params=params, timeout=120)
-    if resp.status_code >= 400:
-        body_excerpt = resp.text[:500].replace("\n", " ") if resp.text else ""
-        logger.warning(
-            "GET %s%s → %s body=%r",
-            client.base_url,
-            path,
-            resp.status_code,
-            body_excerpt,
+    delays = list(_RETRY_DELAYS)
+    attempt = 0
+    while True:
+        logger.info(
+            "GET %s%s params=%s (attempt %d)", client.base_url, path, params or {}, attempt + 1
         )
-    else:
-        logger.info("GET %s%s → %s", client.base_url, path, resp.status_code)
-    resp.raise_for_status()
-    return resp.json()
+        resp = await client.get(path, params=params, timeout=120)
+        if resp.status_code >= 400:
+            body_excerpt = resp.text[:500].replace("\n", " ") if resp.text else ""
+            logger.warning(
+                "GET %s%s → %s body=%r",
+                client.base_url,
+                path,
+                resp.status_code,
+                body_excerpt,
+            )
+            if _retryable(resp.status_code) and delays:
+                delay = delays.pop(0)
+                logger.info(
+                    "Retrying in %ds (status=%s, attempt %d/%d)…",
+                    delay,
+                    resp.status_code,
+                    attempt + 1,
+                    len(_RETRY_DELAYS) + 1,
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
+                continue
+        else:
+            logger.info("GET %s%s → %s", client.base_url, path, resp.status_code)
+        resp.raise_for_status()
+        return resp.json()
 
 
 async def _post(
     client: httpx.AsyncClient, path: str, json: dict | None = None
 ) -> dict:
-    """POST *path* on *client* with optional JSON body and return the JSON response."""
-    logger.info("POST %s%s", client.base_url, path)
-    resp = await client.post(path, json=json or {}, timeout=120)
-    if resp.status_code >= 400:
-        body_excerpt = resp.text[:500].replace("\n", " ") if resp.text else ""
-        logger.warning("POST %s%s → %s body=%r", client.base_url, path, resp.status_code, body_excerpt)
-    else:
-        logger.info("POST %s%s → %s", client.base_url, path, resp.status_code)
-    resp.raise_for_status()
-    return resp.json()
+    """POST *path* on *client* with optional JSON body and return the JSON response.
+
+    502/503 responses are retried up to 3 times with increasing delays.
+    """
+    delays = list(_RETRY_DELAYS)
+    attempt = 0
+    while True:
+        logger.info("POST %s%s (attempt %d)", client.base_url, path, attempt + 1)
+        resp = await client.post(path, json=json or {}, timeout=120)
+        if resp.status_code >= 400:
+            body_excerpt = resp.text[:500].replace("\n", " ") if resp.text else ""
+            logger.warning(
+                "POST %s%s → %s body=%r",
+                client.base_url,
+                path,
+                resp.status_code,
+                body_excerpt,
+            )
+            if _retryable(resp.status_code) and delays:
+                delay = delays.pop(0)
+                logger.info(
+                    "Retrying in %ds (status=%s, attempt %d/%d)…",
+                    delay,
+                    resp.status_code,
+                    attempt + 1,
+                    len(_RETRY_DELAYS) + 1,
+                )
+                await asyncio.sleep(delay)
+                attempt += 1
+                continue
+        else:
+            logger.info("POST %s%s → %s", client.base_url, path, resp.status_code)
+        resp.raise_for_status()
+        return resp.json()
 
 
 # ── Factory ───────────────────────────────────────────────────────────────
