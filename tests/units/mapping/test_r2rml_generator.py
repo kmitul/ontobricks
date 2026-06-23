@@ -249,3 +249,75 @@ class TestConvenienceFunction:
         ontology = {"base_uri": "http://example.org/"}
         r2rml = generate_r2rml_from_config(mapping, ontology)
         assert r2rml is not None
+
+
+class TestDeterministicSerialization:
+    """R2RML output must be byte-for-byte identical across repeated calls."""
+
+    _MAPPING = {
+        "entities": [
+            {
+                "ontology_class": "http://test.org/ontology/Customer",
+                "ontology_class_label": "Customer",
+                "sql_query": "SELECT id, name, email FROM customers",
+                "id_column": "id",
+                "label_column": "name",
+                "attribute_mappings": {"email": "email", "age": "age"},
+            },
+            {
+                "ontology_class": "http://test.org/ontology/Contract",
+                "ontology_class_label": "Contract",
+                "sql_query": "SELECT id, title FROM contracts",
+                "id_column": "id",
+                "attribute_mappings": {"title": "title"},
+            },
+        ],
+        "relationships": [
+            {
+                "property": "http://test.org/ontology/hasContract",
+                "property_label": "hasContract",
+                "source_class": "http://test.org/ontology/Customer",
+                "source_class_label": "Customer",
+                "target_class": "http://test.org/ontology/Contract",
+                "target_class_label": "Contract",
+                "source_id_column": "customer_id",
+                "target_id_column": "contract_id",
+                "sql_query": "SELECT customer_id, contract_id FROM customer_contracts",
+            }
+        ],
+    }
+
+    def test_repeated_calls_produce_identical_output(self):
+        gen = R2RMLGenerator("http://test.org/ontology/")
+        first = gen.generate_mapping(self._MAPPING)
+        second = gen.generate_mapping(self._MAPPING)
+        assert first == second
+
+    def test_attribute_order_is_stable(self):
+        """Attributes in reverse-alphabetical input order must still sort consistently."""
+        gen = R2RMLGenerator("http://test.org/ontology/")
+        mapping_z_first = {
+            "entities": [
+                {
+                    "ontology_class": "http://test.org/ontology/Item",
+                    "ontology_class_label": "Item",
+                    "sql_query": "SELECT * FROM items",
+                    "id_column": "id",
+                    "attribute_mappings": {"zzz": "col_z", "aaa": "col_a"},
+                }
+            ],
+            "relationships": [],
+        }
+        mapping_a_first = {
+            "entities": [
+                {
+                    "ontology_class": "http://test.org/ontology/Item",
+                    "ontology_class_label": "Item",
+                    "sql_query": "SELECT * FROM items",
+                    "id_column": "id",
+                    "attribute_mappings": {"aaa": "col_a", "zzz": "col_z"},
+                }
+            ],
+            "relationships": [],
+        }
+        assert gen.generate_mapping(mapping_z_first) == gen.generate_mapping(mapping_a_first)
