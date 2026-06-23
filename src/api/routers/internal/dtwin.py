@@ -5,6 +5,7 @@ Moved from app/frontend/digitaltwin/routes.py during the front/back split.
 """
 
 from dataclasses import dataclass
+import os
 import time
 from typing import Any, Optional
 
@@ -29,6 +30,7 @@ from back.core.helpers import (
     effective_view_table,
     get_databricks_client,
     get_databricks_credentials,
+    get_databricks_host_and_token,
     make_volume_file_service,
     is_uri,
     run_blocking,
@@ -433,6 +435,155 @@ async def detect_clusters(
     except Exception as e:
         logger.exception("Cluster detection failed: %s", e)
         raise InfrastructureError("Cluster detection failed", detail=str(e))
+
+
+# ===========================================
+# Graph Metrics
+# ===========================================
+
+
+@router.post("/metrics/compute")
+async def compute_graph_metrics(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Compute centrality and structural metrics on the full knowledge graph."""
+    try:
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        predicate_filter = data.get("predicate_filter")
+        class_filter = data.get("class_filter")
+        max_triples = int(data.get("max_triples", 500_000))
+        max_nodes_betweenness = int(data.get("max_nodes_betweenness", 2_000))
+
+        domain = get_domain(session_mgr)
+        graph_name = effective_graph_name(domain)
+        if not graph_name:
+            raise ValidationError("Graph name is not configured")
+
+        store = _require_graph_store(domain, settings)
+
+        dt = DigitalTwin(domain)
+        result = await run_blocking(
+            dt.compute_graph_metrics,
+            store,
+            graph_name,
+            predicate_filter=predicate_filter,
+            class_filter=class_filter,
+            max_triples=max_triples,
+            max_nodes_betweenness=max_nodes_betweenness,
+        )
+
+        return {"success": True, **result}
+
+    except (ValidationError, InfrastructureError, NotFoundError):
+        raise
+    except ValueError as e:
+        logger.warning("Graph metrics rejected: %s", e)
+        raise ValidationError("Graph metrics parameters are invalid", detail=str(e))
+    except Exception as e:
+        logger.exception("Graph metrics failed: %s", e)
+        raise InfrastructureError("Graph metrics computation failed", detail=str(e))
+
+
+@router.get("/metrics/summary")
+async def get_graph_metrics_summary(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Return aggregate graph structure stats and top-PageRank nodes (cockpit card)."""
+    try:
+        domain = get_domain(session_mgr)
+        graph_name = effective_graph_name(domain)
+        if not graph_name:
+            raise ValidationError("Graph name is not configured")
+
+        store = _require_graph_store(domain, settings)
+
+        dt = DigitalTwin(domain)
+        result = await run_blocking(
+            dt.compute_graph_metrics,
+            store,
+            graph_name,
+        )
+
+        return {
+            "success": True,
+            "stats": result["stats"],
+            "top_pagerank": result["top_pagerank"],
+        }
+
+    except (ValidationError, InfrastructureError, NotFoundError):
+        raise
+    except ValueError as e:
+        logger.warning("Graph metrics summary rejected: %s", e)
+        raise ValidationError("Graph metrics summary failed", detail=str(e))
+    except Exception as e:
+        logger.exception("Graph metrics summary failed: %s", e)
+        raise InfrastructureError("Graph metrics summary failed", detail=str(e))
+
+
+@router.post("/metrics/interpret")
+async def interpret_graph_metrics(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Run the graph-interpreter agent on the supplied metrics payload.
+
+    Expects the JSON body produced by ``/dtwin/metrics/compute`` plus an
+    optional ``class_filter`` list so the agent knows the entity type.
+    The agent may call ``get_entity_details`` to look up specific entities
+    before producing its structured insights.
+    Returns ``{ success, sections: [{ title, body | items }] }``.
+    """
+    try:
+        data = await request.json()
+        domain = get_domain(session_mgr)
+
+        host, token = get_databricks_host_and_token(domain, settings)
+        if not host or not token:
+            raise ValidationError("Databricks credentials not configured")
+
+        llm_endpoint = (domain.info or {}).get("llm_endpoint", "") or ""
+        if not llm_endpoint:
+            llm_endpoint = _auto_discover_llm_endpoint(domain, settings)
+        if not llm_endpoint:
+            raise ValidationError(
+                "No LLM serving endpoint available. Please set one in Domain Settings."
+            )
+
+        # Build loopback base URL so the agent can call get_entity_details
+        app_port = os.environ.get("DATABRICKS_APP_PORT") or os.environ.get("PORT") or "8000"
+        base_url = f"http://localhost:{app_port}"
+        session_cookies = dict(request.cookies or {})
+        session_headers = {
+            k: v
+            for k, v in request.headers.items()
+            if k.lower().startswith("x-forwarded-") or k.lower() == "x-csrf-token"
+        }
+
+        dt = DigitalTwin(domain)
+        result = await run_blocking(
+            dt.interpret_graph_metrics,
+            data,
+            host,
+            token,
+            llm_endpoint,
+            base_url,
+            session_cookies,
+            session_headers,
+        )
+        return result
+
+    except (ValidationError, InfrastructureError, NotFoundError):
+        raise
+    except Exception as e:
+        logger.exception("Graph metrics interpretation failed: %s", e)
+        raise InfrastructureError("Graph metrics interpretation failed", detail=str(e))
 
 
 # ===========================================

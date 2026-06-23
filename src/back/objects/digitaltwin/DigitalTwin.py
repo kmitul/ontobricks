@@ -3088,6 +3088,110 @@ class DigitalTwin:
             },
         }
 
+    def compute_graph_metrics(
+        self,
+        store: Any,
+        graph_name: str,
+        predicate_filter: Optional[List[str]] = None,
+        class_filter: Optional[List[str]] = None,
+        max_triples: int = 500_000,
+        max_nodes_betweenness: int = 2_000,
+    ) -> Dict[str, Any]:
+        """Compute centrality and structural metrics on the full knowledge graph.
+
+        Delegates to :class:`GraphMetrics` from ``back.core.graph_analysis``.
+        Returns a JSON-serializable dict matching the API contract.
+        """
+        from back.core.graph_analysis import GraphMetrics, MetricsRequest
+
+        request = MetricsRequest(
+            predicate_filter=predicate_filter,
+            class_filter=class_filter,
+            max_triples=max_triples,
+            max_nodes_betweenness=max_nodes_betweenness,
+        )
+        service = GraphMetrics(store, graph_name)
+        result = service.compute(request)
+
+        return {
+            "nodes": {
+                uri: {
+                    "degree": m.degree,
+                    "pagerank": m.pagerank,
+                    "betweenness": m.betweenness,
+                    "closeness": m.closeness,
+                    "clustering": m.clustering,
+                }
+                for uri, m in result.nodes.items()
+            },
+            "stats": {
+                "node_count": result.stats.node_count,
+                "graph_node_count": result.stats.graph_node_count,
+                "edge_count": result.stats.edge_count,
+                "connected_components": result.stats.connected_components,
+                "avg_degree": result.stats.avg_degree,
+                "density": result.stats.density,
+                "elapsed_ms": result.stats.elapsed_ms,
+            },
+            "top_pagerank": result.top_pagerank,
+            "node_types": result.node_types,
+            "node_labels": result.node_labels,
+            "entity_type_profiles": {
+                k: {
+                    "uri": v.uri,
+                    "count": v.count,
+                    "avg_degree": v.avg_degree,
+                    "avg_clustering": v.avg_clustering,
+                    "avg_betweenness": v.avg_betweenness,
+                    "distinct_predicates": v.distinct_predicates,
+                    "has_temporal_predicates": v.has_temporal_predicates,
+                    "is_flat": v.is_flat,
+                    "flat_reasons": v.flat_reasons,
+                }
+                for k, v in result.entity_type_profiles.items()
+            },
+        }
+
+    def interpret_graph_metrics(
+        self,
+        payload: Dict[str, Any],
+        host: str,
+        token: str,
+        endpoint_name: str,
+        base_url: str = "",
+        session_cookies: Optional[Dict[str, str]] = None,
+        session_headers: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """Delegate graph-metrics interpretation to ``agent_graph_interpreter``.
+
+        ``payload`` is the JSON dict returned by ``compute_graph_metrics`` plus an
+        optional ``class_filter`` list added by the API layer.
+        Returns ``{ success, sections: [{ title, body | items }] }``.
+        """
+        from agents.agent_graph_interpreter import run_agent
+
+        # DomainSession stores the name under domain.info["name"], not .name
+        domain_name = ""
+        if self._domain is not None:
+            _info = getattr(self._domain, "info", None) or {}
+            domain_name = (_info.get("name") or "").strip() if isinstance(_info, dict) else ""
+
+        result = run_agent(
+            host=host,
+            token=token,
+            endpoint_name=endpoint_name,
+            metrics_payload=payload,
+            base_url=base_url,
+            domain_name=domain_name,
+            session_cookies=session_cookies or {},
+            session_headers=session_headers,
+        )
+
+        if not result.success:
+            return {"success": False, "sections": [], "error": result.error}
+
+        return {"success": True, "sections": result.sections}
+
     @staticmethod
     def compute_dtwin_indicator(
         domain: Any,

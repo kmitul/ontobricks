@@ -26,6 +26,7 @@ async function loadValidationDetails() {
         updateDtwinCard(data);
         updateMissingItems(data);
         loadPrecisionScore();
+        loadGraphMetricsSummary();
     } catch (error) {
         console.error('Error loading validation:', error);
         const banner = document.getElementById('domainHealthBanner');
@@ -47,6 +48,49 @@ async function loadPrecisionScore() {
         renderPrecisionScore(data && data.success ? data.precision_score : null);
     } catch (e) {
         renderPrecisionScore(null);
+    }
+}
+
+/* ── Graph structure metrics summary ─────────── */
+async function loadGraphMetricsSummary() {
+    const spinner = document.getElementById('graphStructureSpinner');
+    const content = document.getElementById('graphStructureContent');
+    const errorEl = document.getElementById('graphStructureError');
+    const badge = document.getElementById('graphStructureBadge');
+    try {
+        const resp = await fetch('/dtwin/metrics/summary', { credentials: 'same-origin' });
+        const data = await resp.json();
+        if (!data.success || !data.stats) {
+            if (spinner) spinner.classList.add('d-none');
+            if (errorEl) errorEl.classList.remove('d-none');
+            if (badge) { badge.textContent = 'Unavailable'; badge.className = 'badge bg-secondary'; }
+            return;
+        }
+        const s = data.stats;
+        const setText = (id, val) => { const el = document.getElementById(id); if (el) el.textContent = val; };
+        setText('gsNodeCount', s.node_count != null ? s.node_count.toLocaleString() : '—');
+        setText('gsEdgeCount', s.edge_count != null ? s.edge_count.toLocaleString() : '—');
+        setText('gsComponents', s.connected_components != null ? s.connected_components : '—');
+        setText('gsAvgDegree', s.avg_degree != null ? s.avg_degree.toFixed(2) : '—');
+        setText('gsDensity', s.density != null ? s.density.toFixed(6) : '—');
+
+        const topEl = document.getElementById('gsTopPagerank');
+        if (topEl && data.top_pagerank && data.top_pagerank.length > 0) {
+            const items = data.top_pagerank.slice(0, 5).map(function (uri) {
+                const local = uri.split(/[/#]/).pop() || uri;
+                return '<span class="badge bg-light text-dark border me-1 mb-1" title="' + uri + '">' + local + '</span>';
+            });
+            topEl.innerHTML = items.join('');
+        }
+
+        if (spinner) spinner.classList.add('d-none');
+        if (content) content.classList.remove('d-none');
+        if (badge) { badge.textContent = s.node_count + ' nodes'; badge.className = 'badge bg-success'; }
+    } catch (e) {
+        if (spinner) spinner.classList.add('d-none');
+        if (errorEl) errorEl.classList.remove('d-none');
+        if (badge) { badge.textContent = 'Error'; badge.className = 'badge bg-danger'; }
+        console.warn('[GraphStructure] Could not load metrics summary:', e);
     }
 }
 

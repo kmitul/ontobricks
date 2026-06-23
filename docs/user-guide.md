@@ -554,6 +554,74 @@ The cluster panel also displays:
 - A color-coded chip list of all clusters with their sizes
 - Click a chip to toggle collapse/expand for that cluster
 
+### Analytics (Sidebar)
+
+Click **Analytics** in the sidebar to compute and visualise centrality and structural metrics for the entities in your knowledge graph. Analytics runs a server-side NetworkX computation — no sampling is needed for typical graphs.
+
+#### Running an Analysis
+
+1. (Optional) Select an **entity type** from the dropdown to restrict the analysis to one class (e.g. "Customer"). Selecting a type shows only instances of that type in the charts while still computing metrics on the full connected subgraph for accuracy. "All types (full graph)" includes every entity.
+2. Click **Run Analysis**. A spinner shows while the computation runs. Once complete, six stat cards appear (Nodes, Edges, Components, Avg Degree, Density, Elapsed) and five interactive charts render below.
+
+#### Reading the Charts
+
+One horizontal bar chart is generated for each metric:
+
+| Metric | What it measures |
+|--------|-----------------|
+| **PageRank** | Global influence — nodes that are pointed to by other influential nodes rank highest |
+| **Betweenness Centrality** | Bridging role — nodes that lie on many shortest paths between other nodes |
+| **Degree Centrality** | Raw connectivity — fraction of other nodes this node is directly connected to |
+| **Closeness Centrality** | Reachability — how quickly this node can reach every other node in the graph |
+| **Clustering Coefficient** | Local density — fraction of a node's neighbors that are also connected to each other |
+
+- **Click a bar** to jump directly to that entity in the Graph Viewer (the filter is pre-populated).
+- **Hover a bar** to see all five metric scores for that entity in the tooltip.
+- **Click the `?` button** on any chart card header to open an explanation popup with the formula, a worked example, and guidance on why the metric matters.
+
+Below the charts, a **PageRank Detail Table** lists the top-N entities with all five metrics displayed as mini progress bars, providing full context for why a node ranks highly. Every row is clickable → Graph Viewer.
+
+#### Data Model Health
+
+After an analysis, a **Data Model Health** card shows entity types that may not benefit from graph storage:
+
+| Column | Meaning |
+|--------|---------|
+| **Entity Type** | Class URI local name |
+| **Instances** | Count of instances in the graph |
+| **Rel. Predicates** | Distinct entity-to-entity relationship predicates (excludes `rdf:type`, `rdfs:label`, and literal attributes; counts both incoming and outgoing relationships) |
+| **Temporal** | Whether any predicate name contains a temporal keyword (e.g. `date`, `timestamp`) |
+
+An entity type is flagged as **flat / time-series** when:
+
+- It has **0 relationship predicates** — all instances are fully isolated (no entity-entity relationships)
+- It has **exactly 1 relationship predicate** across more than 20 instances — suggests a one-dimensional link
+
+> Types flagged as flat may not rely on graph semantics. Consider **excluding** them from the sync or **replacing individual rows with aggregated facts** in the ontology.
+
+The AI Interpretation agent also mentions flat types in its Key Findings and Recommendations sections.
+
+#### Adjusting the Top-N and Resetting
+
+Use the **Top N** input at the top of the results section to control how many entities each chart and table shows. Change the entity type dropdown to re-run the analysis on a different class.
+
+#### AI Interpretation
+
+After an analysis completes, an **Interpret** button (✦ icon) appears in the toolbar.
+
+1. Click **Interpret** — an AI agent (`agent_graph_interpreter`) calls the LLM serving endpoint configured for the domain. The agent may call `get_entity_details` one or more times to look up specific top-ranked entities before writing its insights.
+2. The **AI Insights** card renders three structured sections:
+   - **Key Findings** — 2–4 sentences on the graph structure and standout patterns
+   - **Notable Entities** — up to 5 entities with reasons they stand out; clicking an entity name navigates to the Graph Viewer
+   - **Recommendations** — 2–4 actionable suggestions
+3. Click **Add to audit trail** (journal icon in the card header) to save the AI insights as a comment on the current domain version. The discussion panel opens automatically so you can see the new entry.
+
+> **Tip**: The LLM endpoint used is the one set in **Domain → Information → LLM Endpoint**. If none is configured, interpretation is unavailable and the Interpret button will not appear after analysis.
+
+#### Discussion Panel
+
+Click the **Discussion** button (chat-bubble icon, top-right of the Analytics toolbar) to open the comments panel for the current domain version. All review decisions and saved AI insights appear here in chronological order with markdown rendering.
+
 ### Quality Checks (Sidebar)
 
 Click **Quality** in the sidebar to run automated quality checks on your triple store data:
@@ -820,6 +888,8 @@ Domains are saved in a versioned JSON format and can be stored in Unity Catalog 
 4. **Review Triples**: Browse the triples grid to verify the generated data looks correct
 5. **Performance**: The `/stats` API aggregates all scalar metrics in a single SQL query and the `/triples/find` BFS traversal uses a recursive CTE, minimizing SQL Warehouse round trips
 6. **Programmatic Access**: Use the Knowledge Graph API (`/api/v1/digitaltwin/`) or the MCP server for programmatic and conversational access to your graph viewer
+7. **Use Analytics for Governance**: Run the Analytics section after each sync to spot high-influence entities (PageRank), bottlenecks (Betweenness), and isolated sub-graphs (connected components count > 1). Use the AI Interpretation feature to get an instant narrative summary of the graph structure.
+8. **Save Insights to Audit Trail**: After interpreting analytics results, click **Add to audit trail** to keep a record of the AI-generated observations in the domain's review history.
 
 ---
 
