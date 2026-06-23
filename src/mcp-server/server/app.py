@@ -1,7 +1,7 @@
 """
 OntoBricks MCP Server
 
-Exposes Domain registry metadata and Digital Twin triple-store capabilities
+Exposes Domain registry metadata and Knowledge Graph triple-store capabilities
 as MCP tools and resources. HTTP calls target the OntoBricks **external REST**
 surface (``/api/v1/...``) and in-app GraphQL (``/graphql/...``).
 
@@ -9,7 +9,7 @@ REST layout (see ``api.external_app``):
 
 - **Domain** — ``GET /api/v1/domains``, ``/api/v1/domain/versions``,
   ``/api/v1/domain/design-status``, ``/api/v1/domain/ontology``, etc.
-- **Digital Twin** — ``GET /api/v1/digitaltwin/registry``, ``status``,
+- **Knowledge Graph** — ``GET /api/v1/digitaltwin/registry``, ``status``,
   ``stats``, ``triples/find``, build, quality, inference, …
 
 Workflow:
@@ -18,7 +18,7 @@ Workflow:
      versions and design readiness before heavy queries.
   3. ``select_domain`` — choose which domain to work with.
   4. ``list_entity_types`` / ``describe_entity`` / ``get_status`` —
-     query the selected domain's Digital Twin.
+     query the selected domain's Knowledge Graph.
 
 Three operating modes controlled by the ``mode`` argument:
 
@@ -666,7 +666,7 @@ def create_mcp_server(mode: str = "standalone") -> FastMCP:
     mcp = FastMCP(
         "OntoBricks",
         instructions=(
-            "You are connected to OntoBricks: domain registry + Digital Twin "
+            "You are connected to OntoBricks: domain registry + Knowledge Graph "
             "(triple store) over external REST at /api/v1.\n\n"
             "Workflow:\n"
             "1. Call 'list_domains' to see available domains.\n"
@@ -852,7 +852,7 @@ def create_mcp_server(mode: str = "standalone") -> FastMCP:
         After calling ``list_domains`` to see what is available, call
         this tool with the exact domain name. All subsequent calls to
         ``list_entity_types``, ``describe_entity``, and ``get_status``
-        will operate on this domain's Digital Twin.
+        will operate on this domain's Knowledge Graph.
 
         Args:
             domain_name: Exact domain name as shown by ``list_domains``.
@@ -907,7 +907,7 @@ def create_mcp_server(mode: str = "standalone") -> FastMCP:
             return data.get("message", "Could not retrieve statistics.")
 
         lines: list[str] = []
-        lines.append(f"Knowledge Graph — {_selected_domain['name']}")
+        lines.append(f"Graph Viewer — {_selected_domain['name']}")
         lines.append("=" * 40)
         inferred = data.get("inferred_triples", 0)
         lines.append(f"Total triples:       {data.get('total_triples', 0):,}")

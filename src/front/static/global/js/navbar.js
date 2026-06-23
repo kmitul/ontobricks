@@ -70,7 +70,7 @@ window.applyBrandLogo = applyBrandLogo;
 
 
 /**
- * Refresh all three workflow indicators (Ontology, Mapping, Digital Twin)
+ * Refresh all three workflow indicators (Ontology, Mapping, Knowledge Graph)
  * in the top navbar. Call this single function after any change that could
  * affect one or more of these statuses.
  *

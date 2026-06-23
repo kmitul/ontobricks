@@ -430,7 +430,7 @@ class TestDomainPage:
 class TestDigitalTwinPage:
     def test_title(self, client):
         html = _html(client, "/dtwin/")
-        assert "Digital Twin" in _title_text(html)
+        assert "Knowledge Graph" in _title_text(html)
 
     def test_sidebar_present(self, client):
         html = _html(client, "/dtwin/")

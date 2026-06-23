@@ -11,7 +11,7 @@ const Breadcrumb = {
         '/domain/':   { label: 'Domain',       icon: 'bi-folder2' },
         '/ontology/': { label: 'Ontology',     icon: 'bi-bezier2' },
         '/mapping/':  { label: 'Mapping',      icon: 'bi-shuffle' },
-        '/dtwin/':    { label: 'Digital Twin', icon: 'bi-box-fill' },
+        '/dtwin/':    { label: 'Knowledge Graph', icon: 'bi-box-fill' },
         '/settings':  { label: 'Settings',     icon: 'bi-gear-fill' },
     },
 

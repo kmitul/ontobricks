@@ -2,12 +2,12 @@
 
 ## Overview
 
-OntoBricks is a web-based **Knowledge Graph Builder** that runs natively on Databricks. The core workflow is:
+OntoBricks is a web-based **Graph Viewer Builder** that runs natively on Databricks. The core workflow is:
 
 1. **Design** an ontology visually (or import one from OWL / industry standards).
 2. **Map** ontology entities to Unity Catalog tables using R2RML.
 3. **Materialize** a triple store (Delta table) and a graph backend (Lakebase Postgres).
-4. **Explore** the resulting knowledge graph — visual navigation, SPARQL, GraphQL, data-quality checks, and reasoning.
+4. **Explore** the resulting graph viewer — visual navigation, SPARQL, GraphQL, data-quality checks, and reasoning.
 
 Under the hood, SPARQL translates ontology mappings into Spark SQL — users never need to write SPARQL themselves.
 
@@ -29,7 +29,7 @@ Under the hood, SPARQL translates ontology mappings into Spark SQL — users nev
 
 ## Semantic Web Standards Stack
 
-OntoBricks leverages multiple W3C semantic web standards to bridge relational data and knowledge graphs:
+OntoBricks leverages multiple W3C semantic web standards to bridge relational data and graph viewers:
 
 ![Semantic Web Stack](images/semantic-web-stack.svg)
 
@@ -187,7 +187,7 @@ LIMIT 100
 6. **Generated Spark SQL** - Query with JOINs and UNION ALL
 7. **Triple Store Backend Dispatch** - The `TripleStoreFactory` returns a Delta-backed view client (`DeltaTripleStore`) and `GraphDBFactory` returns the active graph engine (`LakebaseFlatStore`). Both expose the same `(subject, predicate, object)` contract.
 8. **RDF-style Results** - Uniform (subject, predicate, object) triples from both backends
-9. **Knowledge Graph** - Sigma.js WebGL-powered graph with entity details panel, search, filtering, and data cluster detection (Louvain/Label Propagation/Greedy Modularity)
+9. **Graph Viewer** - Sigma.js WebGL-powered graph with entity details panel, search, filtering, and data cluster detection (Louvain/Label Propagation/Greedy Modularity)
 
 **Generated Spark SQL Example** (for generic triple query):
 ```sql
@@ -337,7 +337,7 @@ src/
 │   │   └── dependencies.py             # Jinja2 templates & shared dependencies for HTML routes
 │   ├── config/
 │   │   └── menu_config.json            # Sidebar navigation structure
-│   ├── routes/                         # HTML page routers (home, ontology, mapping, digital twin, project)
+│   ├── routes/                         # HTML page routers (home, ontology, mapping, graph viewer, project)
 │   ├── templates/                      # Consolidated Jinja2 templates (partials per feature area)
 │   └── static/                         # Static assets (css/, js/, img/, ontoviz/, per-area folders)
 │
@@ -421,7 +421,7 @@ src/
 │       ├── ontology/                   # Ontology domain (ontology.py, json_views.py)
 │       ├── mapping/                    # Mapping domain (mapping.py, json_views.py)
 │       ├── domain/                     # Saved domain / UC I/O (domain.py, payload.py, version_status.py)
-│       ├── digitaltwin/                # Digital Twin domain (DigitalTwin.py, models.py)
+│       ├── digitaltwin/                # Knowledge Graph domain (DigitalTwin.py, models.py)
 │       ├── session/                    # Session management
 │       │   ├── middleware.py           # File-based session middleware (cookie + ASGI)
 │       │   ├── SessionManager.py       # Request-scoped session get/set/delete wrapper
@@ -438,7 +438,7 @@ src/
 │   └── routers/
 │       ├── v1.py                       # /api/v1/* endpoints
 │       ├── domains.py                  # Domain registry & artifact endpoints (`/api/v1/domains`, `/api/v1/domain/...`)
-│       ├── digitaltwin.py              # Digital Twin REST API
+│       ├── digitaltwin.py              # Knowledge Graph REST API
 │       └── internal/                   # Session-aware JSON routes for the web UI
 │           ├── home.py, settings.py, domain.py, ontology.py, mapping.py, dtwin.py, tasks.py, …
 │
@@ -551,7 +551,7 @@ The UI uses a consistent **sidebar layout** across all main pages:
 
 ### Page Structure
 
-Each main page (Ontology, Mapping, Digital Twin) follows this pattern:
+Each main page (Ontology, Mapping, Knowledge Graph) follows this pattern:
 
 ```
 page.html
@@ -583,8 +583,8 @@ page.html
 | **Design** | Visual design → Auto-save → Session storage | `OntoViz`, Session middleware |
 | **Ontology** | Design/Configure → Save → Generate OWL | `OntologyGenerator`, Session middleware |
 | **Mapping** | Load ontology → Map/Auto-Map → Validate attributes → Generate R2RML | `R2RMLGenerator`, `SQLWizardService`, `TaskManager` |
-| **Digital Twin** | Build → Quality Check (async) → Auto-load Triples → Explore Knowledge Graph | `sparql_service`, `TaskManager`, Sigma.js graph |
-| **API/MCP** | REST → resolve domain → triple store query → formatted response | Digital Twin API, MCP Server, GraphQL |
+| **Knowledge Graph** | Build → Quality Check (async) → Auto-load Triples → Explore Graph Viewer | `sparql_service`, `TaskManager`, Sigma.js graph |
+| **API/MCP** | REST → resolve domain → triple store query → formatted response | Knowledge Graph API, MCP Server, GraphQL |
 
 ### Asynchronous Task Processing
 
@@ -592,8 +592,8 @@ Long-running operations use the **TaskManager** pattern (`src/back/core/task_man
 
 | Task Type | Triggered By | Description |
 |-----------|-------------|-------------|
-| `triplestore_sync` | Digital Twin → Build | Generates and writes triples to Delta and the configured Graph DB engine (Lakebase) |
-| `quality_checks` | Digital Twin → Quality | Runs all quality checks sequentially with per-check progress |
+| `triplestore_sync` | Knowledge Graph → Build | Generates and writes triples to Delta and the configured Graph DB engine (Lakebase) |
+| `quality_checks` | Knowledge Graph → Quality | Runs all quality checks sequentially with per-check progress |
 | `auto_assign` | Mapping → Auto-Map | Batch-maps entities and relationships via LLM; splits large jobs into chunks of `AUTO_ASSIGN_CHUNK_SIZE` with cooldown between chunks to avoid rate limits |
 **How it works:**
 1. Frontend sends a `POST` to start the task; backend creates a `TaskManager` task and spawns a `threading.Thread`
@@ -785,7 +785,7 @@ User Action → OntoViz Event → Debounce → syncDesignToOntology → /ontolog
 OntoBricks separates two concerns:
 
 1. **Triple Store** — the persistent, governance-controlled view of the triples in **Unity Catalog Delta** (`triplestore_<domain>_V<n>`). Always present, never optional.
-2. **Graph DB** — the queryable graph engine used by the Digital Twin, reasoning, and BFS / shortest-path helpers. Pluggable via the `GraphDBFactory` abstraction.
+2. **Graph DB** — the queryable graph engine used by the Knowledge Graph, reasoning, and BFS / shortest-path helpers. Pluggable via the `GraphDBFactory` abstraction.
 
 | Layer | Key | Storage | Query Language | Source of truth |
 |-------|-----|---------|----------------|-----------------|
@@ -939,7 +939,7 @@ Validates instance data in the triple store against formal ontology constraints:
 
 **Execution**:
 - On Cypher-capable engines (none currently shipped): constraint checks would run as Cypher queries via `ReasoningService`. On the SQL-based engines that ship today the constraint phase short-circuits with a `skipped` reason.
-- On **Delta**: Quality checks run as SQL queries via the Digital Twin quality pipeline
+- On **Delta**: Quality checks run as SQL queries via the Knowledge Graph quality pipeline
 
 ### Reasoning Data Model
 
@@ -973,7 +973,7 @@ Inferred triples from any phase can be **materialized** (written back) to the tr
 
 ## Graph Analysis — Community Detection
 
-OntoBricks provides **data cluster detection** on the knowledge graph, allowing users to discover communities of densely connected entities. Detection is available at two levels:
+OntoBricks provides **data cluster detection** on the graph viewer, allowing users to discover communities of densely connected entities. Detection is available at two levels:
 
 ### Client-Side (Graphology)
 
@@ -1015,7 +1015,7 @@ Detected clusters can be visualized in several ways:
 
 ## SHACL Data Quality
 
-OntoBricks includes a **SHACL (Shapes Constraint Language)** module (`src/back/core/w3c/shacl/`) that provides W3C-standard data quality validation for the knowledge graph.
+OntoBricks includes a **SHACL (Shapes Constraint Language)** module (`src/back/core/w3c/shacl/`) that provides W3C-standard data quality validation for the graph viewer.
 
 ### Architecture
 
@@ -1063,7 +1063,7 @@ Shapes are organized into six data quality categories:
 ### UI Integration
 
 - **Ontology → Data Quality** sidebar section: Define, edit, and manage SHACL shapes visually with category-based organization
-- **Digital Twin → Data Quality** sidebar section: Run shapes against the triple store with violation reporting
+- **Knowledge Graph → Data Quality** sidebar section: Run shapes against the triple store with violation reporting
 
 ---
 
@@ -1091,7 +1091,7 @@ Shapes are organized into six data quality categories:
 |------------|---------|---------|
 | Bootstrap | 5.3 | UI framework |
 | Bootstrap Icons | 1.11 | Icon library |
-| Sigma.js | 3.0.2 | Knowledge Graph visualization (WebGL) |
+| Sigma.js | 3.0.2 | Graph Viewer visualization (WebGL) |
 | Graphology | 0.26.0 | Graph data model and algorithms |
 | D3.js | 7.x | Data-driven DOM manipulation |
 | Grid.js | latest | Advanced data tables |
@@ -1338,7 +1338,7 @@ OntoBricks provides a stateless REST API at `/api/v1/` for external applications
 | `/api/v1/domain/r2rml` | GET | Get R2RML mapping (Turtle) |
 | `/api/v1/domain/sparksql` | GET | Get generated Spark SQL |
 
-**Digital Twin API** (`/api/v1/digitaltwin/`):
+**Knowledge Graph API** (`/api/v1/digitaltwin/`):
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
@@ -1410,7 +1410,7 @@ See [API Documentation](api.md) for complete endpoint reference.
 2. **Custom R2RML Patterns**: Extend `R2RMLGenerator` in `src/back/core/w3c/r2rml/R2RMLGenerator.py`
 3. **New Output Formats**: Add serializers in mapping or ontology modules
 4. **Additional SPARQL Features**: Extend `SparqlTranslator` in `src/back/core/w3c/sparql/SparqlTranslator.py`
-5. **Custom Visualizations**: Extend Sigma.js knowledge graph in query template
+5. **Custom Visualizations**: Extend Sigma.js graph viewer in query template
 6. **Authentication Providers**: Add new auth methods in `DatabricksClient`
 7. **OntoViz Extensions**: Add new entity/relationship types, custom rendering
 8. **Graph DB Engines**: Implement `GraphDBBackend` in `src/back/core/graphdb/` (Lakebase Postgres ships today; the `_starter_kit/ExampleStore.py` template plus `GraphDBFactory` make it straightforward to add Neo4j, Memgraph, or other engines). The Delta-backed `TripleStoreBackend` is also extensible for new SQL views.

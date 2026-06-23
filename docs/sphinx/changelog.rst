@@ -97,10 +97,10 @@ v0.2.0 (Unreleased)
 --------------------
 
 - **Entity Groups**: group ontology classes and expand/collapse them in the
-  Digital Twin Knowledge Graph.  Groups are stored as OWL defined classes
+  Knowledge Graph Graph Viewer.  Groups are stored as OWL defined classes
   (``owl:equivalentClass`` + ``owl:unionOf``) with ``ontobricks:isGroup``
   annotation for UI differentiation.
-- Group CRUD API (``/ontology/groups/*``) and Digital Twin consumption
+- Group CRUD API (``/ontology/groups/*``) and Knowledge Graph consumption
   endpoint (``GET /dtwin/groups``).
 - Ontology UI: dedicated *Groups* section for creating, editing, and
   deleting groups with class member selection.
@@ -114,7 +114,7 @@ v0.1.0
 - OWL ontology design and import (FIBO, CDISC, IOF).
 - R2RML mapping from Databricks tables to RDF.
 - Delta-backed triple store mirrored on a Lakebase Postgres graph engine.
-- GraphQL typed API over the knowledge graph.
+- GraphQL typed API over the graph viewer.
 - SHACL data quality validation.
 - OWL 2 RL and SWRL reasoning engine.
 - LLM agents for ontology assistance.

@@ -289,7 +289,7 @@ currently-active sidebar section.
   (e.g. home, about) keep it hidden — that is intentional, do not
   force it.
 - The route hierarchy is fixed in `breadcrumb.js`:
-  Registry → Domain → Ontology → Mapping → Digital Twin (plus
+  Registry → Domain → Ontology → Mapping → Knowledge Graph (plus
   Settings as a flat entry). Adding a new top-level page means
   extending `_ROUTE_MAP` and `_HIERARCHY` there — not patching
   templates.

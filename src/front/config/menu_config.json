@@ -579,7 +579,7 @@
 
         {
             "id": "digitaltwin",
-            "label": "Digital Twin",
+            "label": "Knowledge Graph",
             "icon": "bi-box",
             "route": "/dtwin/",
             "requires_domain_saved": true,
@@ -607,7 +607,7 @@
                     "items": [
                         {
                             "id": "sigmagraph",
-                            "label": "Knowledge Graph",
+                            "label": "Graph Viewer",
                             "icon": "bi-layers-half",
                             "default": true,
                             "requires": null

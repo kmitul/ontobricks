@@ -61,7 +61,7 @@ class ScheduleHistoryEntry(TypedDict, total=False):
 class BuildRunEntry(TypedDict, total=False):
     """One row in a domain's build-run trace (``build_runs`` table).
 
-    Captures the full statistics of a single Digital Twin build,
+    Captures the full statistics of a single Knowledge Graph build,
     regardless of which path triggered it (``session`` / ``api`` /
     ``scheduled``). The grain is the tuple ``(folder, version)``; many
     entries per tuple are expected and the most recent successful one
@@ -288,7 +288,7 @@ class RegistryStore(ABC):
     # ------------------------------------------------------------------
     # Build-run trace (analytics)
     #
-    # One immutable row per Digital Twin build — across every path
+    # One immutable row per Knowledge Graph build — across every path
     # (UI session / external API / scheduler). Linked to the domain
     # row; grain is the tuple ``(folder, version)``. Unlike
     # ``schedule_runs`` this is *not* capped — the whole point is a

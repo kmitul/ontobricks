@@ -301,7 +301,7 @@
                 checkRow('Ontology valid', !!d.ontology_valid) +
                 checkRow('Mapping complete', !!d.mapping_valid) +
                 checkRow('SQL Warehouse configured', !!warehouse.warehouse_id) +
-                checkRow('Digital Twin built', dtwin.indicator === 'green',
+                checkRow('Knowledge Graph built', dtwin.indicator === 'green',
                     dtwin.indicator === 'orange');
         } catch (err) {
             el.innerHTML = '<div class="text-muted small">Readiness unavailable.</div>';
