@@ -560,3 +560,23 @@ no additional database query needed.
 
 ### Test results
 30/30 graph metrics unit tests passed (0 failures).
+
+---
+
+## Code Review — 2026-06-23
+
+### Context
+Mandatory post-change code review run per `.cursorrules`. Covers all changes merged in the graph analytics + AI interpreter + flat entity-type detection feature set.
+
+### Changes
+1. `src/back/core/graph_analysis/GraphMetrics.py` — Extracted inline `_local()` closure to module-level `_local_name()` function; eliminated stale comment block; cleaned heuristic section. Avoids closure re-creation per `_build_type_profiles` call. Aligns with `.coding_rules.md §2` (class-first, no module-level closures).
+2. `tests/units/core/test_graph_metrics.py` — Added `pytestmark = pytest.mark.unit` at module level to satisfy `--strict-markers` requirement (`.coding_rules.md §10`).
+3. `docs/user-guide.md` — Added **Data Model Health** card documentation under the Analytics section, covering column meanings, flat-detection heuristics, and recommendation guidance.
+
+### Modified files
+- `src/back/core/graph_analysis/GraphMetrics.py`
+- `tests/units/core/test_graph_metrics.py`
+- `docs/user-guide.md`
+
+### Test results
+2450 passed, 15 skipped in ~17s (0 regressions).

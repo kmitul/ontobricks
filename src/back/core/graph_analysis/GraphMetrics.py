@@ -31,6 +31,11 @@ _TEMPORAL_KEYWORDS: Set[str] = {
 }
 
 
+def _local_name(uri: str) -> str:
+    """Extract the local name from a URI (last path/fragment segment, lower-cased)."""
+    return (uri or "").rstrip("/").split("/")[-1].split("#")[-1].lower()
+
+
 class GraphMetrics(GraphBuilder):
     """Compute centrality and structural metrics over a knowledge graph.
 
@@ -198,9 +203,8 @@ class GraphMetrics(GraphBuilder):
         if not node_types:
             return {}
 
-        # --- collect distinct predicates per node (both directions) ------------
-        # A node counts a predicate whether it is the subject OR the object of the
-        # triple (i.e. "how many relationship types is this instance involved in").
+        # Collect distinct predicates per node (both directions):
+        # a node counts a predicate whether it is the subject OR the object.
         predicates_by_node: Dict[str, Set[str]] = defaultdict(set)
         for t in triples:
             pred = t.get("predicate", "")
@@ -210,15 +214,10 @@ class GraphMetrics(GraphBuilder):
             obj  = t.get("object",  "")
             if subj in nodes:
                 predicates_by_node[subj].add(pred)
-            # Only count the reverse direction when the object is a URI node in the graph
             if obj in nodes and (obj.startswith("http://") or obj.startswith("https://")):
                 predicates_by_node[obj].add(pred)
 
-        # --- helper: extract local name from a URI ----------------------------
-        def _local(uri: str) -> str:
-            return (uri or "").rstrip("/").split("/")[-1].split("#")[-1].lower()
-
-        # --- per-type rollup --------------------------------------------------
+        # Per-type rollup
         profiles: Dict[str, EntityTypeProfile] = {}
         classes = set(node_types.values())
         for class_uri in classes:
@@ -226,22 +225,20 @@ class GraphMetrics(GraphBuilder):
             if not instances:
                 continue
 
-            avg_deg = round(mean(nodes[u].degree for u in instances), 6)
-            avg_clust = round(mean(nodes[u].clustering for u in instances), 6)
-            avg_bet = round(mean(nodes[u].betweenness for u in instances), 6)
+            avg_deg  = round(mean(nodes[u].degree      for u in instances), 6)
+            avg_clust = round(mean(nodes[u].clustering  for u in instances), 6)
+            avg_bet  = round(mean(nodes[u].betweenness  for u in instances), 6)
 
             all_preds: Set[str] = set()
             for u in instances:
                 all_preds.update(predicates_by_node.get(u, set()))
 
             has_temporal = any(
-                kw in _local(p) for p in all_preds for kw in _TEMPORAL_KEYWORDS
+                kw in _local_name(p) for p in all_preds for kw in _TEMPORAL_KEYWORDS
             )
 
-            # --- heuristic rules ---------------------------------------------
-            # NOTE: degree centrality is normalised by (N-1), so in large graphs
-            # even well-connected nodes score < 0.001.  We therefore rely on
-            # predicate diversity as the primary flat-dataset signal.
+            # Heuristic rules — degree centrality is normalised by (N-1) so we
+            # rely on predicate diversity as the primary flat-dataset signal.
             reasons: List[str] = []
             n = len(instances)
             n_preds = len(all_preds)
@@ -257,7 +254,7 @@ class GraphMetrics(GraphBuilder):
                 avg_degree=avg_deg,
                 avg_clustering=avg_clust,
                 avg_betweenness=avg_bet,
-                distinct_predicates=len(all_preds),
+                distinct_predicates=n_preds,
                 has_temporal_predicates=has_temporal,
                 is_flat=bool(reasons),
                 flat_reasons=reasons,

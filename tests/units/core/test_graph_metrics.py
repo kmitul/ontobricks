@@ -11,6 +11,8 @@ from back.core.graph_analysis.models import (
 )
 from back.core.graph_analysis.GraphMetrics import GraphMetrics
 
+pytestmark = pytest.mark.unit
+
 
 # ---------------------------------------------------------------------------
 # Model tests

@@ -581,6 +581,26 @@ One horizontal bar chart is generated for each metric:
 
 Below the charts, a **PageRank Detail Table** lists the top-N entities with all five metrics displayed as mini progress bars, providing full context for why a node ranks highly. Every row is clickable → Graph Viewer.
 
+#### Data Model Health
+
+After an analysis, a **Data Model Health** card shows entity types that may not benefit from graph storage:
+
+| Column | Meaning |
+|--------|---------|
+| **Entity Type** | Class URI local name |
+| **Instances** | Count of instances in the graph |
+| **Rel. Predicates** | Distinct entity-to-entity relationship predicates (excludes `rdf:type`, `rdfs:label`, and literal attributes; counts both incoming and outgoing relationships) |
+| **Temporal** | Whether any predicate name contains a temporal keyword (e.g. `date`, `timestamp`) |
+
+An entity type is flagged as **flat / time-series** when:
+
+- It has **0 relationship predicates** — all instances are fully isolated (no entity-entity relationships)
+- It has **exactly 1 relationship predicate** across more than 20 instances — suggests a one-dimensional link
+
+> Types flagged as flat may not rely on graph semantics. Consider **excluding** them from the sync or **replacing individual rows with aggregated facts** in the ontology.
+
+The AI Interpretation agent also mentions flat types in its Key Findings and Recommendations sections.
+
 #### Adjusting the Top-N and Resetting
 
 Use the **Top N** input at the top of the results section to control how many entities each chart and table shows. Change the entity type dropdown to re-run the analysis on a different class.
