@@ -640,8 +640,6 @@
         openForSelection: openForSelection,
         showLoadingPanel: showLoadingPanel,
         taggableFromOntology: taggableFromOntology,
-        // Split a stored comment body into { text, tags } (strips the
-        // internal tag marker). Shared with the Domain → Discussions timeline.
         parseBody: parseBody,
     };
 })();

@@ -140,6 +140,11 @@ async function _initQueryPage(initialSection, focusEntityUri, bridgeDomain) {
                     loadInsights();
                 }
             }
+            if (section === 'analytics') {
+                if (typeof window.analyticsLoadTypes === 'function') {
+                    window.analyticsLoadTypes();
+                }
+            }
         }
     });
     

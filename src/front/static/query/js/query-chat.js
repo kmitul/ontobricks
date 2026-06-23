@@ -703,4 +703,9 @@
     });
 
     window.initGraphChat = init;
+    window.chatSendMessage = function (text) { sendMessage(text); };
+    window.appendChatAssistantMessage = function (text) {
+        appendMessage('assistant', text);
+        conversationHistory.push({ role: 'assistant', content: text });
+    };
 })();

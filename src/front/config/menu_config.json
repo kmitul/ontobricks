@@ -598,6 +598,13 @@
                             "icon": "bi-bar-chart-line",
                             "default": false,
                             "requires": null
+                        },
+                        {
+                            "id": "analytics",
+                            "label": "Analytics",
+                            "icon": "bi-graph-up-arrow",
+                            "default": false,
+                            "requires": null
                         }
                     ]
                 },
@@ -608,21 +615,21 @@
                     "items": [
                         {
                             "id": "sigmagraph",
-                            "label": "Graph Viewer",
+                            "label": "Viewer",
                             "icon": "bi-layers-half",
                             "default": true,
                             "requires": null
                         },
                         {
                             "id": "graphql",
-                            "label": "GraphQL",
+                            "label": "Query",
                             "icon": "bi-braces-asterisk",
                             "default": false,
                             "requires": null
                         },
                         {
                             "id": "chat",
-                            "label": "Graph Chat",
+                            "label": "Chat",
                             "icon": "bi-chat-dots",
                             "default": false,
                             "requires": null
