@@ -217,6 +217,20 @@ body {
     font-weight: 400;
 }
 
+#domainL1Link.active {
+    background-color: var(--db-primary-dark) !important;
+    color: #fff !important;
+    border-radius: 0.35rem;
+    padding-left: 0.6rem;
+    padding-right: 0.6rem;
+    font-weight: 500;
+}
+
+#domainL1Link.active:hover {
+    background-color: var(--db-primary-darker) !important;
+    color: #fff !important;
+}
+
 /* Disabled navigation items (requires domain saved to UC) */
 .navbar .nav-link.nav-disabled {
     opacity: 0.4;

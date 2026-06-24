@@ -48,6 +48,7 @@ function initSubnavActiveState() {
             link.classList.add('active');
         }
     });
+
 }
 
 /**
@@ -333,17 +334,19 @@ function updateDomainMenuVisibility(hasDomain) {
         }
     }
 
-    // Disable/enable the L1 Domain link
+    // Disable/enable the L1 Domain link and highlight when a domain is loaded
     const domainL1 = document.getElementById('domainL1Link');
     if (domainL1) {
         if (hasDomain) {
             domainL1.classList.remove('ob-nav-disabled');
             domainL1.removeAttribute('aria-disabled');
             domainL1.removeAttribute('tabindex');
+            domainL1.classList.add('active');
         } else {
             domainL1.classList.add('ob-nav-disabled');
             domainL1.setAttribute('aria-disabled', 'true');
             domainL1.setAttribute('tabindex', '-1');
+            domainL1.classList.remove('active');
         }
     }
 }
