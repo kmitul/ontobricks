@@ -239,7 +239,7 @@ class R2RMLGenerator:
         g.add((triples_map, RDFS.comment, Literal(comment)))
 
         # Logical Table - using SQL query or table name
-        logical_table = BNode()
+        logical_table = BNode(f"lt_{map_name}")
         g.add((triples_map, self.rr.logicalTable, logical_table))
 
         if sql_query:
@@ -256,7 +256,7 @@ class R2RMLGenerator:
             )
 
         # Subject Map
-        subject_map = BNode()
+        subject_map = BNode(f"sm_{map_name}")
         g.add((triples_map, self.rr.subjectMap, subject_map))
 
         # Template for subject URI - ALWAYS use taxonomy base URI.
@@ -286,11 +286,11 @@ class R2RMLGenerator:
 
         # Add label column mapping if specified
         if label_column:
-            pom = BNode()
+            pom = BNode(f"pom_{map_name}_label")
             g.add((triples_map, self.rr.predicateObjectMap, pom))
             g.add((pom, self.rr.predicate, RDFS.label))
 
-            obj_map = BNode()
+            obj_map = BNode(f"om_{map_name}_label")
             g.add((pom, self.rr.objectMap, obj_map))
             g.add((obj_map, self.rr.column, Literal(label_column)))
 
@@ -299,11 +299,11 @@ class R2RMLGenerator:
 
         # Add attribute mappings (DatatypeProperty mappings)
         if attribute_mappings:
-            for attr_name, column_name in attribute_mappings.items():
+            for attr_name, column_name in sorted(attribute_mappings.items()):
                 if not column_name:
                     continue
 
-                pom = BNode()
+                pom = BNode(f"pom_{map_name}_{self._sanitize_name(attr_name)}")
                 g.add((triples_map, self.rr.predicateObjectMap, pom))
 
                 # Prefer the ontology property URI when it matches the
@@ -320,7 +320,7 @@ class R2RMLGenerator:
                     )
                 g.add((pom, self.rr.predicate, attr_uri))
 
-                obj_map = BNode()
+                obj_map = BNode(f"om_{map_name}_{self._sanitize_name(attr_name)}")
                 g.add((pom, self.rr.objectMap, obj_map))
                 g.add((obj_map, self.rr.column, Literal(column_name)))
                 g.add((obj_map, self.rr.datatype, XSD.string))  # Default to string
@@ -445,7 +445,7 @@ class R2RMLGenerator:
         )
 
         # Logical Table - using SQL query if provided
-        logical_table = BNode()
+        logical_table = BNode(f"lt_{map_name}")
         g.add((triples_map, self.rr.logicalTable, logical_table))
 
         if sql_query:
@@ -468,7 +468,7 @@ class R2RMLGenerator:
                     )
 
         # Subject Map - references the source entity
-        subject_map = BNode()
+        subject_map = BNode(f"sm_{map_name}")
         g.add((triples_map, self.rr.subjectMap, subject_map))
 
         source_class_name = self._resolve_class_name(
@@ -489,7 +489,7 @@ class R2RMLGenerator:
         )
 
         # Predicate Object Map
-        pom = BNode()
+        pom = BNode(f"pom_{map_name}")
         g.add((triples_map, self.rr.predicateObjectMap, pom))
 
         # Predicate Map - the relationship property.
@@ -511,7 +511,7 @@ class R2RMLGenerator:
             g.add((pom, self.rr.predicate, URIRef(f"{self.base_uri}{property_uri}")))
 
         # Object Map - reference to target entity
-        obj_map = BNode()
+        obj_map = BNode(f"om_{map_name}")
         g.add((pom, self.rr.objectMap, obj_map))
 
         target_class_name = self._resolve_class_name(
