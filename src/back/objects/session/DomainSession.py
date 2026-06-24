@@ -1224,7 +1224,7 @@ class DomainSession:
             try:
                 from back.core.w3c.r2rml.R2RMLGenerator import R2RMLGenerator
 
-                base_uri = self.ontology.get("base_uri", DEFAULT_BASE_URI)
+                base_uri = self.ontology.get("base_uri") or DEFAULT_BASE_URI
                 generator = R2RMLGenerator(base_uri)
                 r2rml_content = generator.generate_mapping(
                     self.assignment, self.ontology
@@ -1281,6 +1281,7 @@ class DomainSession:
         ontology_export = {
             "name": self._data["ontology"].get("name", ""),
             "base_uri": self._data["ontology"].get("base_uri", ""),
+            "base_uri_auto": self._data["ontology"].get("base_uri_auto", False),
             "description": self._data["ontology"].get("description", ""),
             "classes": self._data["ontology"].get("classes", []),
             "properties": self._data["ontology"].get("properties", []),
