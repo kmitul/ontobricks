@@ -152,7 +152,7 @@
                         },
                         {
                             "id": "review",
-                            "label": "Validation",
+                            "label": "Publication",
                             "icon": "bi-patch-check",
                             "default": false,
                             "requires": "domain_saved"
