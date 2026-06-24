@@ -21,3 +21,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["server"]
+
+[dependency-groups]
+dev = [
+    "anyio>=4.13.0",
+    "pytest>=9.1.0",
+    "pytest-asyncio>=1.4.0",
+]
