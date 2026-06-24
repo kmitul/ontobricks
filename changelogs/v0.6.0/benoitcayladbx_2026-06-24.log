@@ -1,0 +1,19 @@
+## Highlight active domain in L1 navbar
+
+**Context:** When a domain is open and the user is on `/domain/`, the Domain
+entry in the top navbar had no visual distinction from inactive items. This
+made it hard to see which "section" of the app was active at a glance.
+
+**Changes:**
+1. `src/front/static/global/js/navbar.js` — extended `initSubnavActiveState()`
+   to also add `.active` to `#domainL1Link` when `window.location.pathname`
+   starts with `/domain/`.
+2. `src/front/static/global/css/main.css` — added `#domainL1Link.active` rule:
+   darker background (`--db-primary-dark`), white text, rounded pill, bold;
+   plus a hover variant using `--db-primary-darker`.
+
+**Modified files:**
+- `src/front/static/global/js/navbar.js`
+- `src/front/static/global/css/main.css`
+
+**Test result:** visual only — no unit tests impacted.

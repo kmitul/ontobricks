@@ -152,7 +152,7 @@
                         },
                         {
                             "id": "review",
-                            "label": "Validation",
+                            "label": "Publication",
                             "icon": "bi-patch-check",
                             "default": false,
                             "requires": "domain_saved"
@@ -174,22 +174,22 @@
                     ]
                 },
                 {
-                    "id": "domain-design",
-                    "title": "Design",
-                    "icon": "bi-pencil-square",
+                    "id": "domain-collaboration",
+                    "title": "Collaboration",
+                    "icon": "bi-chat-left-text",
                     "items": [
                         {
-                            "id": "ontology-link",
-                            "label": "Ontology",
-                            "icon": "bi-bezier2",
-                            "route": "/ontology/",
+                            "id": "mytasks",
+                            "label": "My Tasks",
+                            "icon": "bi-inbox",
+                            "default": false,
                             "requires": "domain_saved"
                         },
                         {
-                            "id": "mapping-link",
-                            "label": "Mapping",
-                            "icon": "bi-shuffle",
-                            "route": "/mapping/",
+                            "id": "discussions",
+                            "label": "Discussions",
+                            "icon": "bi-chat-left-text",
+                            "default": false,
                             "requires": "domain_saved"
                         }
                     ]
@@ -558,10 +558,11 @@
 
         {
             "id": "digitaltwin",
-            "label": "Digital Twin",
+            "label": "Knowledge Graph",
             "icon": "bi-box",
             "route": "/dtwin/",
             "requires_domain_saved": true,
+            "navbar_hidden": true,
             "status_indicator": null,
             "navbar_actions": [],
             "groups": [
@@ -576,6 +577,13 @@
                             "icon": "bi-bar-chart-line",
                             "default": false,
                             "requires": null
+                        },
+                        {
+                            "id": "analytics",
+                            "label": "Analytics",
+                            "icon": "bi-graph-up-arrow",
+                            "default": false,
+                            "requires": null
                         }
                     ]
                 },
@@ -586,21 +594,21 @@
                     "items": [
                         {
                             "id": "sigmagraph",
-                            "label": "Knowledge Graph",
+                            "label": "Viewer",
                             "icon": "bi-layers-half",
                             "default": true,
                             "requires": null
                         },
                         {
                             "id": "graphql",
-                            "label": "GraphQL",
+                            "label": "Query",
                             "icon": "bi-braces-asterisk",
                             "default": false,
                             "requires": null
                         },
                         {
                             "id": "chat",
-                            "label": "Graph Chat",
+                            "label": "Chat",
                             "icon": "bi-chat-dots",
                             "default": false,
                             "requires": null

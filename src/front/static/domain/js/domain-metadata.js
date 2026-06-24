@@ -12,6 +12,83 @@ let loadMetadataWidgetInitialized = false; // Track if widget is initialized
 let pendingLoadCatalog = ''; // Catalog selected in the load metadata modal
 let pendingLoadSchema = ''; // Schema selected in the load metadata modal
 
+const _metadataGauges = {};
+
+function _drawMetadataGauge(canvasId, score) {
+    if (_metadataGauges[canvasId]) {
+        _metadataGauges[canvasId].destroy();
+        delete _metadataGauges[canvasId];
+    }
+    const canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+
+    const val = Math.max(0, Math.min(100, Math.round(score)));
+    const color = val === 100 ? '#198754' : val >= 80 ? '#ffc107' : '#dc3545';
+    const remaining = 100 - val;
+
+    _metadataGauges[canvasId] = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+            datasets: [{
+                data: [val, remaining],
+                backgroundColor: [color, '#e9ecef'],
+                borderWidth: 0,
+                circumference: 180,
+                rotation: 270,
+            }]
+        },
+        options: {
+            responsive: false,
+            cutout: '70%',
+            plugins: { legend: { display: false }, tooltip: { enabled: false } },
+            layout: { padding: 0 },
+        },
+        plugins: [{
+            id: 'metadataGaugeLabel',
+            afterDraw(chart) {
+                const c = chart.ctx, w = chart.width, h = chart.height;
+                c.save();
+                c.textAlign = 'center';
+                c.textBaseline = 'bottom';
+                c.font = 'bold 14px system-ui, sans-serif';
+                c.fillStyle = color;
+                c.fillText(val + '%', w / 2, h - 4);
+                c.restore();
+            }
+        }],
+    });
+}
+
+function updateMetadataGauges(metadata) {
+    const tables = metadata?.tables || [];
+    if (tables.length === 0) return;
+
+    let tablesWithDesc = 0;
+    let totalColumns = 0;
+    let columnsWithDesc = 0;
+
+    for (const t of tables) {
+        if (t.comment && t.comment.trim()) tablesWithDesc++;
+        for (const col of (t.columns || [])) {
+            totalColumns++;
+            if (col.comment && col.comment.trim()) columnsWithDesc++;
+        }
+    }
+
+    const tableScore = Math.round((tablesWithDesc / tables.length) * 100);
+    const colScore = totalColumns > 0 ? Math.round((columnsWithDesc / totalColumns) * 100) : 0;
+
+    _drawMetadataGauge('gaugeTableDesc', tableScore);
+    _drawMetadataGauge('gaugeColumnDesc', colScore);
+
+    const tableDetail = document.getElementById('gaugeTableDescDetail');
+    if (tableDetail) tableDetail.textContent = `${tablesWithDesc} / ${tables.length} tables`;
+
+    const colDetail = document.getElementById('gaugeColumnDescDetail');
+    if (colDetail) colDetail.textContent = `${columnsWithDesc} / ${totalColumns} columns`;
+}
+
 // Async task tracking
 const METADATA_LOAD_TASK_KEY = 'ontobricks_metadata_load_task';
 const METADATA_UPDATE_TASK_KEY = 'ontobricks_metadata_update_task';
@@ -83,6 +160,8 @@ async function loadMetadataStatus() {
             
             // Show preview and Update Mappings button
             displayMetadataPreview(data.metadata);
+            checkMetadataDescriptions(data.metadata);
+            updateMetadataGauges(data.metadata);
             const updateMappingsBtn = document.getElementById('updateMappingsBtn');
             if (updateMappingsBtn) updateMappingsBtn.classList.remove('d-none');
         } else {
@@ -91,6 +170,8 @@ async function loadMetadataStatus() {
             statusDiv.className = 'alert alert-secondary mb-4';
             statusText.innerHTML = '<i class="bi bi-info-circle"></i> No data sources loaded';
             previewDiv.classList.add('d-none');
+            const warningEl = document.getElementById('metadataDescriptionWarning');
+            if (warningEl) warningEl.style.display = 'none';
             const updateMappingsBtn = document.getElementById('updateMappingsBtn');
             if (updateMappingsBtn) updateMappingsBtn.classList.add('d-none');
         }
@@ -697,6 +778,7 @@ async function saveMetadataChanges(silent = false) {
         
         if (data.success) {
             if (!silent) showNotification(`Saved data sources for ${allTables.length} tables`, 'success');
+            updateMetadataGauges(metadataCache);
         } else {
             showNotification('Error: ' + data.message, 'error');
         }
@@ -775,6 +857,7 @@ function saveTableDetails() {
     
     // Refresh the display
     displayMetadataPreview(metadataCache);
+    checkMetadataDescriptions(metadataCache);
     
     showNotification('Table details updated. Click "Save Changes" to persist.', 'info', 2000);
 }
@@ -1061,3 +1144,62 @@ async function updateMetadataFromUC() {
     }
     document.addEventListener('DOMContentLoaded', bind);
 })();
+
+function checkMetadataDescriptions(metadata) {
+    const warningEl = document.getElementById('metadataDescriptionWarning');
+    if (!warningEl) return;
+
+    const tables = metadata?.tables || [];
+    if (tables.length === 0) {
+        warningEl.style.display = 'none';
+        return;
+    }
+
+    const tablesNoDesc = [];
+    let columnsNoDescCount = 0;
+
+    for (const t of tables) {
+        const tName = t.full_name || t.name || '?';
+        if (!t.comment || !t.comment.trim()) {
+            tablesNoDesc.push(tName);
+        }
+        for (const col of (t.columns || [])) {
+            if (!col.comment || !col.comment.trim()) {
+                columnsNoDescCount++;
+            }
+        }
+    }
+
+    const totalMissing = tablesNoDesc.length + columnsNoDescCount;
+    if (totalMissing === 0) {
+        warningEl.style.display = 'none';
+        return;
+    }
+
+    const collapseId = 'metaDescQualityDetails';
+    const tableRows = tablesNoDesc.map(t =>
+        `<li><i class="bi bi-table text-muted me-1"></i><code>${t}</code> — no table description</li>`
+    ).join('');
+
+    warningEl.innerHTML = `
+        <div class="alert alert-warning mb-0 py-2">
+            <div class="d-flex align-items-start gap-2">
+                <i class="bi bi-exclamation-triangle-fill mt-1 flex-shrink-0"></i>
+                <div class="flex-grow-1">
+                    <strong>${tablesNoDesc.length} table(s) and ${columnsNoDescCount} column(s) are missing descriptions.</strong>
+                    <span class="ms-1 text-muted small">Adding descriptions improves AI mapping accuracy.</span>
+                    ${tablesNoDesc.length > 0 ? `
+                    <button class="btn btn-link btn-sm py-0 px-1 ms-1 text-warning-emphasis text-decoration-none"
+                            type="button" data-bs-toggle="collapse" data-bs-target="#${collapseId}">
+                        <i class="bi bi-chevron-down" style="font-size:0.75rem;"></i> Show tables
+                    </button>
+                    <div class="collapse mt-2" id="${collapseId}">
+                        <ul class="list-unstyled mb-0 small" style="max-height:160px;overflow-y:auto;">
+                            ${tableRows}
+                        </ul>
+                    </div>` : ''}
+                </div>
+            </div>
+        </div>`;
+    warningEl.style.display = 'block';
+}

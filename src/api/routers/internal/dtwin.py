@@ -1,10 +1,11 @@
 """
-Internal API -- Digital Twin / query JSON endpoints.
+Internal API -- Knowledge Graph / query JSON endpoints.
 
 Moved from app/frontend/digitaltwin/routes.py during the front/back split.
 """
 
 from dataclasses import dataclass
+import os
 import time
 from typing import Any, Optional
 
@@ -29,6 +30,7 @@ from back.core.helpers import (
     effective_view_table,
     get_databricks_client,
     get_databricks_credentials,
+    get_databricks_host_and_token,
     make_volume_file_service,
     is_uri,
     run_blocking,
@@ -39,7 +41,7 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/dtwin", tags=["Query"])
 
 # Canonical rdf:type predicate. Neighbour expansion must preserve type
-# triples so the graph viewer can group/colour expanded nodes by their
+# triples so the knowledge graph can group/colour expanded nodes by their
 # declared entity type rather than their raw identifier (issue #52).
 _RDF_TYPE_URI = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
 
@@ -60,7 +62,7 @@ def _filter_neighbor_triples(
     visited: set[str],
     limit: int,
 ) -> list[dict[str, str]]:
-    """Reduce raw store rows to the triples the graph viewer can render.
+    """Reduce raw store rows to the triples the knowledge graph can render.
 
     A triple is kept when its object is a literal, when its object URI is
     part of *visited* (so edges have both endpoints rendered), or when it is
@@ -208,7 +210,7 @@ async def start_triplestore_sync(
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
-    """Start async digital twin build: CREATE VIEW then populate the graph store.
+    """Start async knowledge graph build: CREATE VIEW then populate the graph store.
 
     Always performs a full rebuild. When the graph engine is ``lakebase`` in
     ``managed_synced`` mode, the Lakeflow pipeline handles the data-plane
@@ -272,8 +274,8 @@ async def start_triplestore_sync(
     try:
         from back.core.triplestore.TripleStoreFactory import TripleStoreFactory
 
-        _engine = TripleStoreFactory._resolve_graph_engine(domain, settings) or ""
-        _ecfg = TripleStoreFactory._resolve_graph_engine_config(domain, settings) or {}
+        _engine = TripleStoreFactory._resolve_graph_engine(domain, settings, force=True) or ""
+        _ecfg = TripleStoreFactory._resolve_graph_engine_config(domain, settings, force=True) or {}
     except Exception as _exc:  # noqa: BLE001
         logger.debug("Engine config resolution failed, defaulting to non-synced: %s", _exc)
         _engine = ""
@@ -296,11 +298,11 @@ async def start_triplestore_sync(
 
     tm = get_task_manager()
     task = tm.create_task(
-        name="Digital Twin Build",
+        name="Knowledge Graph Build",
         task_type="triplestore_sync",
         steps=[
             {"name": "prepare", "description": "Preparing mappings and generating queries"},
-            {"name": "view",    "description": "Creating the Digital Twin view"},
+            {"name": "view",    "description": "Creating the Knowledge Graph view"},
             *_graph_steps,
         ],
     )
@@ -433,6 +435,155 @@ async def detect_clusters(
     except Exception as e:
         logger.exception("Cluster detection failed: %s", e)
         raise InfrastructureError("Cluster detection failed", detail=str(e))
+
+
+# ===========================================
+# Graph Metrics
+# ===========================================
+
+
+@router.post("/metrics/compute")
+async def compute_graph_metrics(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Compute centrality and structural metrics on the full knowledge graph."""
+    try:
+        try:
+            data = await request.json()
+        except Exception:
+            data = {}
+        predicate_filter = data.get("predicate_filter")
+        class_filter = data.get("class_filter")
+        max_triples = int(data.get("max_triples", 500_000))
+        max_nodes_betweenness = int(data.get("max_nodes_betweenness", 2_000))
+
+        domain = get_domain(session_mgr)
+        graph_name = effective_graph_name(domain)
+        if not graph_name:
+            raise ValidationError("Graph name is not configured")
+
+        store = _require_graph_store(domain, settings)
+
+        dt = DigitalTwin(domain)
+        result = await run_blocking(
+            dt.compute_graph_metrics,
+            store,
+            graph_name,
+            predicate_filter=predicate_filter,
+            class_filter=class_filter,
+            max_triples=max_triples,
+            max_nodes_betweenness=max_nodes_betweenness,
+        )
+
+        return {"success": True, **result}
+
+    except (ValidationError, InfrastructureError, NotFoundError):
+        raise
+    except ValueError as e:
+        logger.warning("Graph metrics rejected: %s", e)
+        raise ValidationError("Graph metrics parameters are invalid", detail=str(e))
+    except Exception as e:
+        logger.exception("Graph metrics failed: %s", e)
+        raise InfrastructureError("Graph metrics computation failed", detail=str(e))
+
+
+@router.get("/metrics/summary")
+async def get_graph_metrics_summary(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Return aggregate graph structure stats and top-PageRank nodes (cockpit card)."""
+    try:
+        domain = get_domain(session_mgr)
+        graph_name = effective_graph_name(domain)
+        if not graph_name:
+            raise ValidationError("Graph name is not configured")
+
+        store = _require_graph_store(domain, settings)
+
+        dt = DigitalTwin(domain)
+        result = await run_blocking(
+            dt.compute_graph_metrics,
+            store,
+            graph_name,
+        )
+
+        return {
+            "success": True,
+            "stats": result["stats"],
+            "top_pagerank": result["top_pagerank"],
+        }
+
+    except (ValidationError, InfrastructureError, NotFoundError):
+        raise
+    except ValueError as e:
+        logger.warning("Graph metrics summary rejected: %s", e)
+        raise ValidationError("Graph metrics summary failed", detail=str(e))
+    except Exception as e:
+        logger.exception("Graph metrics summary failed: %s", e)
+        raise InfrastructureError("Graph metrics summary failed", detail=str(e))
+
+
+@router.post("/metrics/interpret")
+async def interpret_graph_metrics(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Run the graph-interpreter agent on the supplied metrics payload.
+
+    Expects the JSON body produced by ``/dtwin/metrics/compute`` plus an
+    optional ``class_filter`` list so the agent knows the entity type.
+    The agent may call ``get_entity_details`` to look up specific entities
+    before producing its structured insights.
+    Returns ``{ success, sections: [{ title, body | items }] }``.
+    """
+    try:
+        data = await request.json()
+        domain = get_domain(session_mgr)
+
+        host, token = get_databricks_host_and_token(domain, settings)
+        if not host or not token:
+            raise ValidationError("Databricks credentials not configured")
+
+        llm_endpoint = (domain.info or {}).get("llm_endpoint", "") or ""
+        if not llm_endpoint:
+            llm_endpoint = _auto_discover_llm_endpoint(domain, settings)
+        if not llm_endpoint:
+            raise ValidationError(
+                "No LLM serving endpoint available. Please set one in Domain Settings."
+            )
+
+        # Build loopback base URL so the agent can call get_entity_details
+        app_port = os.environ.get("DATABRICKS_APP_PORT") or os.environ.get("PORT") or "8000"
+        base_url = f"http://localhost:{app_port}"
+        session_cookies = dict(request.cookies or {})
+        session_headers = {
+            k: v
+            for k, v in request.headers.items()
+            if k.lower().startswith("x-forwarded-") or k.lower() == "x-csrf-token"
+        }
+
+        dt = DigitalTwin(domain)
+        result = await run_blocking(
+            dt.interpret_graph_metrics,
+            data,
+            host,
+            token,
+            llm_endpoint,
+            base_url,
+            session_cookies,
+            session_headers,
+        )
+        return result
+
+    except (ValidationError, InfrastructureError, NotFoundError):
+        raise
+    except Exception as e:
+        logger.exception("Graph metrics interpretation failed: %s", e)
+        raise InfrastructureError("Graph metrics interpretation failed", detail=str(e))
 
 
 # ===========================================
@@ -863,7 +1014,7 @@ async def sync_info(
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
-    """Return all data the Digital Twin Information page needs in one shot.
+    """Return all data the Knowledge Graph Information page needs in one shot.
 
     Graph status and artefact existence are served from the session cache
     when available (populated after each successful build).  On a cache miss
@@ -942,7 +1093,7 @@ async def sync_info(
 
 
 # ===========================================
-# Digital Twin Existence Checks
+# Knowledge Graph Existence Checks
 # ===========================================
 
 
@@ -951,7 +1102,7 @@ async def dt_existence(
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
-    """Check existence of each Digital Twin artefact.
+    """Check existence of each Knowledge Graph artefact.
 
     Always probes Databricks/Lakebase live so the result reflects the current
     state (the session cache can carry a stale ``False`` from a transient
@@ -2113,7 +2264,7 @@ async def dtwin_neighbors(
     """Expand *uri* by ``depth`` BFS hops and return the induced subgraph
     triples.
 
-    Used by the graph viewer's right-click "Expand neighbours" action to
+    Used by the knowledge graph's right-click "Expand neighbours" action to
     enrich the displayed graph with one or more hops of related entities.
     Only triples whose object is a literal *or* whose object is a URI also
     present in the visited set are returned, so the front-end can render
