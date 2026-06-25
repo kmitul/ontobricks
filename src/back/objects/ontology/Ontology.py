@@ -1172,7 +1172,7 @@ class Ontology:
             str: Generated OWL content
         """
         generator = OntologyGenerator(
-            base_uri=data.get("base_uri", DEFAULT_BASE_URI),
+            base_uri=data.get("base_uri") or DEFAULT_BASE_URI,
             ontology_name=data.get("name", "MyOntology"),
             classes=data.get("classes", []),
             properties=data.get("properties", []),

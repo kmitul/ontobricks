@@ -663,7 +663,7 @@ class Mapping:
             raise ValidationError("No entity mappings configured")
 
         try:
-            base_uri = domain.ontology.get("base_uri", DEFAULT_BASE_URI)
+            base_uri = domain.ontology.get("base_uri") or DEFAULT_BASE_URI
             generator = R2RMLGenerator(base_uri)
             r2rml_content = generator.generate_mapping(
                 domain.assignment, domain.ontology

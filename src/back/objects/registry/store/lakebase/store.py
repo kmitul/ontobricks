@@ -862,7 +862,8 @@ class LakebaseRegistryStore(RegistryStore):
                     f"""
                     SELECT v.info, v.ontology, v.assignment, v.design_layout,
                            v.metadata, v.version, v.mcp_enabled, v.status,
-                           v.last_update, v.last_build, d.review_quorum
+                           v.last_update, v.last_build, d.review_quorum,
+                           d.base_uri AS domain_base_uri
                     FROM {self._q(self._schema)}.domain_versions v
                     JOIN {self._q(self._schema)}.domains d ON d.id = v.domain_id
                     WHERE d.registry_id = %s AND d.folder = %s AND v.version = %s
@@ -880,11 +881,18 @@ class LakebaseRegistryStore(RegistryStore):
                 info["last_update"] = row["last_update"]
             if row["last_build"]:
                 info["last_build"] = row["last_build"]
+            # Merge: the domains.base_uri column is the canonical source of truth.
+            # If the ontology JSON has no base_uri (e.g. legacy data), fall back to
+            # the dedicated column so that generation always has the correct value.
+            ontology = row["ontology"] or {}
+            domain_base_uri = row.get("domain_base_uri") or ""
+            if not ontology.get("base_uri") and domain_base_uri:
+                ontology["base_uri"] = domain_base_uri
             doc = {
                 "info": info,
                 "versions": {
                     row["version"]: {
-                        "ontology": row["ontology"] or {},
+                        "ontology": ontology,
                         "assignment": row["assignment"] or {},
                         "design_layout": row["design_layout"] or {},
                         "metadata": row["metadata"] or {},
@@ -924,7 +932,11 @@ class LakebaseRegistryStore(RegistryStore):
                     VALUES (%s, %s, %s, %s, %s)
                     ON CONFLICT (registry_id, folder)
                     DO UPDATE SET description   = EXCLUDED.description,
-                                  base_uri      = EXCLUDED.base_uri,
+                                  base_uri      = CASE
+                                                    WHEN EXCLUDED.base_uri != ''
+                                                    THEN EXCLUDED.base_uri
+                                                    ELSE {self._q(self._schema)}.domains.base_uri
+                                                  END,
                                   review_quorum = EXCLUDED.review_quorum,
                                   updated_at    = now()
                     RETURNING id
