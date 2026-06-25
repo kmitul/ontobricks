@@ -109,6 +109,31 @@ Administrators wanted a way to read the OntoBricks application logs directly in 
 
 ---
 
+## Enhancement: Interpret leverages full Data Model Health for ontology improvement recommendations
+
+### Context
+The Interpret button in Graph Analytics only passed flat entity type *names* to the LLM. The full per-type health data (distinct predicates, avg degree, temporal flags, isolation reasons) was computed by `GraphMetrics` but never reached the prompt. This change feeds the complete health table into the LLM and extends the system prompt with targeted ontology-improvement rules.
+
+### Changes
+
+1. **`src/agents/agent_graph_interpreter/engine.py`**
+   - `_build_user_message()`: replaced the minimal `flat_types` list extraction with a full `entity_type_health` table — one entry per entity type with `type`, `count`, `distinct_predicates`, `avg_degree`, `is_flat`, `has_temporal_predicates`, and `reasons[]`. Sorted flat/problematic types first.
+   - `_SYSTEM_PROMPT`: extended with a dedicated *Data Model Health* rules section instructing the LLM to:
+     - Flag and recommend removal/aggregation of flat types
+     - Suggest externalising temporal/time-series types to Delta tables
+     - Call out fully isolated types (no edges) for removal or property promotion
+     - Highlight low-connectivity types for R2RML mapping review
+     - Prioritise recommendations by instance count
+
+### Modified Files
+- `src/agents/agent_graph_interpreter/engine.py` — section order, `_parse_sections` hardening, `max_tokens` 2048
+- `src/front/templates/partials/dtwin/_query_analytics.html` — tabbed layout (PageRank / Betweenness / Degree / Closeness / Clustering / Data Model Health / AI Insights), chart resize on tab show, auto-switch to AI Insights tab on Interpret
+
+### Test Results
+- 2651 unit/integration tests passed, 57 skipped.
+
+---
+
 ## fix: OWL export uses domain name as namespace prefix
 
 ### Context

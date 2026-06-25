@@ -50,34 +50,74 @@ class AgentResult:
 
 
 _SYSTEM_PROMPT = """\
-You are a knowledge-graph analytics expert.
+You are a knowledge-graph analytics expert and ontology architect.
 You receive centrality metrics (PageRank, betweenness, degree, closeness, clustering)
-for a set of entities in a business knowledge graph.
+for a set of entities in a business knowledge graph, together with a per-type
+Data Model Health report.
 
 Your task is to produce concise, actionable insights in the following JSON structure
 (and ONLY that structure — no markdown fences, no prose outside the JSON):
 
 {
   "sections": [
-    { "title": "Key Findings", "body": "<2-4 sentences summarising the graph structure and standout patterns>" },
-    { "title": "Notable Entities", "items": [ { "label": "<entity name>", "reason": "<why it stands out>" } ] },
-    { "title": "Recommendations", "items": [ "<action 1>", "<action 2>", "<action 3>" ] }
+    { "title": "Key Findings",       "body": "<2-4 sentences summarising the graph structure and standout patterns>" },
+    { "title": "Ontology Modeling",  "items": [ "<per-type ontology improvement 1>", "<improvement 2>", "..." ] },
+    { "title": "Notable Entities",   "items": [ { "label": "<entity name>", "reason": "<why it stands out>" } ] },
+    { "title": "Recommendations",    "items": [ "<graph-topology action 1>", "<action 2>", "<action 3>" ] }
   ]
 }
 
-RULES
+RULES — Graph centrality
 - Only mention entities whose labels appear in the provided metrics payload.
 - Use the ``get_entity_details`` tool to look up the top-1 or top-2 PageRank nodes
   BEFORE writing your final answer. This grounds your observations in real data.
 - If ``zero_metrics`` is non-empty, explain what that means in Key Findings
   (e.g. clustering = 0 is typical for bipartite graphs).
-- If ``flat_entity_types`` is present, mention those types in Key Findings and
-  recommend in Recommendations that they be excluded from graph sync or aggregated
-  (e.g. store counts instead of individual rows).
 - If ``top_pagerank`` is empty, state that no ranked entities are available.
 - Be specific: mention entity names, scores, and structural observations.
 - Keep "Notable Entities" to at most 5 items.
-- Keep "Recommendations" to 2-4 actionable bullet points.
+- Keep "Recommendations" to 3-5 actionable items focused on graph usage and topology.
+
+RULES — Ontology Modeling section (driven by ``entity_type_health``)
+Each entry in entity_type_health has: type, count, distinct_predicates, avg_degree,
+is_flat, has_temporal_predicates, and optional reasons[].
+Populate the "Ontology Modeling" section with one bullet per problematic type.
+Each bullet must name the type, give the count, state the problem, and propose a concrete fix.
+Format each item as: "[TypeName] (N instances) — <problem> → <proposed fix>"
+
+Signal → diagnosis and fix:
+
+- is_flat=true + reasons contains "no entity-entity relationships":
+  The type is fully isolated — no edges to any other node.
+  Fix: either remove it from the graph sync entirely and store its attributes
+  as properties on its owning entity, or add missing relationship mappings in R2RML.
+
+- is_flat=true + reasons contains "only 1 distinct relationship predicate":
+  The type behaves like a flat table — all instances share exactly one edge type.
+  Fix: consider collapsing the type into a counter/aggregate on its parent entity,
+  or enrich the ontology with additional relationship types to justify graph nodes.
+
+- has_temporal_predicates=true (regardless of is_flat):
+  The type carries timestamped data that may represent time-series events.
+  Fix: externalise time-series facts to a dedicated Delta table or event log;
+  keep only the entity node with a reference, unless temporal graph traversal
+  is a core query use-case.
+
+- distinct_predicates=0:
+  Fully isolated — no outgoing or incoming typed edges at all.
+  Fix: review whether this type should be modelled as a node property instead,
+  or whether foreign-key relationships are missing from the R2RML mapping.
+
+- avg_degree < 1.0 and count > 50:
+  Weakly connected — most instances have fewer than one edge on average.
+  Fix: review R2RML mappings to ensure all relevant foreign keys are captured
+  as object properties in the ontology.
+
+- Healthy types (is_flat=false, avg_degree > 1, distinct_predicates > 1):
+  Do NOT suggest changes — mention them only if there is a genuine structural issue.
+
+- Prioritise items by count descending (most-impactful changes first).
+- If entity_type_health is absent or empty, omit the "Ontology Modeling" section entirely.
 """
 
 
@@ -112,14 +152,26 @@ def _build_user_message(payload: Dict[str, Any]) -> str:
         if nodes and all(n.get(key, 0) == 0 for _, n in nodes.items())
     ]
 
-    # Flat / time-series types flagged by the backend heuristic
-    flat_types: list[str] = []
+    # Full per-type Data Model Health table (superset of the old flat_types list)
+    type_health: list[dict] = []
     for profile in (payload.get("entity_type_profiles") or {}).values():
-        if profile.get("is_flat"):
-            flat_types.append(
+        entry: dict = {
+            "type": (
                 URIHelpers.extract_local_name(profile.get("uri", ""))
                 or profile.get("uri", "")
-            )
+            ),
+            "count": profile.get("count"),
+            "distinct_predicates": profile.get("distinct_predicates"),
+            "avg_degree": round(profile.get("avg_degree", 0), 4),
+            "is_flat": profile.get("is_flat", False),
+            "has_temporal_predicates": profile.get("has_temporal_predicates", False),
+        }
+        if profile.get("flat_reasons"):
+            entry["reasons"] = profile["flat_reasons"]
+        type_health.append(entry)
+
+    # Sort: flat types first (most actionable), then by instance count descending
+    type_health.sort(key=lambda x: (not x["is_flat"], -(x["count"] or 0)))
 
     summary = {
         "entity_type": entity_type,
@@ -135,8 +187,8 @@ def _build_user_message(payload: Dict[str, Any]) -> str:
         "top_pagerank": top_rows,
         "zero_metrics": zero_metrics,
     }
-    if flat_types:
-        summary["flat_entity_types"] = flat_types
+    if type_health:
+        summary["entity_type_health"] = type_health
 
     return (
         "Analyze the following graph centrality metrics and return insights.\n\n"
@@ -145,18 +197,42 @@ def _build_user_message(payload: Dict[str, Any]) -> str:
 
 
 def _parse_sections(content: str) -> List[Dict[str, Any]]:
-    """Extract sections list from the LLM text content."""
+    """Extract the sections list from LLM text, tolerating common wrapping patterns.
+
+    Tries in order:
+    1. Strip markdown fences (```json … ```) then JSON-parse.
+    2. Extract the first {...} block in the response (handles prose preamble).
+    3. Fall back to a single "Interpretation" body section.
+    """
     text = content.strip()
-    if text.startswith("```"):
-        text = text.split("```", 2)[1]
-        if text.startswith("json"):
-            text = text[4:]
-        text = text.rsplit("```", 1)[0].strip()
+
+    # Strip markdown fences
+    if "```" in text:
+        parts = text.split("```")
+        for part in parts:
+            candidate = part.lstrip("json").strip()
+            try:
+                return json.loads(candidate).get("sections", [])
+            except (json.JSONDecodeError, AttributeError):
+                continue
+
+    # Direct parse (clean JSON output)
     try:
         return json.loads(text).get("sections", [])
-    except json.JSONDecodeError as exc:
-        logger.warning("_parse_sections: JSON decode failed (%s); returning raw text", exc)
-        return [{"title": "Interpretation", "body": text}]
+    except (json.JSONDecodeError, AttributeError):
+        pass
+
+    # Extract first {...} block — handles prose before/after the JSON object
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end > start:
+        try:
+            return json.loads(text[start:end + 1]).get("sections", [])
+        except (json.JSONDecodeError, AttributeError):
+            pass
+
+    logger.warning("_parse_sections: could not extract JSON from LLM response")
+    return [{"title": "Interpretation", "body": text}]
 
 
 @trace_agent(name=_TRACE_NAME)
@@ -219,7 +295,7 @@ def run_agent(
                 endpoint_name,
                 messages,
                 tools=send_tools,
-                max_tokens=1024,
+                max_tokens=2048,
                 temperature=0.1,
                 timeout=LLM_TIMEOUT,
                 trace_name=_TRACE_NAME,
