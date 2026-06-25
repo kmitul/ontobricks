@@ -239,6 +239,7 @@ _STATUS_GATE_OPEN_SUFFIXES = (
     "/parse-rdfs",
     "/parse-r2rml",
     "/load-owl-file",
+    "/analyze-import",
     "/validate",
     "/validate-sql",
     "/test-query",

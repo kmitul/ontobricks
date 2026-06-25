@@ -279,6 +279,80 @@ async def parse_rdfs_content(
         )
 
 
+@router.post("/analyze-import")
+async def analyze_import(
+    request: Request, session_mgr: SessionManager = Depends(get_session_manager)
+):
+    """Analyse OWL/RDFS content for conflicts against the current session ontology.
+
+    Read-only — the session is never mutated.  Returns a
+    :class:`~back.core.w3c.owl.ConflictReport` dict describing every
+    incoming entity as ``new``, ``duplicate``, ``uri_conflict``, or
+    ``name_conflict``.
+
+    Body: ``{ "content": "...", "format": "owl" | "rdfs" }``
+    """
+    data = await request.json()
+    content = data.get("content", "")
+    fmt = (data.get("format") or "owl").lower()
+    if not content:
+        raise ValidationError("No content provided")
+    logger.info("/ontology/analyze-import: format=%s content_len=%d", fmt, len(content))
+    with map_route_errors("Import analysis failed", logger):
+        result = Ontology(get_domain(session_mgr)).analyze_import(content, format=fmt)
+        s = result.get("report", {}).get("summary", {})
+        logger.info(
+            "/ontology/analyze-import: done — new=%s duplicates=%s conflicts=%s",
+            s.get("new"), s.get("duplicates"), s.get("conflicts"),
+        )
+        return result
+
+
+@router.post("/merge-import")
+async def merge_import(
+    request: Request, session_mgr: SessionManager = Depends(get_session_manager)
+):
+    """Append parsed OWL/RDFS content to the current session ontology.
+
+    New entities are added; duplicates are silently skipped; conflicting
+    entities are handled according to the user-supplied *resolutions* map.
+
+    Body::
+
+        {
+            "content": "...",
+            "format": "owl" | "rdfs",
+            "resolutions": {
+                "<uri_or_name>": "skip" | "overwrite" | "rename:<new_name>"
+            }
+        }
+    """
+    data = await request.json()
+    content = data.get("content", "")
+    fmt = (data.get("format") or "owl").lower()
+    resolutions = data.get("resolutions") or {}
+    if not content:
+        raise ValidationError("No content provided")
+    logger.info(
+        "/ontology/merge-import: format=%s content_len=%d resolutions=%d",
+        fmt, len(content), len(resolutions),
+    )
+    with map_route_errors("Import merge failed", logger):
+        result = Ontology(get_domain(session_mgr)).merge_parsed_owl_to_domain(
+            content,
+            resolutions,
+            format=fmt,
+        )
+        stats = result.get("stats", {})
+        logger.info(
+            "/ontology/merge-import: done — classes=%s properties=%s new=%s "
+            "duplicates_skipped=%s conflicts_resolved=%s",
+            stats.get("classes"), stats.get("properties"), stats.get("new"),
+            stats.get("duplicates_skipped"), stats.get("conflicts_resolved"),
+        )
+        return result
+
+
 # ===========================================
 # Industry Ontology Import (FIBO, CDISC, IOF)
 # ===========================================

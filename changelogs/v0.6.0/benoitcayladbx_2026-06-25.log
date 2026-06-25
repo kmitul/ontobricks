@@ -147,3 +147,240 @@ When exporting an OWL file the default namespace was bound to the empty prefix (
 
 ### Test Results
 - 28 existing OWL generator / roundtrip unit tests pass.
+
+---
+
+## Feature: Append-mode Ontology Import with Conflict Detection
+
+### Context
+Importing an OWL or RDFS file previously erased the entire ontology (full list replacement via `dict.update()`). Users needed a way to merge multiple ontology files without losing existing work. This feature introduces an append-mode import that first detects conflicts, presents them to the user for resolution, and only then merges the new entities into the current session.
+
+### Changes
+
+1. **`src/back/core/w3c/owl/OntologyConflictDetector.py`** (new) — `OntologyConflictDetector` class with `analyze(existing, incoming)` returning a JSON-serialisable `ConflictReport`. Classifies each incoming entity as `new`, `duplicate`, `uri_conflict`, or `name_conflict` across classes, properties, constraints, SWRL rules, groups, axioms, and expressions.
+
+2. **`src/back/core/w3c/owl/__init__.py`** — exports `OntologyConflictDetector`, `ConflictReport`, `ConflictItem`.
+
+3. **`src/back/objects/ontology/Ontology.py`** — added three methods:
+   - `analyze_import(content, format)` — parse-and-diff, read-only, no session mutation.
+   - `merge_parsed_owl_to_domain(content, resolutions, format)` — append-mode merge with per-entity resolution (skip / overwrite / rename).
+   - `_apply_resolutions(entity_type, existing, report, resolutions)` — static merge helper.
+
+4. **`src/api/routers/internal/ontology.py`** — two new routes:
+   - `POST /ontology/analyze-import` — read-only conflict analysis.
+   - `POST /ontology/merge-import` — append merge accepting `resolutions` map.
+
+5. **`src/shared/fastapi/main.py`** — added `/analyze-import` to `_STATUS_GATE_OPEN_SUFFIXES` (non-mutating, bypass version lock check).
+
+6. **`src/front/templates/partials/ontology/_ontology_import.html`** — OWL and RDFS panes now have a Replace / Append radio selector and a conflict-resolution panel (summary badges, conflict table with per-row resolution dropdown, Confirm & Append button).
+
+7. **`src/front/static/ontology/js/ontology-import.js`** — rewritten OWL and RDFS handlers to support the two-phase flow; FIBO/CDISC/IOF/FHIR handlers unchanged.
+
+### Modified Files
+- `src/back/core/w3c/owl/OntologyConflictDetector.py` (new)
+- `src/back/core/w3c/owl/__init__.py`
+- `src/back/objects/ontology/Ontology.py`
+- `src/api/routers/internal/ontology.py`
+- `src/shared/fastapi/main.py`
+- `src/front/templates/partials/ontology/_ontology_import.html`
+- `src/front/static/ontology/js/ontology-import.js`
+- `tests/units/ontology/test_conflict_detector.py` (new)
+
+### Test Results
+- 2467 unit tests passed, 15 skipped. 17 new tests for conflict detection and merge logic.
+
+---
+
+## Enhancement: Persistent Import Status Panel
+
+### Context
+After the append-mode import feature was merged, users reported that nothing appeared to happen when selecting a file — there was no visible feedback beyond a toast notification that disappears quickly, and the conflict resolution panel was buried inside the selected tab pane.
+
+### Changes
+
+1. **`src/front/templates/partials/ontology/_ontology_import.html`**
+   - Removed the per-tab embedded conflict panels from the OWL and RDFS panes (the `owlConflictPanel` / `rdfsConflictPanel` divs).
+   - Added a single `#importStatusPanel` section below all tabs, containing: a dismissable header, a `#importStatusSteps` step timeline, a `#importConflictArea` conflict resolution area with badges + table + Confirm/Cancel, and a `#importFinalResult` result banner.
+
+2. **`src/front/static/ontology/js/ontology-import.js`**
+   - Introduced an `ImportStatus` IIFE module that owns the status panel DOM. Public API: `reset(filename)`, `addStep()`, `updateLastStep()`, `showConflicts(report, onConfirm, onCancel)`, `showResult(success, msg)`, `hide()`.
+   - All import handlers (OWL replace, OWL append, RDFS replace, RDFS append, FIBO, CDISC, FHIR, IOF) now call `ImportStatus.reset()` on start and update the step timeline at each phase.
+   - The `_appendFlow` function drives the two-phase analyse → resolve → merge loop entirely through the status panel, with per-step spinners, counts, and a final banner.
+
+### Modified Files
+- `src/front/templates/partials/ontology/_ontology_import.html`
+- `src/front/static/ontology/js/ontology-import.js`
+
+### Test Results
+- No backend changes. Existing test suite unaffected.
+
+---
+
+## Enhancement: Server-side logging for append-mode import
+
+### Context
+The new `/ontology/analyze-import` and `/ontology/merge-import` routes and their backing methods had no structured logging, making it impossible to trace an import in the server logs.
+
+### Changes
+
+1. **`src/back/objects/ontology/Ontology.py`**
+   - `analyze_import()` — `INFO` on entry (format, content length) and on exit (new/duplicates/conflicts counts); `DEBUG` after parse with per-entity-type counts and before analysis (existing ontology size).
+   - `merge_parsed_owl_to_domain()` — `INFO` on entry (format, content length, resolution count); `DEBUG` after parse; `INFO` after conflict analysis (new/duplicates/conflicts); `INFO` after save (final class/property counts + delta).
+   - `_merge_rdfs()` — same pattern as OWL merge.
+   - `_apply_resolutions()` — `DEBUG` per entity-type showing appended / overwritten / renamed / skipped counts.
+
+2. **`src/api/routers/internal/ontology.py`**
+   - `analyze_import` route — `INFO` on request (format, content length) and on response (summary counts).
+   - `merge_import` route — `INFO` on request (format, content length, resolution count) and on response (full stats).
+
+### Modified Files
+- `src/back/objects/ontology/Ontology.py`
+- `src/api/routers/internal/ontology.py`
+
+### Test Results
+- 17 conflict-detector tests pass. Full suite unaffected.
+
+---
+
+## Fix: SKOS Vocabulary Import Support
+
+### Context
+SKOS taxonomy files (`.ttl`) using `skos:Concept` / `skos:prefLabel` / `skos:broader` were silently producing an empty ontology on import because neither the OWL parser nor the RDFS parser handled SKOS triples. Files like `classification.ttl` (RATP asset taxonomy) could be selected via the file picker (`.ttl` is an accepted extension) but yielded zero classes after parsing.
+
+### Changes
+
+1. **`src/back/core/w3c/rdfs/RDFSParser.py`**
+   - Added `SKOS` namespace constant (`http://www.w3.org/2004/02/skos/core#`).
+   - `get_classes()` — also iterates `skos:Concept` instances in addition to `rdfs:Class` / `owl:Class`.
+   - `_extract_class_info()` — falls back to `skos:prefLabel` when no `rdfs:label` is found; falls back to `skos:definition` for description; resolves `skos:broader` (with label lookup) as the parent when no `rdfs:subClassOf` is present.
+   - `get_ontology_info()` — detects `skos:ConceptScheme` (with `rdfs:label` / `skos:prefLabel`) as the vocabulary root, before falling back to base-URI heuristics.
+
+2. **`src/back/objects/ontology/Ontology.py`**
+   - `analyze_import()` (RDFS branch) — raises `ValidationError` with a descriptive message when zero classes and zero properties are found after parsing, instead of silently returning an empty conflict report.
+   - `_merge_rdfs()` — same guard: raises `ValidationError` with supported-format hints if the parser finds nothing.
+
+### Modified Files
+- `src/back/core/w3c/rdfs/RDFSParser.py`
+- `src/back/objects/ontology/Ontology.py`
+
+### Test Results
+- 428 passed, 11 skipped — full suite green.
+
+---
+
+## Fix: SKOS/RDFS Auto-Fallback in OWL Import Paths
+
+### Context
+Even after the RDFS/SKOS parser fix, files like `classification.ttl` still imported nothing because the UI's OWL import tab (both replace and append modes) sends `format=owl` to the backend. The OWL parser naturally finds no `owl:Class` in a SKOS file and returns empty lists; the RDFS/SKOS-capable parser was never reached.
+
+### Changes
+
+1. **`src/back/objects/ontology/Ontology.py`**
+   - `ingest_owl()` — after OWL parse, if both `classes` and `properties` are empty, automatically retries with `parse_rdfs()` (which now understands SKOS). Falls back silently; if RDFS/SKOS parse also yields nothing the empty result is preserved. Logs at INFO when fallback triggers.
+   - `analyze_import()` (OWL branch) — same auto-fallback after OWL parse yields nothing.
+   - `merge_parsed_owl_to_domain()` (OWL branch) — same auto-fallback.
+
+### Modified Files
+- `src/back/objects/ontology/Ontology.py`
+
+### Test Results
+- 428 passed, 11 skipped — full suite green.
+- Manual E2E: `POST /ontology/analyze-import { format: "owl", content: classification.ttl }` → `success: true, new: 11, duplicates: 0`.
+
+---
+
+## Fix: Alignment/Mapping File Import Support
+
+### Context
+Alignment files like `alignments-era.ttl` use no explicit class type declarations (`rdfs:Class`, `owl:Class`, `skos:Concept`). They define cross-ontology mappings via SKOS alignment predicates (`skos:exactMatch`, `skos:closeMatch`, etc.) and OWL assertions (`owl:equivalentClass`, `owl:differentFrom`). Resources are identified only by `rdfs:label`. Previous parser found 0 classes and 0 properties.
+
+### Changes
+
+1. **`src/back/core/w3c/rdfs/RDFSParser.py`**
+   - `get_classes()` — adds labeled-resources fallback: when no typed classes are found, collects all subjects of `rdfs:label` that are named URIs outside standard W3C/SKOS namespaces. Produces the ERA/RATP external entities as importable classes.
+   - `get_properties()` — adds SKOS alignment property extraction: when `skos:exactMatch`, `skos:closeMatch`, `skos:broadMatch`, `skos:narrowMatch`, `skos:relatedMatch`, `owl:equivalentClass`, or `owl:differentFrom` predicates are actually used in the graph, they are added as `ObjectProperty` entries.
+
+### Modified Files
+- `src/back/core/w3c/rdfs/RDFSParser.py`
+
+### Test Results
+- 428 passed, 11 skipped — full suite green.
+- `alignments-era.ttl`: 29 classes (ERA + RATP-SKOS labeled entities), 7 alignment ObjectProperties.
+
+---
+
+## Fix: SHACL Shapes File Import Support
+
+### Context
+SHACL files like `shapes.ttl` define validation constraints using `sh:NodeShape` + `sh:targetClass`. No explicit `rdfs:Class`, `owl:Class`, or `skos:Concept` declarations → parsers returned empty results.
+
+### Changes
+
+1. **`src/back/core/w3c/rdfs/RDFSParser.py`**
+   - Added `SH` namespace constant (`http://www.w3.org/ns/shacl#`).
+   - `get_classes()` — extracts `sh:targetClass` values from every `sh:NodeShape` as importable classes.
+   - `get_properties()` — extracts property names from `sh:property` URI local segments (`{base}#{ClassName}Shape/{propName}`) as deduplicated `DatatypeProperty` entries, with `domain` set to the owning class.
+
+### Modified Files
+- `src/back/core/w3c/rdfs/RDFSParser.py`
+
+### Test Results
+- 428 passed, 11 skipped — full suite green.
+- `shapes.ttl`: 46 classes, 208 data properties with correct domain assignment.
+
+---
+
+## Fix: SHACL per-class data properties and RDFS post-processing
+
+### Context
+After importing `shapes.ttl`, the UI showed 0 relationships and fewer than 46 entities because:
+1. SHACL `sh:property` URIs are per-class (e.g. `ACTIF_GENERIQUEShape/acronyme`). Storing them as global DatatypeProperties with deduplication by name meant each property was attached to only the first class that declared it — all other classes lost their attributes.
+2. `apply_parsed_rdfs_to_domain` did not call `sync_class_data_properties`, so global DatatypeProperties were never merged into class `dataProperties` lists.
+3. "208 relationships" in the success message was misleading — they are data properties, not ObjectProperties.
+
+### Changes
+
+1. **`src/back/core/w3c/rdfs/RDFSParser.py`**
+   - SHACL extraction in `get_classes()`: now builds `dataProperties` list directly on each class from its `sh:property` URI segments, so every class gets its own complete attribute list.
+   - Removed SHACL property extraction from `get_properties()` — no global properties are emitted for pure SHACL files.
+
+2. **`src/back/objects/ontology/Ontology.py`**
+   - `apply_parsed_rdfs_to_domain()` — now calls `sync_class_data_properties()` after updating the domain, ensuring any global DatatypeProperties with domain references are also merged into class `dataProperties`.
+
+### Modified Files
+- `src/back/core/w3c/rdfs/RDFSParser.py`
+- `src/back/objects/ontology/Ontology.py`
+
+### Test Results
+- 428 passed, 11 skipped — full suite green.
+- `shapes.ttl`: 46 classes each with correct per-class `dataProperties` (e.g. `ACTIF_GENERIQUE` gets all 35 of its own attributes), 0 global properties.
+
+---
+
+## Fix: SHACL files auto-routed to Data Quality instead of ontology classes
+
+### Context
+SHACL shapes (`.ttl` containing `sh:NodeShape`) are data-quality validation rules, not ontology classes. Importing them via the RDFS or OWL import tab was previously creating phantom classes and empty relationship lists in the ontology.
+
+### Changes
+
+1. **`src/back/core/w3c/rdfs/RDFSParser.py`**
+   - Removed all SHACL extraction from `get_classes()` and `get_properties()` — SHACL is no longer treated as vocabulary.
+
+2. **`src/back/objects/ontology/Ontology.py`**
+   - `_try_import_as_shacl(content)` — new helper that checks for `sh:NodeShape` in an RDF graph; if found, calls `SHACLService.import_shapes()`, merges into `domain.shacl_shapes`, saves, and returns a SHACL-specific success payload (with `shacl: True` flag). Returns `None` for non-SHACL content.
+   - `apply_parsed_rdfs_to_domain()` — calls `_try_import_as_shacl` first; if SHACL detected, returns early with dataquality result.
+   - `ingest_owl()` — SHACL check added in the OWL-empty fallback chain, before RDFS retry.
+   - `analyze_import()` RDFS branch — raises `ValidationError` with friendly message if SHACL detected (shapes already auto-imported).
+   - `_merge_rdfs()` — same guard as `analyze_import`.
+
+3. **`src/front/static/ontology/js/ontology-import.js`**
+   - `_replaceOwlFlow` and `_replaceRdfsFlow` — handle `result.shacl === true`: show "imported to Data Quality" message and skip `_reloadOntology()`.
+
+### Modified Files
+- `src/back/core/w3c/rdfs/RDFSParser.py`
+- `src/back/objects/ontology/Ontology.py`
+- `src/front/static/ontology/js/ontology-import.js`
+
+### Test Results
+- 428 passed, 11 skipped — full suite green.
