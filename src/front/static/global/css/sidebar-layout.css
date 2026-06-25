@@ -266,6 +266,19 @@ body.full-width-layout {
     overflow: hidden;
 }
 
+/* Logs section fills the viewport so only the console panel scrolls */
+.sidebar-content:has(#logs-section.active) {
+    overflow: hidden;
+    padding: 0;
+}
+
+#logs-section.active {
+    height: calc(100vh - var(--ob-chrome-height, 60px));
+    overflow: hidden;
+    padding: 0.5rem 1rem;
+    box-sizing: border-box;
+}
+
 /* ==========================================================================
    Other Sections - Standard display
    ========================================================================== */

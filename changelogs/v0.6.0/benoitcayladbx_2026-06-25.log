@@ -76,3 +76,49 @@ Now that the user's role is shown in the sidebar user footer, the redundant role
 
 ### Test Results
 - Pure UI/CSS change. JS still runs without errors (guards with `if (!item) return`). Existing test suite unaffected.
+
+---
+
+## Feature: Application Logs Viewer in Settings (Admin)
+
+### Context
+Administrators wanted a way to read the OntoBricks application logs directly in the UI without leaving the Databricks Apps console. A new "Logs" section under Settings → Admin now streams a live tail of the rotating log file (`ontobricks.log`) with level filtering, text search, configurable line count, and auto-refresh.
+
+### Changes
+
+1. **`src/api/routers/internal/settings.py`** — Added `GET /settings/logs?lines=N` endpoint (admin-only via `require(ROLE_ADMIN)`). Uses `LogManager.instance()` to locate the log file path and reads the last *N* lines (default 200, max 5 000) asynchronously via `run_blocking`. Also added `LogManager` to the module import.
+
+2. **`src/front/config/menu_config.json`** — Added `"logs"` item (`bi-terminal` icon) to the `settings-admin` group, `admin_only: true`.
+
+3. **`src/front/templates/partials/settings/_settings_logs.html`** — New partial: toolbar with level-filter buttons (ALL / DEBUG / INFO / WARNING / ERROR), text-search input, line-count selector, auto-refresh toggle and manual Refresh button; a dark `<pre>`-based console panel; and a footer showing the log file path and current level.
+
+4. **`src/front/static/config/js/settings-logs.js`** — New JS module: lazy-loads on `sidebarSectionChanged` with `section === "logs"`, fetches `/settings/logs`, parses text-format and JSON-format log lines, colour-codes by level, applies level and text filters, auto-scrolls to bottom, and starts a 10-second auto-refresh interval on first load.
+
+5. **`src/front/templates/settings.html`** — Added `<div id="logs-section" …>` inside the `{% if user_role == 'admin' %}` block (includes the new partial) and the corresponding `<script>` tag for `settings-logs.js`.
+
+### Modified Files
+- `src/api/routers/internal/settings.py` — `GET /settings/logs` + `GET /settings/logs/download`
+- `src/front/config/menu_config.json`
+- `src/front/templates/partials/settings/_settings_logs.html` (new)
+- `src/front/static/config/js/settings-logs.js` (new)
+- `src/front/templates/settings.html` — Refresh / Auto-refresh / Download controls in section header
+- `src/front/static/global/css/sidebar-layout.css` — logs section fills viewport (same pattern as sigmagraph)
+
+### Test Results
+- 2651 unit/integration tests passed, 57 skipped. Pre-existing `pyshacl not installed` failure unrelated.
+
+---
+
+## fix: OWL export uses domain name as namespace prefix
+
+### Context
+When exporting an OWL file the default namespace was bound to the empty prefix (`@prefix : <...#>`), making the Turtle output harder to read. The domain name (lowercase, alphanumeric) is now used as the prefix so exports produce e.g. `@prefix mydomain: <https://databricks-ontology.com/MyDomain#> .`.
+
+### Changes
+1. `src/back/core/w3c/owl/OntologyGenerator.py` — derive a clean lowercase prefix from `ontology_name` (strip non-alphanumeric chars, lowercase); bind it instead of the empty string `""`.
+
+### Modified files
+- `src/back/core/w3c/owl/OntologyGenerator.py`
+
+### Test Results
+- 28 existing OWL generator / roundtrip unit tests pass.

@@ -8,7 +8,8 @@ import json
 
 from typing import Optional
 
-from fastapi import APIRouter, Request, Depends, Query
+from fastapi import APIRouter, Request, Depends, Query, Response
+from fastapi.responses import PlainTextResponse
 
 from shared.config.settings import get_settings, Settings
 from shared.config.constants import DEFAULT_BASE_URI
@@ -20,7 +21,7 @@ from back.objects.registry import ROLE_ADMIN, require
 
 from api.routers.internal._permissions import filter_visible_domains
 from api.routers.internal._helpers import map_route_errors
-from back.core.logging import get_logger
+from back.core.logging import get_logger, LogManager
 
 from back.objects.domain import SettingsService as config_service
 
@@ -1100,6 +1101,91 @@ async def run_schedule_now(
     """Fire the build schedule for *domain_name* immediately (one-shot)."""
     return config_service.trigger_schedule_now_result(
         domain_name, session_mgr, settings
+    )
+
+
+# ===========================================
+# Application Logs
+# ===========================================
+
+
+@router.get(
+    "/logs",
+    dependencies=[Depends(require(ROLE_ADMIN))],
+)
+async def get_app_logs(
+    lines: int = Query(default=200, ge=1, le=5000),
+):
+    """Return the last *lines* lines of the rotating application log file (admin only)."""
+    from pathlib import Path as _Path
+
+    mgr = LogManager.instance()
+    log_path = mgr.log_path
+    if not log_path:
+        return {"log_path": None, "log_level": mgr.level, "lines": [], "total_lines": 0}
+
+    def _read() -> list[str]:
+        p = _Path(log_path)
+        if not p.exists():
+            return []
+        return p.read_text(encoding="utf-8", errors="replace").splitlines()
+
+    try:
+        all_lines: list[str] = await run_blocking(_read)
+        tail = all_lines[-lines:]
+        return {
+            "log_path": log_path,
+            "log_level": mgr.level,
+            "lines": tail,
+            "total_lines": len(all_lines),
+        }
+    except Exception as exc:
+        logger.warning("Failed to read log file %s: %s", log_path, exc)
+        return {
+            "log_path": log_path,
+            "log_level": mgr.level,
+            "lines": [f"[Error reading log file: {exc}]"],
+            "total_lines": 0,
+        }
+
+
+@router.get(
+    "/logs/download",
+    dependencies=[Depends(require(ROLE_ADMIN))],
+)
+async def download_app_logs():
+    """Download the full rotating log file as a plain-text attachment (admin only).
+
+    Reads the file atomically into memory so Content-Length always matches the
+    actual body — avoids a Content-Length mismatch on a live log that is still
+    being written to.
+    """
+    from pathlib import Path as _Path
+
+    mgr = LogManager.instance()
+    log_path = mgr.log_path
+    if not log_path:
+        return PlainTextResponse("Log file not configured.", status_code=404)
+
+    p = _Path(log_path)
+    if not p.exists():
+        return PlainTextResponse(f"Log file not found: {log_path}", status_code=404)
+
+    try:
+        content: bytes = await run_blocking(p.read_bytes)
+    except Exception as exc:
+        logger.warning("Failed to read log file for download %s: %s", log_path, exc)
+        return PlainTextResponse(f"Error reading log file: {exc}", status_code=500)
+
+    from datetime import datetime as _dt
+    stamp = _dt.now().strftime("%Y%m%d_%H%M%S")
+    stem = p.stem   # e.g. "ontobricks"
+    filename = f"{stem}_{stamp}.log"
+
+    return Response(
+        content=content,
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

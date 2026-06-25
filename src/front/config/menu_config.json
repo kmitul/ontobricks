@@ -493,6 +493,14 @@
                             "requires": null
                         },
                         {
+                            "id": "registry",
+                            "label": "Registry",
+                            "icon": "bi-archive",
+                            "default": false,
+                            "requires": null,
+                            "admin_only": true
+                        },
+                        {
                             "id": "global",
                             "label": "Global",
                             "icon": "bi-sliders",
@@ -536,17 +544,17 @@
                             "admin_only": true
                         },
                         {
-                            "id": "registry",
-                            "label": "Registry",
-                            "icon": "bi-archive",
+                            "id": "health",
+                            "label": "Health",
+                            "icon": "bi-heart-pulse",
                             "default": false,
                             "requires": null,
                             "admin_only": true
                         },
                         {
-                            "id": "health",
-                            "label": "Health",
-                            "icon": "bi-heart-pulse",
+                            "id": "logs",
+                            "label": "Logs",
+                            "icon": "bi-terminal",
                             "default": false,
                             "requires": null,
                             "admin_only": true
