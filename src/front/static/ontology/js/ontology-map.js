@@ -600,9 +600,14 @@ async function initOntologyMap() {
                 const mx = (sx + tx) / 2;
                 const my = (sy + ty) / 2;
                 
-                // Perpendicular direction
-                const dx = tx - sx;
-                const dy = ty - sy;
+                // Perpendicular direction — normalize to canonical (sorted) order so that
+                // opposite-direction links between the same entity pair are offset to
+                // opposite sides of the midpoint rather than both curving the same way.
+                const rawDx = tx - sx;
+                const rawDy = ty - sy;
+                const canonFwd = d.source.id <= d.target.id;
+                const dx = canonFwd ? rawDx : -rawDx;
+                const dy = canonFwd ? rawDy : -rawDy;
                 const len = Math.sqrt(dx * dx + dy * dy) || 1;
                 const px = -dy / len;
                 const py = dx / len;
@@ -684,12 +689,17 @@ async function initOntologyMap() {
             // For curved links
             if (d.linkCount > 1) {
                 const mx = (sx + tx) / 2;
-                const dx = tx - sx;
-                const dy = (typeof d.target === 'object' ? d.target.y : nodes.find(n => n.id === d.target)?.y || 0) - 
+                const rawDx = tx - sx;
+                const rawDy = (typeof d.target === 'object' ? d.target.y : nodes.find(n => n.id === d.target)?.y || 0) - 
                            (typeof d.source === 'object' ? d.source.y : nodes.find(n => n.id === d.source)?.y || 0);
+                const canonFwd = d.source.id <= d.target.id;
+                const dx = canonFwd ? rawDx : -rawDx;
+                const dy = canonFwd ? rawDy : -rawDy;
                 const len = Math.sqrt(dx * dx + dy * dy) || 1;
+                // Use offset*0.5: hitarea sits at the Bezier midpoint (t=0.5),
+                // not at the control point (which is 2× further from the straight midpoint).
                 const offset = (d.linkIndex - (d.linkCount - 1) / 2) * 40;
-                return mx + (-dy / len) * offset;
+                return mx + (-dy / len) * offset * 0.5;
             }
             
             return (sx + tx) / 2;
@@ -712,12 +722,17 @@ async function initOntologyMap() {
             // For curved links
             if (d.linkCount > 1) {
                 const my = (sy + ty) / 2;
-                const dx = (typeof d.target === 'object' ? d.target.x : nodes.find(n => n.id === d.target)?.x || 0) - 
+                const rawDx = (typeof d.target === 'object' ? d.target.x : nodes.find(n => n.id === d.target)?.x || 0) - 
                            (typeof d.source === 'object' ? d.source.x : nodes.find(n => n.id === d.source)?.x || 0);
-                const dy = ty - sy;
+                const rawDy = ty - sy;
+                const canonFwd = d.source.id <= d.target.id;
+                const dx = canonFwd ? rawDx : -rawDx;
+                const dy = canonFwd ? rawDy : -rawDy;
                 const len = Math.sqrt(dx * dx + dy * dy) || 1;
+                // Use offset*0.5: Bezier midpoint (t=0.5) is halfway between straight midpoint
+                // and control point, so half the perpendicular displacement.
                 const offset = (d.linkIndex - (d.linkCount - 1) / 2) * 40;
-                return my + (dx / len) * offset;
+                return my + (dx / len) * offset * 0.5;
             }
             
             return (sy + ty) / 2;
@@ -745,15 +760,21 @@ async function initOntologyMap() {
                 my = node.y + Math.sin(angle) * dist;
                 d3.select(this).classed('self-loop-label', true);
             } else if (d.linkCount > 1) {
-                // Curved link
+                // Curved link — normalize direction to canonical (sorted) order so that
+                // opposite-direction links offset to opposite sides of the midpoint.
                 mx = (sx + tx) / 2;
                 my = (sy + ty) / 2;
-                const dx = tx - sx;
-                const dy = ty - sy;
+                const rawDx = tx - sx;
+                const rawDy = ty - sy;
+                const canonFwd = d.source.id <= d.target.id;
+                const dx = canonFwd ? rawDx : -rawDx;
+                const dy = canonFwd ? rawDy : -rawDy;
                 const len = Math.sqrt(dx * dx + dy * dy) || 1;
                 const offset = (d.linkIndex - (d.linkCount - 1) / 2) * 40;
-                mx += (-dy / len) * offset;
-                my += (dx / len) * offset;
+                // Use offset*0.5: label sits at the Bezier midpoint (t=0.5), not at
+                // the control point (which is 2× further from the straight midpoint).
+                mx += (-dy / len) * offset * 0.5;
+                my += (dx / len) * offset * 0.5;
             } else {
                 // Straight link
                 mx = (sx + tx) / 2;

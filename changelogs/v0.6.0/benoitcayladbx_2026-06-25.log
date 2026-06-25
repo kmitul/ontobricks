@@ -1,0 +1,78 @@
+## Fix: Relationships in Opposite Directions Overlapping in Designer Views
+
+### Context
+Bug #75: When an ontology has two object properties between the same entity pair in opposite directions (e.g., A->B and B->A), both relationship labels/curves were rendered on top of each other in the Designer views.
+
+The bug affects three graphical components: the Ontology Designer (D3 force-directed graph, menu label "Designer"), the Mapping Designer (D3 force-directed graph), and the Business Views (OntoViz canvas).
+
+### Root Cause (two separate issues)
+
+**Issue 1 - Non-canonical perpendicular direction:** The perpendicular direction vector was computed as dx = target.x - source.x, which depends on the travel direction of each individual link. For two links in opposite directions (A->B and B->A):
+- Link A->B: dx = +400, offset = -20 -> perpY = +1 x -20 = -20
+- Link B->A: dx = -400, offset = +20 -> perpY = -1 x +20 = -20
+Both displacements are equal, so both curves bend the same way.
+
+**Issue 2 - Hitarea/label at control point instead of curve midpoint:** For a quadratic Bezier curve M sx,sy Q cx,cy tx,ty, the visual midpoint at t=0.5 is at (mx + 0.5*perp_offset), NOT at the control point (mx + 1.0*perp_offset). The circles and labels were placed at the control point, which is twice as far from the straight midpoint as the actual curve, making them appear unlinked/floating above or below the lines.
+
+### Fix
+1. Normalize dx/dy to a canonical direction (smaller entity ID -> larger entity ID) so opposite-direction links offset to opposite sides.
+2. Use offset * 0.5 for hitarea and label positions so they land on the Bezier curve midpoint (t=0.5) rather than at the control point.
+
+### Changes
+
+1. src/front/static/ontology/js/ontology-map.js - Ontology Designer (D3)
+   - Fixed path curve control point (canonical direction)
+   - Fixed hitarea cx/cy: canonical direction + offset*0.5
+   - Fixed link label mx/my: canonical direction + offset*0.5
+
+2. src/front/static/mapping/js/mapping-design.js - Mapping Designer (D3)
+   - Same 4 fixes as ontology-map.js
+
+3. src/front/static/global/ontoviz/ontoviz.js - Business Views (OntoViz)
+   - Fixed baseMidPoint perpendicular offset in _renderRelationship (canonical direction)
+
+### Modified Files
+- src/front/static/ontology/js/ontology-map.js
+- src/front/static/mapping/js/mapping-design.js
+- src/front/static/global/ontoviz/ontoviz.js
+
+### Test Results
+- 2450 unit tests passed, 15 skipped.
+
+---
+
+## Feature: User / Role Info Panel at Bottom of Sidebar
+
+### Context
+Add connected user identity and role information at the bottom of the left collapsible sidebar, visible across all pages that use the shared `_sidebar_nav.html` partial. In collapsed mode only the person icon is shown; expanded mode shows email + role badge(s).
+
+### Changes
+
+1. **`src/front/templates/partials/layout/_sidebar_nav.html`** — Appended a `sidebar-user` footer block inside the `{% if sidebar_menu %}` guard. Uses `get_user_email()`, `get_user_role()`, and `get_user_domain_role()` Jinja2 globals to display the connected user's email and role badges (Admin badge in red, domain role in blue when it differs from the app role).
+2. **`src/front/static/global/css/sidebar-layout.css`** — Added `display: flex; flex-direction: column;` to `.sidebar-nav` so `margin-top: auto` on `.sidebar-user` pins the panel to the bottom. Added full `.sidebar-user`, `.sidebar-user-info`, `.sidebar-user-icon`, `.sidebar-user-details`, `.sidebar-user-email`, `.sidebar-user-badges`, and `.sidebar-role-badge` rules. Added collapsed-state overrides that hide the text/badges and center the icon.
+
+### Modified Files
+- `src/front/templates/partials/layout/_sidebar_nav.html`
+- `src/front/static/global/css/sidebar-layout.css`
+
+### Test Results
+- Pure UI/CSS change; no logic affected. Existing test suite unaffected.
+
+---
+
+## Remove: Role Badge from Navbar
+
+### Context
+Now that the user's role is shown in the sidebar user footer, the redundant role pill in the top-right navbar is removed.
+
+### Changes
+
+1. **`src/front/templates/base.html`** — `#roleNavBadgeItem` marked `d-none` and `aria-hidden="true"`; stripped the icon/label content to leave only the stub needed by JS.
+2. **`src/front/static/global/css/permissions.css`** — Collapsed the two `#roleNavBadgeItem` rules into one that keeps the element `display: none !important` even after `permissions.js` adds the `.is-visible` class.
+
+### Modified Files
+- `src/front/templates/base.html`
+- `src/front/static/global/css/permissions.css`
+
+### Test Results
+- Pure UI/CSS change. JS still runs without errors (guards with `if (!item) return`). Existing test suite unaffected.

@@ -594,7 +594,7 @@
                     "items": [
                         {
                             "id": "sigmagraph",
-                            "label": "Viewer",
+                            "label": "Explorer",
                             "icon": "bi-layers-half",
                             "default": true,
                             "requires": null

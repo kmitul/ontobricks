@@ -304,14 +304,10 @@ body:is(.read-only-version, .role-viewer) .btn.disabled {
    colour / sizing live here (rule §4: no inline CSS in templates).
    ========================================================================== */
 
-/* ``!important`` so this beats Bootstrap's ``.d-flex`` on the same element —
-   otherwise the raw ``ROLE`` placeholder leaks before/without JS resolution. */
-#roleNavBadgeItem {
-    display: none !important;
-}
-
+/* Role badge hidden — role info is now shown in the sidebar user footer. */
+#roleNavBadgeItem,
 #roleNavBadgeItem.is-visible {
-    display: flex !important;
+    display: none !important;
 }
 
 #roleNavBadge {

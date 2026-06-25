@@ -109,17 +109,10 @@
                 </ul>
                 
                 <ul class="navbar-nav ms-auto">
-                    <!-- Role indicator (filled in by permissions.js with the
-                         caller's effective role: ADMIN / BUILDER / EDITOR / VIEWER).
-                         version-check.js extends the tooltip when the user is
-                         on an older, read-only version. -->
-                    <li class="nav-item d-flex align-items-center me-2" id="roleNavBadgeItem">
-                        <span id="roleNavBadge"
-                              class="badge rounded-pill"
-                              data-bs-toggle="tooltip"
-                              data-bs-placement="bottom"
-                              title="">
-                            <i class="bi bi-person-badge me-1"></i><span id="roleNavBadgeLabel">ROLE</span>
+                    <!-- Role badge removed — role is shown in the sidebar user footer instead -->
+                    <li class="nav-item d-flex align-items-center me-2 d-none" id="roleNavBadgeItem" aria-hidden="true">
+                        <span id="roleNavBadge" class="badge rounded-pill">
+                            <span id="roleNavBadgeLabel"></span>
                         </span>
                     </li>
                     <!-- SQL Warehouse status indicator (admin-only) -->

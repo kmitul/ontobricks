@@ -632,8 +632,11 @@ async function initMappingDesigner() {
                     const offset = (d.linkIndex - (d.linkCount - 1) / 2) * 40;
                     const mx = (sx + tx) / 2;
                     const my = (sy + ty) / 2;
-                    const dx = tx - sx;
-                    const dy = ty - sy;
+                    const rawDx = tx - sx;
+                    const rawDy = ty - sy;
+                    const canonFwd = d.source.id <= d.target.id;
+                    const dx = canonFwd ? rawDx : -rawDx;
+                    const dy = canonFwd ? rawDy : -rawDy;
                     const len = Math.sqrt(dx * dx + dy * dy) || 1;
                     const px = -dy / len;
                     const py = dx / len;
@@ -700,12 +703,15 @@ async function initMappingDesigner() {
                 
                 if (d.linkCount > 1) {
                     const mx = (sx + tx) / 2;
-                    const dx = tx - sx;
-                    const dy = (typeof d.target === 'object' ? d.target.y : nodes.find(n => n.id === d.target)?.y || 0) - 
+                    const rawDx = tx - sx;
+                    const rawDy = (typeof d.target === 'object' ? d.target.y : nodes.find(n => n.id === d.target)?.y || 0) - 
                                (typeof d.source === 'object' ? d.source.y : nodes.find(n => n.id === d.source)?.y || 0);
+                    const canonFwd = d.source.id <= d.target.id;
+                    const dx = canonFwd ? rawDx : -rawDx;
+                    const dy = canonFwd ? rawDy : -rawDy;
                     const len = Math.sqrt(dx * dx + dy * dy) || 1;
                     const offset = (d.linkIndex - (d.linkCount - 1) / 2) * 40;
-                    return mx + (-dy / len) * offset;
+                    return mx + (-dy / len) * offset * 0.5;
                 }
                 
                 return (sx + tx) / 2;
@@ -725,12 +731,15 @@ async function initMappingDesigner() {
                 
                 if (d.linkCount > 1) {
                     const my = (sy + ty) / 2;
-                    const dx = (typeof d.target === 'object' ? d.target.x : nodes.find(n => n.id === d.target)?.x || 0) - 
+                    const rawDx = (typeof d.target === 'object' ? d.target.x : nodes.find(n => n.id === d.target)?.x || 0) - 
                                (typeof d.source === 'object' ? d.source.x : nodes.find(n => n.id === d.source)?.x || 0);
-                    const dy = ty - sy;
+                    const rawDy = ty - sy;
+                    const canonFwd = d.source.id <= d.target.id;
+                    const dx = canonFwd ? rawDx : -rawDx;
+                    const dy = canonFwd ? rawDy : -rawDy;
                     const len = Math.sqrt(dx * dx + dy * dy) || 1;
                     const offset = (d.linkIndex - (d.linkCount - 1) / 2) * 40;
-                    return my + (dx / len) * offset;
+                    return my + (dx / len) * offset * 0.5;
                 }
                 
                 return (sy + ty) / 2;
@@ -758,12 +767,16 @@ async function initMappingDesigner() {
                 } else if (d.linkCount > 1) {
                     mx = (sx + tx) / 2;
                     my = (sy + ty) / 2;
-                    const dx = tx - sx;
-                    const dy = ty - sy;
+                    const rawDx = tx - sx;
+                    const rawDy = ty - sy;
+                    const canonFwd = d.source.id <= d.target.id;
+                    const dx = canonFwd ? rawDx : -rawDx;
+                    const dy = canonFwd ? rawDy : -rawDy;
                     const len = Math.sqrt(dx * dx + dy * dy) || 1;
                     const offset = (d.linkIndex - (d.linkCount - 1) / 2) * 40;
-                    mx += (-dy / len) * offset;
-                    my += (dx / len) * offset;
+                    // Use offset*0.5: label at Bezier midpoint (t=0.5), not at control point.
+                    mx += (-dy / len) * offset * 0.5;
+                    my += (dx / len) * offset * 0.5;
                 } else {
                     mx = (sx + tx) / 2;
                     my = (sy + ty) / 2 - 8;
