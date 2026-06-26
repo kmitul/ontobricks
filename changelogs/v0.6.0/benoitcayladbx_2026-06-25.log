@@ -384,3 +384,126 @@ SHACL shapes (`.ttl` containing `sh:NodeShape`) are data-quality validation rule
 
 ### Test Results
 - 428 passed, 11 skipped — full suite green.
+
+---
+
+## Feature: Neighborhood highlight on entity click in Ontology Designer
+
+### Context
+Clicking an entity in the D3 force-directed Designer only selected the node (grey ring). Connected relationships and neighbor entities had no visual distinction, making it hard to read context in a dense graph.
+
+### Changes
+
+1. **`src/front/static/ontology/css/ontology-map.css`**
+   - `.map-node.dimmed` — fades icon and label to 15% opacity for unrelated nodes.
+   - `.map-node.neighbor` — soft blue glow ring on directly connected nodes.
+   - `.map-link.highlighted` — blue stroke on connected links (purple for inheritance).
+   - `.map-link.dimmed` — near-transparent stroke for unrelated links.
+   - `.map-link-label.highlighted / .dimmed` — matching label treatment.
+   - `.map-link-hitarea.highlighted / .dimmed` — dot coloring for relationship midpoints.
+
+2. **`src/front/static/ontology/js/ontology-map.js`**
+   - `highlightNeighborhood(selectedName)` — computes connected links and neighbor nodes from `regularLinks` + `selfLoopLinks`, applies CSS classes via D3.
+   - `clearHighlights()` — strips all highlight/dim classes.
+   - Node click and right-click handlers — call `highlightNeighborhood`.
+   - Background SVG click and link hitarea click — call `clearHighlights`.
+
+### Modified Files
+- `src/front/static/ontology/css/ontology-map.css`
+- `src/front/static/ontology/js/ontology-map.js`
+
+---
+
+## Feature: Inheritance link toggle button in Ontology Designer
+
+### Context
+The Ontology Designer shows both relationship and inheritance links. In complex ontologies the dashed inheritance arrows add visual noise. A persistent toggle button allows hiding them.
+
+### Changes
+
+1. **`src/front/templates/partials/ontology/_ontology_map.html`**
+   - Added `#mapToggleInheritance` button (`bi-diagram-3`) in the top-right toolbar, styled as an active toggle (`btn-outline-secondary active`), between the auto-icons button and the discuss button.
+
+2. **`src/front/static/ontology/js/ontology-map.js`**
+   - Toggle handler wired to `inheritanceLinkElements.style('display', ...)`.
+   - State persisted in `sessionStorage` so the choice survives map re-renders within the session.
+   - Legend item for "Inheritance" hidden/shown in sync.
+   - Button `title` text updates to reflect current state.
+
+### Modified Files
+- `src/front/templates/partials/ontology/_ontology_map.html`
+- `src/front/static/ontology/js/ontology-map.js`
+
+---
+
+## Feature: Endpoint highlight on relationship click in Ontology Designer
+
+### Context
+Clicking a relationship midpoint dot now highlights both connected entities (blue glow ring) and the link itself (blue), dimming everything else — symmetric with the existing node-click neighborhood highlight.
+
+### Changes
+
+1. **`src/front/static/ontology/js/ontology-map.js`**
+   - `highlightLink(linkDatum)` — new helper: resolves source/target names, marks both endpoint nodes as `.neighbor`, the clicked link/hitarea/label as `.highlighted`, and everything else as `.dimmed`.
+   - Link hitarea click handler — replaced manual inline attr reset with `highlightLink(d)`.
+
+### Modified Files
+- `src/front/static/ontology/js/ontology-map.js`
+
+---
+
+## Feature: Create Business View from Entity right-click in Ontology Designer
+
+### Context
+Added a "Create Business View" entry to the entity context menu in the D3 Ontology Designer. Right-clicking any entity and choosing this option builds a 1-hop neighbourhood layout (centre entity + all direct neighbours, all connecting relationships/inheritances) and saves it as a new design view. The view is auto-named `Auto_<EntityName>`, with numeric suffixes (`_1`, `_2`, …) to avoid conflicts with existing views. After creation the UI navigates directly to the Business Views (design) section showing the new view.
+
+### Changes
+
+1. **`src/front/static/ontology/js/ontology-map.js`**
+   - Added module-level `ontologyMapLinks` and `ontologyMapNodes` variables; assigned inside `initOntologyMap` after links/nodes arrays are built.
+   - `createBusinessViewFromEntity(entityData)` — new async function: collects 1-hop neighbours from `ontologyMapLinks`, resolves a unique view name via `GET /domain/design-views`, builds a circular entity layout, then calls `create → switch → save-current` and navigates to the design section.
+   - `showMapContextMenu` — added "Create Business View" `<div class="map-context-item">` entry and wired its click handler.
+
+### Modified Files
+- `src/front/static/ontology/js/ontology-map.js`
+
+
+---
+
+## Tests: design-view backend coverage
+
+### Context
+Added 36 unit tests for all seven `Domain` design-view methods (`get_design_views`, `create_design_view`, `switch_design_view`, `get_current_design_view`, `save_current_design_view`, `rename_design_view`, `delete_design_view`) plus an end-to-end flow test that mirrors the JS `createBusinessViewFromEntity` sequence (create → switch → save with `visibility` payload) and a numeric-suffix uniqueness test.
+
+### Changes
+
+1. **`tests/units/domain/test_design_views.py`** (new)
+   - 7 test classes, 36 tests covering happy paths, validation errors, conflict/not-found errors, legacy-layout migration, visibility payload persistence, and the full auto-view creation flow.
+
+### Modified Files
+- `tests/units/domain/test_design_views.py` (new)
+
+---
+
+## Feature: Entity search popup in Ontology Designer
+
+### Context
+Added a search button (🔍) to the Ontology Designer toolbar. Clicking it opens a small floating popup with a sorted dropdown of all entities. Selecting one and clicking "Focus" centres the canvas on that entity (animated pan+zoom to ×1.4) and triggers the neighbourhood highlight — identical to clicking the node directly.
+
+### Changes
+
+1. **`src/front/templates/partials/ontology/_ontology_map.html`**
+   - Added `#mapSearchBtn` toolbar button and `#mapSearchPopup` floating panel (select + Focus button).
+
+2. **`src/front/static/ontology/css/ontology-map.css`**
+   - Added `.map-search-popup`, `.map-search-popup-header`, `.map-search-popup-body` styles with fade-in animation.
+
+3. **`src/front/static/ontology/js/ontology-map.js`**
+   - `initMapSearch(nodes, highlightNeighborhood, clearHighlights, svg, w, h)` — wires open/close, populates the sorted dropdown on each open, handles Enter key, outside-click dismiss.
+   - `focusMapEntity(name, nodes, …)` — pans and zooms the SVG to centre the selected node, then calls `highlightNeighborhood`.
+   - `initOntologyMap` now calls `initMapSearch` at the end of its setup block.
+
+### Modified Files
+- `src/front/templates/partials/ontology/_ontology_map.html`
+- `src/front/static/ontology/css/ontology-map.css`
+- `src/front/static/ontology/js/ontology-map.js`
