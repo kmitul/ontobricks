@@ -34,7 +34,7 @@ set -euo pipefail
 #
 #   1. Registry schema  (e.g. ontobricks_registry)
 #      Coords : deploy.config.sh → LAKEBASE_PROJECT / LAKEBASE_BRANCH /
-#               LAKEBASE_REGISTRY_DATABASE / LAKEBASE_REGISTRY_SCHEMA
+#               LAKEBASE_DATABASE / LAKEBASE_SCHEMA
 #      → ``scripts/deploy.sh`` grants this one automatically on every
 #        dev-lakebase deploy (re-run after "Settings > Registry > Initialize"
 #        if the schema did not exist yet at deploy time).

@@ -145,7 +145,7 @@ _dab_var_overrides=(
     "--var=lakebase_project=${LAKEBASE_PROJECT}"
     "--var=lakebase_branch=${LAKEBASE_BRANCH}"
     "--var=lakebase_database_resource_segment=${LAKEBASE_DATABASE_RESOURCE_SEGMENT}"
-    "--var=lakebase_registry_schema=${LAKEBASE_REGISTRY_SCHEMA}"
+    "--var=lakebase_registry_schema=${LAKEBASE_SCHEMA}"
 )
 
 EXPECTED_VOLUME_FQN="${REGISTRY_CATALOG}.${REGISTRY_SCHEMA}.${REGISTRY_VOLUME}"
@@ -192,12 +192,39 @@ require_var WAREHOUSE_ID
 require_var REGISTRY_CATALOG; require_var REGISTRY_SCHEMA; require_var REGISTRY_VOLUME
 if $IS_LAKEBASE; then
     require_var LAKEBASE_PROJECT; require_var LAKEBASE_BRANCH
-    require_var LAKEBASE_DATABASE_RESOURCE_SEGMENT
-    require_var LAKEBASE_REGISTRY_SCHEMA; require_var LAKEBASE_REGISTRY_DATABASE
-    # Common mistake: putting the datname / schema in the resource segment.
+    require_var LAKEBASE_SCHEMA; require_var LAKEBASE_DATABASE
+
+    # Resolve db-… segment from LAKEBASE_DATABASE when not explicitly set.
+    # This calls the API once and caches the result in LAKEBASE_DATABASE_RESOURCE_SEGMENT.
+    if [[ -z "${LAKEBASE_DATABASE_RESOURCE_SEGMENT:-}" ]]; then
+        _branch_path="projects/${LAKEBASE_PROJECT}/branches/${LAKEBASE_BRANCH}"
+        _resolve_out="$(databricks postgres list-databases "$_branch_path" -o json 2>/dev/null || true)"
+        if [[ -n "$_resolve_out" ]]; then
+            LAKEBASE_DATABASE_RESOURCE_SEGMENT="$(printf '%s' "$_resolve_out" \
+                | python3 -c "
+import sys, json
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw)
+    dbs = data if isinstance(data, list) else data.get('databases', [])
+    for db in dbs:
+        if db.get('status', {}).get('postgres_database') == '${LAKEBASE_DATABASE}':
+            print(db.get('name','').split('/')[-1])
+            break
+except Exception:
+    pass
+" 2>/dev/null || true)"
+        fi
+        if [[ -z "${LAKEBASE_DATABASE_RESOURCE_SEGMENT:-}" ]]; then
+            die "Could not resolve db-… resource segment for database '${LAKEBASE_DATABASE}'. Set LAKEBASE_DATABASE_RESOURCE_SEGMENT explicitly or check LAKEBASE_PROJECT/LAKEBASE_BRANCH."
+        fi
+        export LAKEBASE_DATABASE_RESOURCE_SEGMENT
+        info "Resolved db-… segment: ${LAKEBASE_DATABASE_RESOURCE_SEGMENT} (from database '${LAKEBASE_DATABASE}')"
+    fi
+
     case "$LAKEBASE_DATABASE_RESOURCE_SEGMENT" in
         db-*) : ;;
-        *) warn "LAKEBASE_DATABASE_RESOURCE_SEGMENT='${LAKEBASE_DATABASE_RESOURCE_SEGMENT}' does not look like a 'db-…' resource id (see databricks.yml). Did you use the datname/schema by mistake?" ;;
+        *) warn "LAKEBASE_DATABASE_RESOURCE_SEGMENT='${LAKEBASE_DATABASE_RESOURCE_SEGMENT}' does not look like a 'db-…' id." ;;
     esac
 fi
 ok "deploy.config values present"
@@ -291,7 +318,7 @@ if $IS_LAKEBASE; then
         if printf '%s' "$_pg_dbs" | grep -q "$LAKEBASE_DATABASE_RESOURCE_SEGMENT"; then
             ok "Lakebase database '${LAKEBASE_DATABASE_RESOURCE_SEGMENT}' present on ${EXPECTED_PG_BRANCH_PATH}"
             # Auto-derive the PostgreSQL datname from the resource segment when the
-            # user left LAKEBASE_REGISTRY_DATABASE at the default (app-name slug).
+            # user left LAKEBASE_DATABASE at the default (app-name slug).
             # This avoids "database does not exist" on first deploy.
             _derived_datname="$(printf '%s' "$_pg_dbs" \
                 | python3 -c "
@@ -313,12 +340,12 @@ try:
 except Exception:
     pass
 " 2>/dev/null || true)"
-            if [[ -n "$_derived_datname" && "$_derived_datname" != "$LAKEBASE_REGISTRY_DATABASE" ]]; then
-                warn "LAKEBASE_REGISTRY_DATABASE='${LAKEBASE_REGISTRY_DATABASE}' but the actual Postgres datname is '${_derived_datname}'."
-                warn "Update DEFAULT_LAKEBASE_REGISTRY_DATABASE in ${CONFIG_FILE} to '${_derived_datname}' to fix connection errors."
-                LAKEBASE_REGISTRY_DATABASE="$_derived_datname"
+            if [[ -n "$_derived_datname" && "$_derived_datname" != "$LAKEBASE_DATABASE" ]]; then
+                warn "LAKEBASE_DATABASE='${LAKEBASE_DATABASE}' but the actual Postgres datname is '${_derived_datname}'."
+                warn "Update DEFAULT_LAKEBASE_DATABASE in ${CONFIG_FILE} to '${_derived_datname}' to fix connection errors."
+                LAKEBASE_DATABASE="$_derived_datname"
                 export APP_LAKEBASE_DATABASE="$_derived_datname"
-                info "Auto-corrected LAKEBASE_REGISTRY_DATABASE → '${_derived_datname}' for this deploy."
+                info "Auto-corrected LAKEBASE_DATABASE → '${_derived_datname}' for this deploy."
             fi
         else
             CHECK_FAILED=$((CHECK_FAILED + 1))
@@ -559,7 +586,7 @@ fi
 # every time we redeploy with a different target — Lakebase loses the
 # schema-level GRANTs the app SP needs (USAGE on the schema, DML on
 # tables, USAGE/SELECT/UPDATE on sequences). The runtime then fails
-# with "Role '<sp-id>' lacks USAGE on schema '${LAKEBASE_REGISTRY_SCHEMA}'".
+# with "Role '<sp-id>' lacks USAGE on schema '${LAKEBASE_SCHEMA}'".
 #
 # This script is registry-scoped: it only grants on the REGISTRY schema.
 # The graph DB is configured in-app (Settings → Graph DB) and may live in
@@ -584,8 +611,8 @@ if $IS_LAKEBASE; then
     if ! scripts/bootstrap-lakebase-perms.sh \
             -i "$LAKEBASE_PROJECT" \
             -b "$LAKEBASE_BRANCH" \
-            -d "$LAKEBASE_REGISTRY_DATABASE" \
-            -s "$LAKEBASE_REGISTRY_SCHEMA" \
+            -d "$LAKEBASE_DATABASE" \
+            -s "$LAKEBASE_SCHEMA" \
             "${_UC_CATALOG_ARG[@]}" \
             -a "$APP_NAME" \
             -a "$MCP_APP_NAME"; then
@@ -596,8 +623,8 @@ if $IS_LAKEBASE; then
         echo "      scripts/bootstrap-lakebase-perms.sh \\"
         echo "        -i $LAKEBASE_PROJECT \\"
         echo "        -b $LAKEBASE_BRANCH \\"
-        echo "        -d $LAKEBASE_REGISTRY_DATABASE \\"
-        echo "        -s $LAKEBASE_REGISTRY_SCHEMA \\"
+        echo "        -d $LAKEBASE_DATABASE \\"
+        echo "        -s $LAKEBASE_SCHEMA \\"
         echo "        ${_UC_CATALOG_ARG[*]:+-c $REGISTRY_CATALOG \\}"
         echo "        -a $APP_NAME -a $MCP_APP_NAME"
     fi
