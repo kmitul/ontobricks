@@ -545,3 +545,107 @@ Post-commit code review against `.cursorrules` / `src/.coding_rules.md`. All fla
 - `src/front/templates/partials/ontology/_ontology_map.html`
 - `tests/units/domain/test_design_views.py`
 - `docs/features.md`
+
+---
+
+## Enhancement: Analytics — guard Run Analysis + tab fills viewport
+
+### Context
+Two UX issues in the Knowledge Graph / Analytics section:
+1. "Run Analysis" could be clicked even with no graph built, resulting in a backend error with no helpful message.
+2. The `.ob-tab-content` container had a fixed/small height — the bottom of the tab pane was cut off and did not resize with the browser window.
+
+### Changes
+
+1. **`src/front/templates/partials/dtwin/_query_analytics.html`**
+   - Added `_setComputeBtnState(enabled, reason)` — disables/enables `analyticsComputeBtn` and sets tooltip.
+   - Added `_showNoGraphBanner(show)` — inserts/removes a `alert-warning` banner below the section header when no graph is detected.
+   - `_loadEntityTypes()` — now checks `window.__TRIPLESTORE_CONFIG.graph_name` first; if empty, disables the button and shows the banner without making the stats API call. Also disables/shows banner when the `/dtwin/sync/stats` response returns `success: false`.
+   - `analyticsLoadTypes()` — simplified (always calls `_loadEntityTypes()`, removed stale guard).
+   - Added `_initialGuard()` IIFE that disables the button immediately at page paint time if `graph_name` is empty (no API round-trip needed).
+   - Added `<style>` block: `#analyticsResults { display: flex; flex-direction: column; flex: 1; min-height: 0; }` and `#analyticsResults > .ob-tab-content { flex: 1; min-height: 0; overflow-y: auto; }` so the tab pane fills remaining viewport height and scrolls internally, adapting to window resize.
+
+### Modified Files
+- `src/front/templates/partials/dtwin/_query_analytics.html`
+
+### Test Results
+- Pure frontend/template change. Existing test suite unaffected.
+
+---
+
+## Enhancement: Registry — item descriptions + access-rights check
+
+### Context
+The "Registry Catalog & Volume" panel showed two items (UC schema and UC Volume) with only a single-line hint. Operators had no quick way to understand their exact purpose or to verify that the app service principal had the required privileges.
+
+### Changes
+
+1. **`src/front/templates/partials/registry/_registry_configuration.html`**
+   - Moved the "Check Access" button inline next to the section label.
+   - For each item, added a `0.72rem` description paragraph explaining:
+     - **UC schema**: hosts Delta Lake triples views + Lakebase-backed registry tables; requires `USE CATALOG`, `USE SCHEMA`, `SELECT`, `CREATE TABLE`, `MODIFY`.
+     - **UC Volume**: stores binary document artefacts in `documents/` folders per domain; requires `READ VOLUME` + `WRITE VOLUME`.
+   - Added `#registrySchemaCheckBadge` / `#registryVolumeCheckBadge` inline badge slots.
+   - Added `#registrySchemaCheckDetail` / `#registryVolumeCheckDetail` error-detail slots (hidden until a check runs).
+   - Added an IIFE `<script>` block wiring the `btnCheckRegistryAccess` button: calls `GET /settings/registry/check`, renders per-item badges (OK / Not found / Access denied / Unknown) and error detail, fires a summary `showNotification`.
+
+2. **`src/back/core/databricks/UnityCatalog.py`**
+   - `check_schema_access(catalog, schema)` — REST `GET /api/2.1/unity-catalog/schemas/{catalog}.{schema}`: distinguishes 200 (exists + accessible), 404 (not found), 403 (exists but access denied).
+   - `check_volume_access(catalog, schema, volume)` — REST `GET /api/2.1/unity-catalog/volumes/{catalog}.{schema}.{volume}`: same status-code logic; also returns `volume_type` (MANAGED / EXTERNAL) on success.
+
+3. **`src/back/objects/domain/SettingsService.py`**
+   - `check_registry_access(session_mgr, settings)` — static async method: resolves `RegistryCfg`, calls both check methods, annotates results with `path` / `name` fields.
+
+4. **`src/api/routers/internal/settings.py`**
+   - `GET /settings/registry/check` — thin async route; no warehouse required (REST-only probes).
+
+### Modified Files
+- `src/front/templates/partials/registry/_registry_configuration.html`
+- `src/back/core/databricks/UnityCatalog.py`
+- `src/back/objects/domain/SettingsService.py`
+- `src/api/routers/internal/settings.py`
+
+### Test Results
+- Backend-only changes; no existing test paths broken. Frontend-only JS change for the button.
+
+---
+
+## Enhancement: Registry — Check Access extended with Lakebase permission audit
+
+### Context
+The "Check Access" button only verified UC schema/Volume existence via REST. It did not test whether the Lakebase service principal had the Postgres-level privileges required to run the registry (USAGE, CREATE on schema; SELECT/INSERT/UPDATE/DELETE on every registry table).
+
+### Changes
+
+1. **`src/back/objects/registry/store/lakebase/store.py`**
+   - `check_permissions()` — new public method. Single Postgres round-trip that checks:
+     - Connection (SELECT 1 / current_database / current_user)
+     - Schema existence (`pg_namespace`)
+     - `USAGE` on schema (`has_schema_privilege`)
+     - `CREATE` on schema (needed for upgrades that add tables)
+     - Per-table: `SELECT`, `INSERT`, `UPDATE`, `DELETE` via `has_table_privilege` for all 10 tables in `_KNOWN_TABLES`; absent tables reported as `"missing"` (normal before initialization)
+   - Returns structured `{"success", "database", "user", "schema", "checks": [...]}` with per-check `{id, label, status, detail}` where status ∈ `ok | warning | error | missing` and `detail` contains the exact `GRANT` SQL to fix any failing check.
+
+2. **`src/back/objects/domain/SettingsService.py`**
+   - `check_lakebase_permissions(session_mgr, settings)` — static async method delegating to the store; gracefully returns `success: false` if psycopg is absent or the resource is unbound.
+
+3. **`src/api/routers/internal/settings.py`**
+   - `GET /settings/registry/check` — now runs UC and Lakebase checks in parallel via `asyncio.gather`; response wraps both under `{"uc": {...}, "lakebase": {...}}`.
+   - Added `import asyncio`.
+
+4. **`src/front/templates/partials/registry/_registry_configuration.html`**
+   - `btnCheckRegistryAccess` click handler updated to parse `data.uc` / `data.lakebase`.
+   - Added `#lbChecksPanel` section (initially hidden) that renders after a check run:
+     - Header with database/user/schema context and a summary badge (errors / warnings / all passed)
+     - Structural checks (connect, schema_exists, schema_usage, schema_create) shown as inline rows
+     - Table checks in a collapsible `<details>`-like Bootstrap collapse; auto-expanded when any table has errors
+     - Each failing check displays the exact `GRANT … TO "user"` SQL as a code hint
+
+### Modified Files
+- `src/back/objects/registry/store/lakebase/store.py`
+- `src/back/objects/domain/SettingsService.py`
+- `src/api/routers/internal/settings.py`
+- `src/front/templates/partials/registry/_registry_configuration.html`
+
+### Test Results
+- 66 unit tests passed, 1 skipped. No regressions.

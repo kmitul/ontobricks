@@ -1,4 +1,22 @@
 <!-- Graph Analytics — standalone section on /dtwin/ -->
+<style>
+/* Make the analytics section fill the available height and scroll inside the tab pane */
+#analyticsSection {
+    overflow: hidden;
+}
+#analyticsResults {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+}
+#analyticsResults > .ob-tab-content {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+</style>
 <div class="content-section" id="analyticsSection">
 
     <div class="section-header d-flex justify-content-between align-items-center mb-3">
@@ -410,15 +428,63 @@
         }
     });
 
+    // Disable / re-enable the Run Analysis button based on whether the KG has been built
+    function _setComputeBtnState(enabled, reason) {
+        var btn = document.getElementById('analyticsComputeBtn');
+        if (!btn) return;
+        btn.disabled = !enabled;
+        if (!enabled) {
+            btn.title = reason || 'Build the Knowledge Graph first (KG → Sync)';
+            btn.classList.add('disabled');
+        } else {
+            btn.title = '';
+            btn.classList.remove('disabled');
+        }
+    }
+
+    function _showNoGraphBanner(show) {
+        var existing = document.getElementById('analyticsNoGraphBanner');
+        if (show && !existing) {
+            var banner = document.createElement('div');
+            banner.id = 'analyticsNoGraphBanner';
+            banner.className = 'alert alert-warning d-flex align-items-center gap-2 small mb-3';
+            banner.innerHTML = '<i class="bi bi-exclamation-triangle-fill flex-shrink-0"></i>'
+                + '<span>No Knowledge Graph has been built yet. Go to <strong>KG → Sync</strong> to build one before running analysis.</span>';
+            var section = document.getElementById('analyticsSection');
+            var header = section && section.querySelector('.section-header');
+            if (header) header.insertAdjacentElement('afterend', banner);
+        } else if (!show && existing) {
+            existing.remove();
+        }
+    }
+
     // Load entity types from the live KG stats and populate the <select>
     async function _loadEntityTypes() {
         var sel = document.getElementById('analyticsTypeSelect');
         if (!sel) return;
+
+        // Quick check: if the graph_name is empty, no KG has been built
+        var cfg = window.__TRIPLESTORE_CONFIG || {};
+        if (!cfg.graph_name) {
+            _setComputeBtnState(false, 'Build the Knowledge Graph first (KG → Sync)');
+            _showNoGraphBanner(true);
+            sel.innerHTML = '<option value="">All types (full graph)</option>';
+            return;
+        }
+
         try {
             var resp = await fetch('/dtwin/sync/stats', { credentials: 'same-origin' });
             var data = await resp.json();
-            _allTypes = (data.success && data.entity_types) ? data.entity_types : [];
+            if (!data.success) {
+                _setComputeBtnState(false, 'Build the Knowledge Graph first (KG → Sync)');
+                _showNoGraphBanner(true);
+                sel.innerHTML = '<option value="">All types (full graph)</option>';
+                return;
+            }
+            _allTypes = data.entity_types || [];
             _populateTypeSelect(sel);
+            _setComputeBtnState(true);
+            _showNoGraphBanner(false);
         } catch (e) {
             sel.innerHTML = '<option value="">All types (full graph)</option>';
         }
@@ -815,8 +881,17 @@
 
     // Exposed so query.js can populate the dropdown on section activation
     window.analyticsLoadTypes = function () {
-        if (_allTypes.length === 0) _loadEntityTypes();
+        _loadEntityTypes();
     };
+
+    // Run an immediate guard on load: if the config already tells us there is no graph,
+    // disable the button right away without waiting for an API round-trip.
+    (function _initialGuard() {
+        var cfg = window.__TRIPLESTORE_CONFIG || {};
+        if (!cfg.graph_name) {
+            _setComputeBtnState(false, 'Build the Knowledge Graph first (KG → Sync)');
+        }
+    })();
 
     window.analyticsInterpret = async function () {
         if (!_analyticsData) return;

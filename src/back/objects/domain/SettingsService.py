@@ -384,6 +384,96 @@ class SettingsService:
             raise InfrastructureError(f"{log_label} failed", detail=str(e)) from e
 
     @staticmethod
+    async def check_lakebase_permissions(
+        session_mgr: SessionManager, settings: Settings
+    ) -> Dict[str, Any]:
+        """Run a comprehensive Lakebase permission check for the registry schema.
+
+        Delegates to :meth:`LakebaseRegistryStore.check_permissions` which
+        probes connection, schema existence/privileges, and per-table CRUD
+        rights in a single round-trip. Returns ``{"success": False, ...}``
+        when psycopg is not installed or the Lakebase resource is unbound.
+        """
+        rcfg = RegistryCfg.from_session(session_mgr, settings)
+        if not rcfg.is_configured:
+            return {
+                "success": False,
+                "error": "Registry not configured — set REGISTRY_CATALOG / REGISTRY_SCHEMA",
+            }
+        try:
+            from back.objects.registry.store import RegistryFactory  # noqa: PLC0415
+            store = RegistryFactory.lakebase(
+                registry_cfg=rcfg,
+                schema=rcfg.lakebase_schema,
+                database=rcfg.lakebase_database,
+            )
+            return await run_blocking(store.check_permissions)
+        except ImportError:
+            return {
+                "success": False,
+                "error": "psycopg is not installed — Lakebase backend unavailable.",
+            }
+        except Exception as exc:
+            logger.warning("check_lakebase_permissions failed: %s", exc)
+            return {"success": False, "error": str(exc)}
+
+    @staticmethod
+    async def check_registry_access(
+        session_mgr: SessionManager, settings: Settings
+    ) -> Dict[str, Any]:
+        """Verify that the configured UC schema and Volume exist and are accessible.
+
+        Performs two independent REST API probes (no warehouse required):
+
+        1. ``catalog.schema`` — checks existence and USE SCHEMA privilege.
+        2. ``catalog.schema.volume`` — checks existence and READ VOLUME privilege.
+
+        The result shape::
+
+            {
+              "success": True,
+              "schema": {
+                "path": "my_catalog.my_schema",
+                "exists": bool | None,
+                "accessible": bool,
+                "error": str | None,
+              },
+              "volume": {
+                "name": "OntoBricksRegistry",
+                "path": "my_catalog.my_schema.OntoBricksRegistry",
+                "exists": bool | None,
+                "accessible": bool,
+                "error": str | None,
+                "volume_type": "MANAGED" | "EXTERNAL",
+              },
+            }
+        """
+        rcfg = RegistryCfg.from_session(session_mgr, settings)
+        if not rcfg.is_configured:
+            return {
+                "success": False,
+                "error": "Registry not configured — set REGISTRY_CATALOG / REGISTRY_SCHEMA / REGISTRY_VOLUME",
+            }
+
+        client = get_databricks_client(get_domain(session_mgr), settings)
+        if not client:
+            return {"success": False, "error": "Databricks client not available"}
+
+        schema_result = await run_blocking(
+            client.catalog.check_schema_access, rcfg.catalog, rcfg.schema
+        )
+        schema_result["path"] = f"{rcfg.catalog}.{rcfg.schema}"
+
+        vol_name = rcfg.volume or "OntoBricksRegistry"
+        volume_result = await run_blocking(
+            client.catalog.check_volume_access, rcfg.catalog, rcfg.schema, vol_name
+        )
+        volume_result["name"] = vol_name
+        volume_result["path"] = f"{rcfg.catalog}.{rcfg.schema}.{vol_name}"
+
+        return {"success": True, "schema": schema_result, "volume": volume_result}
+
+    @staticmethod
     def build_registry_get_payload(
         session_mgr: SessionManager, settings: Settings
     ) -> Dict[str, Any]:

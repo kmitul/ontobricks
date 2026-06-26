@@ -672,6 +672,175 @@ class LakebaseRegistryStore(RegistryStore):
                 "error": f"Lakebase probe failed: {exc}",
             }
 
+    def check_permissions(self) -> Dict[str, Any]:
+        """Run a comprehensive permission diagnostic against the Lakebase registry.
+
+        Executes two lightweight queries in a single connection:
+
+        1. **Context + schema probe** — confirms the connection works and
+           checks ``USAGE`` + ``CREATE`` on the registry schema.
+        2. **Per-table privilege scan** — for every table that *exists* in
+           the schema, checks ``SELECT``, ``INSERT``, ``UPDATE``, ``DELETE``.
+           Tables from :data:`_KNOWN_TABLES` that are absent from the catalog
+           are reported as ``"missing"`` (expected before initialization, not
+           an error).
+
+        Return shape::
+
+            {
+              "success": True,
+              "database": str,
+              "user": str,
+              "schema": str,
+              "checks": [
+                {
+                  "id": str,          # stable token for the UI
+                  "label": str,       # human-readable label
+                  "status": "ok" | "warning" | "error" | "missing",
+                  "detail": str | None,
+                },
+                ...
+              ],
+            }
+        """
+        _require_psycopg()
+        checks: list = []
+
+        def _chk(id_: str, label: str, status: str, detail: str | None = None):
+            checks.append({"id": id_, "label": label, "status": status, "detail": detail})
+
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                # ── 1. Connection + database/user context ──────────────
+                cur.execute("SELECT current_database(), current_user")
+                row = cur.fetchone()
+                cur_db, cur_user = (row[0], row[1]) if row else (self._effective_database, "?")
+                _chk("connect", "Connect to Lakebase", "ok")
+
+                # ── 2. Schema existence + privileges ───────────────────
+                cur.execute(
+                    """
+                    SELECT
+                        EXISTS(SELECT 1 FROM pg_namespace WHERE nspname = %s),
+                        has_schema_privilege(current_user, %s, 'USAGE'),
+                        has_schema_privilege(current_user, %s, 'CREATE')
+                    """,
+                    (self._schema, self._schema, self._schema),
+                )
+                row2 = cur.fetchone()
+                schema_exists = bool(row2[0]) if row2 else False
+                has_usage     = bool(row2[1]) if row2 else False
+                has_create    = bool(row2[2]) if row2 else False
+
+                if not schema_exists:
+                    _chk(
+                        "schema_exists",
+                        f"Schema '{self._schema}' exists",
+                        "error",
+                        f"Schema '{self._schema}' not found in database '{cur_db}'. "
+                        "Run *Initialize* from Settings → Registry to create it.",
+                    )
+                    # No point checking table privileges if the schema is absent
+                    for tbl in sorted(_KNOWN_TABLES):
+                        _chk(f"tbl_{tbl}", f"Table: {tbl}", "missing",
+                             "Schema does not exist — run Initialize first.")
+                    return {
+                        "success": True,
+                        "database": cur_db,
+                        "user": cur_user,
+                        "schema": self._schema,
+                        "checks": checks,
+                    }
+
+                _chk("schema_exists", f"Schema '{self._schema}' exists", "ok")
+                _chk(
+                    "schema_usage",
+                    f"USAGE on schema '{self._schema}'",
+                    "ok" if has_usage else "error",
+                    None if has_usage else (
+                        f"Role '{cur_user}' lacks USAGE on schema '{self._schema}' "
+                        f"in database '{cur_db}'. "
+                        f"Run: GRANT USAGE ON SCHEMA \"{self._schema}\" TO \"{cur_user}\";"
+                    ),
+                )
+                _chk(
+                    "schema_create",
+                    f"CREATE on schema '{self._schema}'",
+                    "ok" if has_create else "warning",
+                    None if has_create else (
+                        f"Role '{cur_user}' lacks CREATE on schema '{self._schema}' "
+                        "(needed to add new registry tables on upgrade). "
+                        f"Run: GRANT CREATE ON SCHEMA \"{self._schema}\" TO \"{cur_user}\";"
+                    ),
+                )
+
+                # ── 3. Per-table: existence + CRUD privileges ──────────
+                # Fetch all tables that actually exist in the schema
+                cur.execute(
+                    "SELECT relname FROM pg_class c "
+                    "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                    "WHERE n.nspname = %s AND c.relkind = 'r'",
+                    (self._schema,),
+                )
+                existing_tables = {row[0] for row in cur.fetchall()}
+
+                for tbl in sorted(_KNOWN_TABLES):
+                    full = f"{self._schema}.{tbl}"
+                    if tbl not in existing_tables:
+                        _chk(f"tbl_{tbl}", f"Table: {tbl}", "missing",
+                             "Not yet created — run *Initialize* to create all registry tables.")
+                        continue
+                    # Check all four DML privileges at once
+                    cur.execute(
+                        """
+                        SELECT
+                            has_table_privilege(current_user, %s, 'SELECT'),
+                            has_table_privilege(current_user, %s, 'INSERT'),
+                            has_table_privilege(current_user, %s, 'UPDATE'),
+                            has_table_privilege(current_user, %s, 'DELETE')
+                        """,
+                        (full, full, full, full),
+                    )
+                    tp = cur.fetchone()
+                    missing_privs = []
+                    if tp:
+                        for priv, has in zip(["SELECT", "INSERT", "UPDATE", "DELETE"], tp):
+                            if not has:
+                                missing_privs.append(priv)
+
+                    if not missing_privs:
+                        _chk(f"tbl_{tbl}", f"Table: {tbl}", "ok")
+                    else:
+                        grants = ", ".join(missing_privs)
+                        _chk(
+                            f"tbl_{tbl}",
+                            f"Table: {tbl}",
+                            "error",
+                            f"Missing: {grants}. "
+                            f"Run: GRANT {grants} ON TABLE \"{self._schema}\".\"{tbl}\" "
+                            f"TO \"{cur_user}\";",
+                        )
+
+        except Exception as exc:
+            logger.warning("check_permissions failed: %s", exc)
+            if not checks:
+                _chk("connect", "Connect to Lakebase", "error", str(exc))
+            return {
+                "success": False,
+                "database": self._effective_database,
+                "user": "?",
+                "schema": self._schema,
+                "checks": checks,
+            }
+
+        return {
+            "success": True,
+            "database": cur_db,
+            "user": cur_user,
+            "schema": self._schema,
+            "checks": checks,
+        }
+
     def initialize(self, *, client: Any = None) -> Tuple[bool, str]:
         del client  # not used: Lakebase instance is provisioned out of band
         try:

@@ -1,0 +1,14 @@
+## Fix: App startup crash — `Any` not imported in UnityCatalog
+
+### Context
+After the Registry access-check feature was merged (`check_schema_access` / `check_volume_access`), the new method `check_schema_access` used `Dict[str, Any]` as its return type annotation but `Any` was never added to the `typing` import line. This raised `NameError: name 'Any' is not defined` at module load time, preventing the entire application from starting.
+
+### Changes
+
+1. `src/back/core/databricks/UnityCatalog.py` — added `Any` to the `from typing import …` statement (line 10).
+
+### Modified Files
+- `src/back/core/databricks/UnityCatalog.py`
+
+### Test Results
+- App starts cleanly. Full test suite unaffected (typing fix only).

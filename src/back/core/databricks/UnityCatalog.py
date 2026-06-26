@@ -7,7 +7,7 @@ volume management).
 
 import requests
 from databricks import sql
-from typing import Dict, List
+from typing import Any, Dict, List
 
 from back.core.logging import get_logger
 from back.core.errors import ValidationError
@@ -158,6 +158,67 @@ class UnityCatalog:
         except Exception as exc:
             logger.exception("Error listing volumes: %s", exc)
             return []
+
+    def check_schema_access(self, catalog: str, schema: str) -> Dict[str, Any]:
+        """Check whether *catalog*.*schema* exists and the caller has USE SCHEMA on it.
+
+        Uses the Unity Catalog REST API — no warehouse required.
+
+        Returns a dict with:
+        - ``exists`` (bool | None): True = found, False = not found / auth issue, None = unknown
+        - ``accessible`` (bool): True when the app has at least USE SCHEMA
+        - ``error`` (str | None): human-readable reason when accessible is False
+        """
+        if not self._auth.host or not self._auth.has_valid_auth():
+            return {"exists": None, "accessible": False, "error": "Not authenticated"}
+        try:
+            host = self._auth.host.rstrip("/")
+            headers = self._auth.get_auth_headers()
+            url = f"{host}/api/2.1/unity-catalog/schemas/{catalog}.{schema}"
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 404:
+                return {"exists": False, "accessible": False, "error": "Schema not found in Unity Catalog"}
+            if response.status_code == 403:
+                return {"exists": True, "accessible": False, "error": "Insufficient privileges — grant USE SCHEMA to the app service principal"}
+            response.raise_for_status()
+            return {"exists": True, "accessible": True, "error": None}
+        except requests.exceptions.RequestException as exc:
+            logger.warning("check_schema_access failed for %s.%s: %s", catalog, schema, exc)
+            return {"exists": None, "accessible": False, "error": str(exc)}
+
+    def check_volume_access(self, catalog: str, schema: str, volume: str) -> Dict[str, Any]:
+        """Check whether *catalog*.*schema*.*volume* exists and the caller can read it.
+
+        Uses the Unity Catalog REST API — no warehouse required.
+
+        Returns a dict with:
+        - ``exists`` (bool | None): True = found, False = not found, None = unknown
+        - ``accessible`` (bool): True when READ VOLUME is granted
+        - ``error`` (str | None): human-readable reason when accessible is False
+        - ``volume_type`` (str): MANAGED or EXTERNAL when found
+        """
+        if not self._auth.host or not self._auth.has_valid_auth():
+            return {"exists": None, "accessible": False, "error": "Not authenticated"}
+        try:
+            host = self._auth.host.rstrip("/")
+            headers = self._auth.get_auth_headers()
+            url = f"{host}/api/2.1/unity-catalog/volumes/{catalog}.{schema}.{volume}"
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 404:
+                return {"exists": False, "accessible": False, "error": "Volume not found — it may not have been created yet"}
+            if response.status_code == 403:
+                return {"exists": True, "accessible": False, "error": "Insufficient privileges — grant READ VOLUME (and WRITE VOLUME) to the app service principal"}
+            response.raise_for_status()
+            vol_info = response.json()
+            return {
+                "exists": True,
+                "accessible": True,
+                "error": None,
+                "volume_type": vol_info.get("volume_type", "MANAGED"),
+            }
+        except requests.exceptions.RequestException as exc:
+            logger.warning("check_volume_access failed for %s.%s.%s: %s", catalog, schema, volume, exc)
+            return {"exists": None, "accessible": False, "error": str(exc)}
 
     def create_volume(self, catalog: str, schema: str, volume_name: str) -> bool:
         """Create a managed volume via the Unity Catalog REST API."""

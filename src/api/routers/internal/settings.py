@@ -4,6 +4,7 @@ Internal API -- Settings / configuration JSON endpoints.
 Moved from app/frontend/settings/routes.py during the front/back split.
 """
 
+import asyncio
 import json
 
 from typing import Optional
@@ -203,6 +204,38 @@ async def get_registry(
 ):
     """Return current domain-registry configuration and initialization status."""
     return await run_blocking(config_service.build_registry_get_payload, session_mgr, settings)
+
+
+@router.get("/registry/check")
+async def check_registry_access(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Probe UC schema/Volume existence + Lakebase registry permissions.
+
+    Combines three independent checks:
+    - UC schema: exists + USE SCHEMA privilege (REST API, no warehouse needed)
+    - UC Volume: exists + READ VOLUME privilege (REST API, no warehouse needed)
+    - Lakebase: connection, schema USAGE/CREATE, and per-table CRUD privileges
+
+    Each check runs independently; a failure in one does not stop the others.
+    """
+    uc_result, lb_result = await asyncio.gather(
+        config_service.check_registry_access(session_mgr, settings),
+        config_service.check_lakebase_permissions(session_mgr, settings),
+        return_exceptions=True,
+    )
+    # Unwrap exceptions from gather — surface as error payloads
+    if isinstance(uc_result, Exception):
+        uc_result = {"success": False, "error": str(uc_result)}
+    if isinstance(lb_result, Exception):
+        lb_result = {"success": False, "error": str(lb_result)}
+
+    return {
+        "success": True,
+        "uc": uc_result,
+        "lakebase": lb_result,
+    }
 
 
 @router.post("/registry/initialize")
