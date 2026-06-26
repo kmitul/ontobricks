@@ -290,6 +290,36 @@ if $IS_LAKEBASE; then
     if _pg_dbs="$(databricks postgres list-databases "$EXPECTED_PG_BRANCH_PATH" -o json 2>/dev/null)"; then
         if printf '%s' "$_pg_dbs" | grep -q "$LAKEBASE_DATABASE_RESOURCE_SEGMENT"; then
             ok "Lakebase database '${LAKEBASE_DATABASE_RESOURCE_SEGMENT}' present on ${EXPECTED_PG_BRANCH_PATH}"
+            # Auto-derive the PostgreSQL datname from the resource segment when the
+            # user left LAKEBASE_REGISTRY_DATABASE at the default (app-name slug).
+            # This avoids "database does not exist" on first deploy.
+            _derived_datname="$(printf '%s' "$_pg_dbs" \
+                | python3 -c "
+import sys, json
+dbs = json.load(sys.stdin) if isinstance(json.load(open('/dev/stdin')), list) else json.load(sys.stdin).get('databases', [])
+" 2>/dev/null || true)"
+            _derived_datname="$(printf '%s' "$_pg_dbs" \
+                | python3 -c "
+import sys, json
+raw = sys.stdin.read()
+try:
+    data = json.loads(raw)
+    dbs = data if isinstance(data, list) else data.get('databases', [])
+    for db in dbs:
+        seg = db.get('name','').split('/')[-1]
+        if seg == '${LAKEBASE_DATABASE_RESOURCE_SEGMENT}':
+            print(db.get('status',{}).get('postgres_database',''))
+            break
+except Exception:
+    pass
+" 2>/dev/null || true)"
+            if [[ -n "$_derived_datname" && "$_derived_datname" != "$LAKEBASE_REGISTRY_DATABASE" ]]; then
+                warn "LAKEBASE_REGISTRY_DATABASE='${LAKEBASE_REGISTRY_DATABASE}' but the actual Postgres datname is '${_derived_datname}'."
+                warn "Update DEFAULT_LAKEBASE_REGISTRY_DATABASE in ${CONFIG_FILE} to '${_derived_datname}' to fix connection errors."
+                LAKEBASE_REGISTRY_DATABASE="$_derived_datname"
+                export APP_LAKEBASE_DATABASE="$_derived_datname"
+                info "Auto-corrected LAKEBASE_REGISTRY_DATABASE → '${_derived_datname}' for this deploy."
+            fi
         else
             CHECK_FAILED=$((CHECK_FAILED + 1))
             warn "Lakebase database '${LAKEBASE_DATABASE_RESOURCE_SEGMENT}' not found under ${EXPECTED_PG_BRANCH_PATH}. List ids with: databricks postgres list-databases \"${EXPECTED_PG_BRANCH_PATH}\" -o json"
