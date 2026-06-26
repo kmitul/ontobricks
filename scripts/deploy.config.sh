@@ -32,21 +32,6 @@
 # THE ONLY LINE YOU NEED TO CHANGE to create a new deployment.
 DEFAULT_APP_NAME="ontobricks-060"
 
-# Postgres database (datname) on the shared Lakebase instance.
-# Each app gets its own SCHEMA inside this database.
-# Must be an existing database — the script resolves the db-… resource
-# segment automatically from this name.
-DEFAULT_LAKEBASE_DATABASE="ontobricks_demo"
-
-# Postgres schema inside the Lakebase database (default: app-name slug).
-# Each instance should have its own schema for isolation.
-DEFAULT_LAKEBASE_SCHEMA="${DEFAULT_APP_NAME//-/_}"
-# Example — reuse existing schema: DEFAULT_LAKEBASE_SCHEMA="ontobricks_demo"
-
-# UC schema for the Volume registry (default: app-name slug).
-# Set explicitly only for a pre-existing or shared UC schema.
-DEFAULT_REGISTRY_SCHEMA="ontobricks_demo"
-
 # ── 0b. Workspace constants ──────────────────────────────────────────
 # Set once for your workspace. Shared across all instances deployed here.
 
@@ -55,11 +40,19 @@ DEFAULT_WAREHOUSE_ID="d2096aa075ad44a3"
 
 # Unity Catalog
 DEFAULT_REGISTRY_CATALOG="benoit_cayla"
+# UC schema for the Volume registry
+DEFAULT_REGISTRY_SCHEMA="ontobricks_demo"
 DEFAULT_REGISTRY_VOLUME="registry"
 
 # Lakebase Autoscaling project + branch
 DEFAULT_LAKEBASE_PROJECT="ontobricks-demo2"
 DEFAULT_LAKEBASE_BRANCH="production"
+# Postgres database (datname) on the shared Lakebase instance.
+# Each app gets its own SCHEMA inside this database.
+DEFAULT_LAKEBASE_DATABASE="ontobricks_demo"
+# Postgres schema inside the Lakebase database, Each instance should have its own schema for isolation.
+DEFAULT_LAKEBASE_SCHEMA="ontobricks_demo"
+# Example — reuse existing schema: DEFAULT_LAKEBASE_SCHEMA="ontobricks_demo"
 
 # ── 0c. Derived defaults (auto-computed — do NOT edit) ────────────────
 DEFAULT_MCP_APP_NAME="mcp-${DEFAULT_APP_NAME}"
