@@ -51,6 +51,12 @@ DEFAULT_APP_NAME="ontobricks-060"
 DEFAULT_LAKEBASE_REGISTRY_SCHEMA="${DEFAULT_APP_NAME//-/_}"
 # Example — shared/fixed Lakebase schema: DEFAULT_LAKEBASE_REGISTRY_SCHEMA="ontobricks_registry"
 
+# Postgres database (datname) on the Lakebase instance to connect to.
+# This is the EXISTING database on the shared Lakebase instance — NOT a
+# new one per app. Each app gets its own schema inside this database.
+# Must match the actual datname of the bound db-… resource.
+DEFAULT_LAKEBASE_REGISTRY_DATABASE="ontobricks_demo"
+
 # ── 0b. Workspace constants ──────────────────────────────────────────
 # Set once for your workspace. Shared across all instances deployed here.
 
@@ -76,9 +82,6 @@ DEFAULT_LAKEBASE_DATABASE_RESOURCE_SEGMENT="db-v6vc-8ibz5oeigo"
 # ── 0c. Derived defaults (auto-computed — do NOT edit) ────────────────
 # MCP companion app name: "mcp-<app-name>"
 DEFAULT_MCP_APP_NAME="mcp-${DEFAULT_APP_NAME}"
-
-# Lakebase datname mirrors the Lakebase schema name
-DEFAULT_LAKEBASE_REGISTRY_DATABASE="${DEFAULT_LAKEBASE_REGISTRY_SCHEMA}"
 
 # DAB resource keys (static — identifiers in databricks.yml, not app names)
 DEFAULT_APP_RESOURCE_KEY="ontobricks_dev_app"
