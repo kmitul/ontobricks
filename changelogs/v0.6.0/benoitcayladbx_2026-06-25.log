@@ -507,3 +507,41 @@ Added a search button (🔍) to the Ontology Designer toolbar. Clicking it opens
 - `src/front/templates/partials/ontology/_ontology_map.html`
 - `src/front/static/ontology/css/ontology-map.css`
 - `src/front/static/ontology/js/ontology-map.js`
+
+---
+
+## Code review fixes
+
+### Context
+Post-commit code review against `.cursorrules` / `src/.coding_rules.md`. All flagged issues resolved.
+
+### Changes
+
+1. **`src/front/static/ontology/js/ontology-map.js`**
+   - `alert()` → `showNotification(…, 'danger')` (violates `05-code-style §Frontend`)
+   - `switch` and `save-current` fetch responses now checked and throw on non-OK status (functional gap — navigation ran even when POSTs failed)
+   - `ontologyMapInitialized` dead state variable removed (never read, only written — 3 occurrences)
+   - Extracted `_resolveLinkEndpoint(endpoint)` module-level helper; replaced 4 duplicated inline `(link.x && link.x.name) ? link.x.name : link.x` patterns
+   - Search popup visibility now via CSS modifier class `map-search-popup--hidden` (not `style.display`) per `05-code-style §Frontend` (no inline styles)
+
+2. **`src/front/static/ontology/css/ontology-map.css`**
+   - Added `.map-search-popup--hidden { display: none; }` class
+
+3. **`src/front/templates/partials/ontology/_ontology_map.html`**
+   - Removed `style="display:none;"` inline style from `#mapSearchPopup`
+
+4. **`tests/units/domain/test_design_views.py`**
+   - Added `pytestmark = pytest.mark.unit` (required by `.coding_rules.md §10`)
+
+5. **`docs/features.md`**
+   - Documented all new Ontology Model (D3) features: neighbourhood highlight, relationship highlight, inheritance toggle, entity search, Create Business View
+
+### Test results
+2503 passed, 15 skipped
+
+### Modified Files
+- `src/front/static/ontology/js/ontology-map.js`
+- `src/front/static/ontology/css/ontology-map.css`
+- `src/front/templates/partials/ontology/_ontology_map.html`
+- `tests/units/domain/test_design_views.py`
+- `docs/features.md`

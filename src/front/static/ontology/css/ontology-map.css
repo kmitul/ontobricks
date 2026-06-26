@@ -445,6 +445,10 @@
     animation: mapContextFadeIn 0.15s ease;
 }
 
+.map-search-popup--hidden {
+    display: none;
+}
+
 .map-search-popup-header {
     display: flex;
     align-items: center;

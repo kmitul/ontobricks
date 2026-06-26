@@ -6,7 +6,6 @@
 // ONTOLOGY MAP - D3.js Force-Directed Graph
 // =====================================================
 
-let ontologyMapInitialized = false;
 let ontologyMapSvg = null;
 let ontologyMapSimulation = null;
 let ontologyMapZoom = null;
@@ -17,6 +16,16 @@ let ontologyMapLinks  = [];   // live reference to link data (set by initOntolog
 let ontologyMapNodes  = [];   // live reference to node data (set by initOntologyMap)
 let _mapHighlightNeighborhood = null;  // set by initOntologyMap, used by focusMapEntity
 let _mapClearHighlights       = null;  // set by initOntologyMap, used by focusMapEntity
+
+/**
+ * Resolve the name from a D3 link endpoint that may be either a plain string
+ * (before simulation) or a node object (after forceLink resolution).
+ * @param {string|Object} endpoint - link.source or link.target
+ * @returns {string}
+ */
+function _resolveLinkEndpoint(endpoint) {
+    return (endpoint && typeof endpoint === 'object') ? endpoint.name : endpoint;
+}
 
 /**
  * Show/hide loading overlay for ontology model
@@ -136,7 +145,6 @@ async function initOntologyMap() {
             </div>
         `;
         showOntologyMapLoading(false);
-        ontologyMapInitialized = true;
         return;
     }
 
@@ -888,8 +896,6 @@ async function initOntologyMap() {
     `;
     container.appendChild(legend);
 
-    ontologyMapInitialized = true;
-
     // Bind zoom controls
     document.getElementById('mapZoomIn')?.addEventListener('click', () => {
         svg.transition().duration(300).call(ontologyMapZoom.scaleBy, 1.3);
@@ -1008,18 +1014,18 @@ function initMapSearch(nodes) {
             opt.textContent = `${n.icon || '📦'} ${n.label || n.name}`;
             sel.appendChild(opt);
         });
-        popup.style.display = 'block';
+        popup.classList.remove('map-search-popup--hidden');
         setTimeout(() => sel.focus(), 50);
     }
 
     function closePopup() {
-        popup.style.display = 'none';
+        popup.classList.add('map-search-popup--hidden');
     }
 
     // Toggle on button click
     btn.onclick = (e) => {
         e.stopPropagation();
-        popup.style.display === 'none' ? openPopup() : closePopup();
+        popup.classList.contains('map-search-popup--hidden') ? openPopup() : closePopup();
     };
 
     if (close) close.onclick = closePopup;
@@ -1036,7 +1042,7 @@ function initMapSearch(nodes) {
 
     // Dismiss on outside click
     document.addEventListener('click', (e) => {
-        if (popup.style.display !== 'none' && !popup.contains(e.target) && e.target !== btn) {
+        if (!popup.classList.contains('map-search-popup--hidden') && !popup.contains(e.target) && e.target !== btn) {
             closePopup();
         }
     });
@@ -1083,8 +1089,8 @@ async function createBusinessViewFromEntity(entityData) {
         const inhLinks = [];    // {source, target}         – inheritance
 
         ontologyMapLinks.forEach(link => {
-            const srcName = (link.source && link.source.name) ? link.source.name : link.source;
-            const tgtName = (link.target && link.target.name) ? link.target.name : link.target;
+            const srcName = _resolveLinkEndpoint(link.source);
+            const tgtName = _resolveLinkEndpoint(link.target);
             if (srcName !== selectedName && tgtName !== selectedName) return;
             const neighbourName = srcName === selectedName ? tgtName : srcName;
             neighbourNames.add(neighbourName);
@@ -1177,8 +1183,8 @@ async function createBusinessViewFromEntity(entityData) {
         const hiddenRelationships = [];
         const hiddenInheritances = [];
         ontologyMapLinks.forEach(link => {
-            const s = (link.source && link.source.name) ? link.source.name : link.source;
-            const t = (link.target && link.target.name) ? link.target.name : link.target;
+            const s = _resolveLinkEndpoint(link.source);
+            const t = _resolveLinkEndpoint(link.target);
             if (!visibleNames.has(s) || !visibleNames.has(t)) {
                 if (link.type === 'inheritance') {
                     hiddenInheritances.push({ source: s, target: t });
@@ -1206,17 +1212,25 @@ async function createBusinessViewFromEntity(entityData) {
             throw new Error(err.detail || `Create view failed (${createResp.status})`);
         }
 
-        await fetch('/domain/design-views/switch', {
+        const switchResp = await fetch('/domain/design-views/switch', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name: viewName }),
         });
+        if (!switchResp.ok) {
+            const err = await switchResp.json().catch(() => ({}));
+            throw new Error(err.detail || `Switch view failed (${switchResp.status})`);
+        }
 
-        await fetch('/domain/design-views/save-current', {
+        const saveResp = await fetch('/domain/design-views/save-current', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(layoutData),
         });
+        if (!saveResp.ok) {
+            const err = await saveResp.json().catch(() => ({}));
+            throw new Error(err.detail || `Save view failed (${saveResp.status})`);
+        }
 
         // ── 6. Navigate to Business Views (design) section ─────────────────
         if (typeof SidebarNav !== 'undefined' && SidebarNav.switchTo) {
@@ -1235,7 +1249,9 @@ async function createBusinessViewFromEntity(entityData) {
         console.log(`[Map] Business view "${viewName}" created with ${entities.length} entities.`);
     } catch (err) {
         console.error('[Map] createBusinessViewFromEntity failed:', err);
-        alert(`Could not create Business View: ${err.message}`);
+        if (typeof showNotification === 'function') {
+            showNotification(`Could not create Business View: ${err.message}`, 'danger');
+        }
     }
 }
 

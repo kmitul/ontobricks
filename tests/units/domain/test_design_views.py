@@ -12,6 +12,8 @@ from unittest.mock import MagicMock
 from back.objects.domain import Domain
 from back.core.errors import ValidationError, ConflictError, NotFoundError
 
+pytestmark = pytest.mark.unit
+
 
 # ---------------------------------------------------------------------------
 # Helpers
