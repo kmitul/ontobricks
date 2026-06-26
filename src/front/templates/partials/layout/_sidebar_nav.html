@@ -11,7 +11,7 @@
 
 {% if sidebar_menu %}
 {% for group in sidebar_menu.groups %}
-<div class="sidebar-title{% if not loop.first %} mt-4{% endif %}">{{ group.title }}</div>
+{% if group.title %}<div class="sidebar-title{% if not loop.first %} mt-4{% endif %}">{{ group.title }}</div>{% endif %}
 <nav class="nav flex-column">
     {% for item in group['items'] %}
     {% set is_admin_only = item.admin_only|default(false) %}

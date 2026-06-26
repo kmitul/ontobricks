@@ -226,6 +226,15 @@ except Exception:
         db-*) : ;;
         *) warn "LAKEBASE_DATABASE_RESOURCE_SEGMENT='${LAKEBASE_DATABASE_RESOURCE_SEGMENT}' does not look like a 'db-…' id." ;;
     esac
+
+    # Patch the _dab_var_overrides entry now that the segment is known
+    # (the array was built before resolution, so the entry was empty).
+    for _i in "${!_dab_var_overrides[@]}"; do
+        if [[ "${_dab_var_overrides[$_i]}" == --var=lakebase_database_resource_segment=* ]]; then
+            _dab_var_overrides[$_i]="--var=lakebase_database_resource_segment=${LAKEBASE_DATABASE_RESOURCE_SEGMENT}"
+            break
+        fi
+    done
 fi
 ok "deploy.config values present"
 

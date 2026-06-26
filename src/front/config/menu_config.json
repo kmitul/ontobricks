@@ -126,7 +126,7 @@
             "groups": [
                 {
                     "id": "domain-main",
-                    "title": "Domain details",
+                    "title": "",
                     "icon": "bi-folder2-open",
                     "items": [
                         {
@@ -144,19 +144,19 @@
                             "requires": "domain_saved"
                         },
                         {
-                            "id": "validation",
-                            "label": "Cockpit",
-                            "icon": "bi-speedometer2",
-                            "default": false,
-                            "requires": "domain_saved"
-                        },
-                        {
                             "id": "review",
                             "label": "Publication",
                             "icon": "bi-patch-check",
                             "default": false,
                             "requires": "domain_saved"
-                        },
+                        }
+                    ]
+                },
+                {
+                    "id": "domain-metadata",
+                    "title": "Metadata",
+                    "icon": "bi-database",
+                    "items": [
                         {
                             "id": "metadata",
                             "label": "Data Sources",
@@ -200,16 +200,9 @@
                     "icon": "bi-gear",
                     "items": [
                         {
-                            "id": "sync",
-                            "label": "Build",
-                            "icon": "bi-arrow-repeat",
-                            "default": false,
-                            "requires": "domain_saved"
-                        },
-                        {
-                            "id": "runs",
-                            "label": "Runs",
-                            "icon": "bi-list-check",
+                            "id": "validation",
+                            "label": "Cockpit",
+                            "icon": "bi-speedometer2",
                             "default": false,
                             "requires": "domain_saved"
                         },
@@ -574,6 +567,27 @@
             "status_indicator": null,
             "navbar_actions": [],
             "groups": [
+                {
+                    "id": "digitaltwin-management",
+                    "title": "Management",
+                    "icon": "bi-gear",
+                    "items": [
+                        {
+                            "id": "sync",
+                            "label": "Build",
+                            "icon": "bi-arrow-repeat",
+                            "default": false,
+                            "requires": null
+                        },
+                        {
+                            "id": "runs",
+                            "label": "Runs",
+                            "icon": "bi-list-check",
+                            "default": false,
+                            "requires": null
+                        }
+                    ]
+                },
                 {
                     "id": "digitaltwin-insight",
                     "title": "Insight",

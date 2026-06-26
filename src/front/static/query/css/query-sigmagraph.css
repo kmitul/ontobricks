@@ -383,7 +383,12 @@
 }
 
 #sgContextMenu .ctx-item:hover {
-    background: #ffffff;
+    background: #e8f4fd;
+    color: #1a73e8;
+}
+
+#sgContextMenu .ctx-item:hover i {
+    color: #1a73e8;
 }
 
 #sgContextMenu .ctx-item i {
@@ -463,7 +468,12 @@
 }
 
 #sgNodeContextMenu .ctx-item:hover {
-    background: #ffffff;
+    background: #e8f4fd;
+    color: #1a73e8;
+}
+
+#sgNodeContextMenu .ctx-item:hover i {
+    color: #1a73e8;
 }
 
 #sgNodeContextMenu .ctx-item i {

@@ -384,7 +384,17 @@ class LakebaseFlatStore(LakebaseBase):
         view = self._readable_table_id(table_name)
         with self._cursor() as cur:
             _companion_ddl.ensure_synced(cur, self._schema, synced)
+            try:
+                self._ensure_legacy_columns(cur, synced)
+            except Exception as _col_err:
+                raise RuntimeError(
+                    f"Table '{synced}' exists but is owned by a different database role "
+                    f"— cannot add missing columns. "
+                    f"Fix: connect to Lakebase with a superuser and run: "
+                    f"DROP TABLE IF EXISTS \"{self._schema}\".\"{synced}\" CASCADE;"
+                ) from _col_err
             _companion_ddl.ensure_companion(cur, self._schema, companion)
+            self._ensure_legacy_columns(cur, companion)
             _companion_ddl.ensure_union_view(cur, view, synced, companion)
         logger.info(
             "Lakebase graph layout ready: %s.[%s | %s | view %s]",

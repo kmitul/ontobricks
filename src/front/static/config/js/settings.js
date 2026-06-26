@@ -760,12 +760,15 @@ document.addEventListener('DOMContentLoaded', function () {
     function prefillLakebaseConnectionFromConfig() {
         let o = {};
         try { o = JSON.parse(document.getElementById('graphEngineConfig')?.value || '{}'); } catch (_) {}
+        // Connection tab — all 4 cascading selects
         _ensureSelectedOption(document.getElementById('lakebaseProject'),    o.lakebase_project || '');
         _ensureSelectedOption(document.getElementById('lakebaseBranch'),     o.lakebase_branch  || '');
         _ensureSelectedOption(document.getElementById('lakebaseGraphDb'),    o.database         || '');
         _ensureSelectedOption(document.getElementById('lakebaseGraphSchema'), o.schema          || '');
         const schIn = document.getElementById('lakebaseGraphSchemaInput');
         if (schIn && o.schema) schIn.value = o.schema;
+        // Bulk loading tab — UC catalog (managed_synced mode)
+        _ensureSelectedOption(document.getElementById('lakebaseUcCatalog'),  o.sync_uc_catalog  || '');
     }
 
     function applyLakebaseFormFromConfigTextarea() {
@@ -916,6 +919,10 @@ document.addEventListener('DOMContentLoaded', function () {
             await loadLakebaseProjects();
             prefillLakebaseConnectionFromConfig();
             await loadLakebaseGraphHealth();
+            const syncModeEl = document.getElementById('lakebaseSyncMode');
+            if (syncModeEl && syncModeEl.value === 'managed_synced') {
+                await loadUcCatalogsForGraphEngine();
+            }
         }
     });
 

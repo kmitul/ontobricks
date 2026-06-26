@@ -135,3 +135,122 @@ FROM information_schema.tables
 WHERE table_schema = :'reg_schema'
   AND table_name IN ('domain_comments', 'domain_tasks')
 ORDER BY table_name;
+
+-- ============================================================================
+-- Part 2 — Graph schema migration (0.5 → 0.6)
+-- ----------------------------------------------------------------------------
+-- Adds the ``datatype`` and ``lang`` columns to all ``*_sync`` and ``*__app``
+-- graph triple-store tables that were created before those columns existed.
+--
+-- These tables live in the **graph schema** (default: ``ontobricks_graph``),
+-- NOT in the registry schema above.
+--
+-- Also drops stale ``*_sync`` tables that may have been left behind by an
+-- earlier run under a different role (Lakeflow or a previous session user).
+-- The DROP is unconditional so you need superuser or ownership.  Run as the
+-- Lakebase schema owner.
+--
+-- Idempotent: ``ADD COLUMN IF NOT EXISTS`` and ``DROP TABLE IF EXISTS`` are
+-- safe to re-run.
+--
+-- Usage:
+--   # default graph schema (ontobricks_graph):
+--   psql "$PGURL" -f scripts/upgrade_lakebase_0.5_To_0.6.sql
+--
+--   # custom graph schema:
+--   psql "$PGURL" -v graph_schema=my_graph_schema \
+--        -f scripts/upgrade_lakebase_0.5_To_0.6.sql
+-- ============================================================================
+
+\if :{?graph_schema}
+\else
+  \set graph_schema ontobricks_graph
+\endif
+
+\echo ''
+\echo 'Upgrading OntoBricks graph schema:' :graph_schema
+
+SET search_path TO :"graph_schema";
+
+BEGIN;
+
+-- 3. Backfill datatype + lang on every *_sync table that is missing them -----
+--    (tables created by the app before v0.6 only had subject/predicate/object)
+DO $$
+DECLARE
+    tbl text;
+BEGIN
+    FOR tbl IN
+        SELECT c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relkind = 'r'
+          AND c.relname LIKE '%_sync'
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE %I ADD COLUMN IF NOT EXISTS datatype TEXT', tbl);
+        EXECUTE format(
+            'ALTER TABLE %I ADD COLUMN IF NOT EXISTS lang    TEXT', tbl);
+        RAISE NOTICE 'Patched table: %', tbl;
+    END LOOP;
+END$$;
+
+-- 4. Same for *__app companion tables ----------------------------------------
+DO $$
+DECLARE
+    tbl text;
+BEGIN
+    FOR tbl IN
+        SELECT c.relname
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        WHERE n.nspname = current_schema()
+          AND c.relkind = 'r'
+          AND c.relname LIKE '%__app'
+    LOOP
+        EXECUTE format(
+            'ALTER TABLE %I ADD COLUMN IF NOT EXISTS datatype TEXT', tbl);
+        EXECUTE format(
+            'ALTER TABLE %I ADD COLUMN IF NOT EXISTS lang    TEXT', tbl);
+        RAISE NOTICE 'Patched companion table: %', tbl;
+    END LOOP;
+END$$;
+
+-- 5. Drop stale *_sync tables not owned by the current role ------------------
+--    Use this block when the previous owner was a Lakeflow service principal
+--    or a different session user. Requires superuser or explicit ownership.
+--    Review the table list below before running!
+--
+--    Uncomment and adjust as needed:
+-- DO $$
+-- DECLARE tbl text;
+-- BEGIN
+--     FOR tbl IN
+--         SELECT c.relname
+--         FROM pg_class c
+--         JOIN pg_namespace n ON n.oid = c.relnamespace
+--         WHERE n.nspname = current_schema()
+--           AND c.relkind = 'r'
+--           AND c.relname LIKE '%_sync'
+--           AND NOT pg_has_role(session_user, c.relowner, 'MEMBER')
+--     LOOP
+--         EXECUTE format('DROP TABLE IF EXISTS %I CASCADE', tbl);
+--         RAISE NOTICE 'Dropped stale table: %', tbl;
+--     END LOOP;
+-- END$$;
+
+COMMIT;
+
+\echo 'Done. Graph schema columns:'
+SELECT
+    c.relname                          AS table_name,
+    array_agg(a.attname ORDER BY a.attnum) AS columns
+FROM pg_class c
+JOIN pg_namespace n  ON n.oid = c.relnamespace
+JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+WHERE n.nspname = :'graph_schema'
+  AND c.relkind = 'r'
+  AND (c.relname LIKE '%_sync' OR c.relname LIKE '%__app')
+GROUP BY c.relname
+ORDER BY c.relname;

@@ -1326,12 +1326,31 @@ class SettingsService:
         session_mgr: SessionManager,
         settings: Settings,
     ) -> Dict[str, Any]:
-        """Return the engine-specific JSON configuration."""
+        """Return the engine-specific JSON configuration.
+
+        Empty ``lakebase_project``, ``lakebase_branch``, and ``database``
+        fields are overlaid with env-var fallbacks so the Connection tab
+        always reflects the current platform binding, even when the user
+        has not yet explicitly saved those fields through the UI.
+        """
+        import os as _os
+
         _, host, token, registry_cfg = SettingsService._resolve_context(
             session_mgr, settings
         )
         global_config_service.load(host, token, registry_cfg, force=True)
-        cfg = global_config_service.get_graph_engine_config(host, token, registry_cfg)
+        cfg = dict(global_config_service.get_graph_engine_config(host, token, registry_cfg))
+
+        _env_project = _os.environ.get("LAKEBASE_PROJECT", "")
+        _env_branch = _os.environ.get("LAKEBASE_BRANCH", "")
+        _env_db = _os.environ.get("PGDATABASE", "") or _os.environ.get("LAKEBASE_DATABASE", "")
+        if not cfg.get("lakebase_project") and _env_project:
+            cfg["lakebase_project"] = _env_project
+        if not cfg.get("lakebase_branch") and _env_branch:
+            cfg["lakebase_branch"] = _env_branch
+        if not cfg.get("database") and _env_db:
+            cfg["database"] = _env_db
+
         return {"success": True, "graph_engine_config": cfg}
 
     @staticmethod
