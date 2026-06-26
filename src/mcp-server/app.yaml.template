@@ -15,6 +15,7 @@
 command:
   - "uv"
   - "run"
+  - "--no-dev"
   - "mcp-ontobricks"
 
 env:
