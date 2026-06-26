@@ -827,6 +827,7 @@ class LakebaseRegistryStore(RegistryStore):
                 _chk("connect", "Connect to Lakebase", "error", str(exc))
             return {
                 "success": False,
+                "error": str(exc),
                 "database": self._effective_database,
                 "user": "?",
                 "schema": self._schema,

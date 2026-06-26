@@ -213,10 +213,25 @@
         if (!panel || !body) return;
 
         if (!lb || lb.success === false) {
+            var errMsg = (lb && lb.error)
+                ? lb.error
+                : (lb && lb.checks && lb.checks.length
+                    ? lb.checks.map(function(c){ return (c.label || c.id) + ': ' + (c.detail || c.status); }).join(' | ')
+                    : 'Lakebase check unavailable — is psycopg installed?');
             var errHtml = '<div class="alert alert-warning small py-2 mb-0"><i class="bi bi-exclamation-triangle me-1"></i>'
-                + _esc(lb && lb.error ? lb.error : 'Lakebase check unavailable — is psycopg installed?')
+                + _esc(errMsg)
                 + '</div>';
-            body.innerHTML = errHtml;
+            // If checks are available render them below the error banner so the
+            // user can see exactly which step failed without opening the logs.
+            if (lb && lb.checks && lb.checks.length) {
+                if (ctx) ctx.innerHTML = lb.database
+                    ? '<i class="bi bi-server me-1"></i>Database: <code>' + _esc(lb.database) + '</code>'
+                      + ' &nbsp;·&nbsp; <i class="bi bi-grid me-1"></i>Schema: <code>' + _esc(lb.schema || '—') + '</code>'
+                    : '';
+                body.innerHTML = errHtml + _buildChecksTable(lb.checks);
+            } else {
+                body.innerHTML = errHtml;
+            }
             if (summary) summary.innerHTML = '<span class="badge bg-secondary-subtle text-secondary border" style="font-size:0.65rem">N/A</span>';
             if (ctx) ctx.textContent = '';
             panel.style.display = '';
@@ -246,13 +261,15 @@
             }
         }
 
-        // Group checks: structural (connect/schema) vs tables
-        var structural = checks.filter(function(c){ return !c.id.startsWith('tbl_'); });
-        var tables     = checks.filter(function(c){ return c.id.startsWith('tbl_'); });
+        body.innerHTML = _buildChecksTable(checks);
+        panel.style.display = '';
+    }
 
+    function _buildChecksTable(checks) {
+        var structural = (checks || []).filter(function(c){ return !c.id.startsWith('tbl_'); });
+        var tables     = (checks || []).filter(function(c){ return c.id.startsWith('tbl_'); });
         var html = '';
 
-        // Structural checks
         html += '<div class="mb-2">';
         structural.forEach(function(c) {
             var badge = _LB_BADGE[c.status] || _LB_BADGE.missing;
@@ -266,7 +283,6 @@
         });
         html += '</div>';
 
-        // Table checks — collapsible
         if (tables.length > 0) {
             var tblErrCount = tables.filter(function(c){ return c.status === 'error'; }).length;
             var tblOkCount  = tables.filter(function(c){ return c.status === 'ok'; }).length;
@@ -299,9 +315,7 @@
             });
             html += '</tbody></table></div></div>';
         }
-
-        body.innerHTML = html;
-        panel.style.display = '';
+        return html;
     }
 
     // ── Main click handler ────────────────────────────────────────────
