@@ -64,3 +64,34 @@ described the edit gate in ways that implied the entire Build/sync surface
 
 ### Test results
 - `uv run pytest -q --tb=no` → 2998 passed, 58 pre-existing failures (unrelated to this change — same count with and without these edits), 17 skipped
+
+---
+
+## Docs: July 2026 Roadmap (Roadmap_2026-07.md)
+
+### Context
+v0.6.0 shipped several features but deferred five items to a future release
+(ontology iteration UX, mapping multi-select, mapping orphan detection,
+scheduled reasoning, temporal & recursive Datalog). The July roadmap
+captures the updated plan: those deferred items move to **v0.8.0**, whose
+theme shifts from Enterprise Hardening to **Unstructured Data & Workflow
+Completeness**. The previous v0.8.0 Enterprise Hardening scope moves to
+**v0.9.0**; v1.0.0 GA shifts to Q1 2027.
+
+### Changes
+
+1. `releases/Roadmap_2026-07.md` (new file)
+   - Executive summary updated with four strategic axes (Neo4j, unstructured data, workflow completeness, enterprise hardening).
+   - v0.6.0 section reflects actual deliveries and marks five items as `↪ Moved to v0.8.0`.
+   - v0.7.0 Neo4j Connector unchanged (August 2026).
+   - v0.8.0 rewritten: two pillars — unstructured data ingestion pipeline (7 capabilities) + deferred workflow items from v0.6.0 (5 capabilities); target October 2026.
+   - v0.9.0 new section: former v0.8.0 Enterprise Hardening + triple store migration UX; target Q4 2026.
+   - v1.0.0 GA shifted to Q1 2027.
+   - Feature matrix updated to reflect all version changes.
+   - Open Questions updated with two new unstructured-data questions.
+
+### Modified files
+- `releases/Roadmap_2026-07.md` (created)
+
+### Test results
+- No code changes — documentation only.
