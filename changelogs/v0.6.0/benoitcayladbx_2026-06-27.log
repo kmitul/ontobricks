@@ -95,3 +95,66 @@ Completeness**. The previous v0.8.0 Enterprise Hardening scope moves to
 
 ### Test results
 - No code changes — documentation only.
+
+---
+
+## Security: Batch dependency security-patch (24 advisories)
+
+### Context
+GitHub Dependabot raised 24 security alerts (High/Moderate/Low) across the
+main `uv.lock` and `src/mcp-server/uv.lock` lock files. All affected packages
+had patched versions available. This change bumps version floors in
+`pyproject.toml` (direct deps + `[tool.uv] constraint-dependencies`) and
+regenerates the lock file so every resolved package is on a patched release.
+
+One advisory (NLTK path traversal, GHSA-p4gq-832x-fm9v / CVE-2026-54293) is
+tracked as a TODO comment in the pitfalls optional dep because the fix ships in
+`nltk>=3.10.0` which is only available as `3.10.0-rc1` at this time.
+Mitigation: never pass user-controlled input to `nltk.data.load()`.
+
+### Changes
+
+1. `pyproject.toml`
+   - `pydantic-settings`: `>=2.1.0` → `>=2.14.2`
+     (GHSA-4xgf-cpjx-pc3j — NestedSecretsSettingsSource symlink traversal)
+   - `python-multipart`: `>=0.0.27` → `>=0.0.30`
+     (GHSA-5rvq-cxj2-64vf / CVE-2026-53539 — quadratic ';'-sep parsing DoS;
+      semicolon parameter smuggling; RFC 2231 Content-Disposition smuggling;
+      negative Content-Length unbounded memory buffer)
+   - `starlette`: `>=1.0.1` → `>=1.3.1`
+     (GHSA-82w8-qh3p-5jfq / CVE-2026-54283 — request.form() limits ignored for
+      urlencoded bodies; GHSA-86qp-5c8j-p5mr — BadHost hostname poisoning)
+   - `nltk` (pitfalls extra): `>=3.8.0` → `>=3.9.4` with TODO comment
+     (GHSA-p4gq-832x-fm9v / CVE-2026-54293 — URL-encoded path traversal,
+      fix pending stable release of nltk 3.10.0)
+   - Constraint `aiohttp`: `>=3.14.0` → `>=3.14.1`
+     (GHSA-xcgm-r5h9-7989 / CVE-2026-54274 — incomplete WS frame mem bypass;
+      GHSA-63hw-fmq6-xxg2 / CVE-2026-54277 — C parser max_line_size bypass;
+      GHSA-4fvr-rgm6-gqmc / CVE-2026-54273 — pipelined requests queue DoS;
+      + 5 more Low/Moderate aiohttp issues all fixed in 3.14.1)
+   - New constraint `pyjwt>=2.13.0`
+     (GHSA-xgmm-8j9v-c9wx / CVE-2026-48526 — JWK accepted as HMAC secret;
+      GHSA-jq35-7prp-9v3f — alg allow-list bypass via PyJWK/PyJWKClient;
+      + SSRF via scheme allowlist; unbounded Base64URL DoS; JWKS kid DoS)
+   - New constraint `msgpack>=1.2.1`
+     (GHSA-6v7p-g79w-8964 — Unpacker out-of-bounds read / crash on reuse)
+   - New constraint `cryptography>=48.0.1`
+     (GHSA-537c-gmf6-5ccf / CVE-2026-34180 — vulnerable OpenSSL in PyPI wheels)
+
+2. `uv.lock` (regenerated)
+   - aiohttp           3.14.0 → 3.14.1
+   - cryptography      46.0.7 → 48.0.1
+   - mlflow* trio      3.11.1 → 3.14.0  (pulled in by dep-graph updates)
+   - msgpack           1.1.2  → 1.2.1
+   - pydantic-settings 2.12.0 → 2.14.2
+   - pyjwt             2.12.1 → 2.13.0
+   - python-multipart  0.0.27 → 0.0.32
+   - starlette         1.2.1  → 1.3.1
+
+### Modified files
+- `pyproject.toml`
+- `uv.lock`
+
+### Test results
+- 2798 passed, 17 skipped, 0 failures
+  (pytest `-m "not e2e and not eval and not external and not spark and not db"`)
