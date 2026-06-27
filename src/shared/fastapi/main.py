@@ -207,8 +207,12 @@ _STATUS_GATE_EDIT_PREFIXES = (
 )
 
 # Specific mutating endpoints outside the editing prefixes (domain
-# metadata/layout saves, document uploads, Digital-Twin build/sync, and
+# metadata/layout saves, document uploads, Digital-Twin build/load, and
 # reasoning materialisation) that persist into the loaded version.
+# NOTE: only the actual write operations under /dtwin/sync/ are listed
+# here (start, load). Read-only POSTs such as /dtwin/sync/filter must
+# remain accessible on PUBLISHED/IN-REVIEW versions so the Explorer
+# stays fully queryable regardless of domain status.
 _STATUS_GATE_EDIT_PATHS = (
     "/domain/save",
     "/domain/info",
@@ -223,7 +227,8 @@ _STATUS_GATE_EDIT_PATHS = (
     "/domain/design-views/delete",
     "/domain/metadata/",
     "/domain/documents/",
-    "/dtwin/sync/",
+    "/dtwin/sync/start",
+    "/dtwin/sync/load",
     "/dtwin/reasoning/materialize",
 )
 

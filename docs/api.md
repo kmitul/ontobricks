@@ -1874,6 +1874,94 @@ POST /dtwin/execute
 - `sansa` - Execute via Spark SQL on Databricks (translates SPARQL to SQL)
 - `local` - Execute locally using RDFLib (for small datasets or testing)
 
+#### Build Knowledge Graph
+
+> **Status gate.** `POST /dtwin/sync/start` and `POST /dtwin/sync/load` are
+> blocked when the loaded domain version is `IN-REVIEW` or `PUBLISHED`. All
+> read-only sync operations (filter, stats, status, etc.) remain accessible
+> regardless of lifecycle status.
+
+```http
+POST /dtwin/sync/start
+```
+
+Start an async Knowledge Graph build (CREATE VIEW then populate the graph store).
+Always performs a full rebuild. Returns a `task_id` for progress polling via
+`GET /tasks/{task_id}`.
+
+**Response:**
+```json
+{
+  "success": true,
+  "task_id": "abc123",
+  "message": "Sync started"
+}
+```
+
+---
+
+#### Load Knowledge Graph Triples
+
+```http
+POST /dtwin/sync/load
+```
+
+Load all triples from the graph database and return them as query results.
+
+**Request Body (optional):**
+```json
+{ "include_inferred": true }
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "results": [{"subject": "...", "predicate": "...", "object": "..."}],
+  "columns": ["subject", "predicate", "object"],
+  "count": 1500
+}
+```
+
+---
+
+#### Filter / Explorer Query
+
+```http
+POST /dtwin/sync/filter
+```
+
+Two-phase endpoint used by the Graph Explorer. Accessible on any lifecycle status.
+
+**Phase `"preview"` (default)** — seed search, returns a flat list of matching
+entities with their type and label so the user can pick which ones to explore.
+
+**Phase `"expand"`** — accepts `selected_uris` and runs depth BFS + triple fetch.
+
+**Request Body:**
+```json
+{
+  "phase": "preview",
+  "entity_type": "Person",
+  "field": "any",
+  "match_type": "contains",
+  "value": "John",
+  "include_inferred": true
+}
+```
+
+**Response (preview):**
+```json
+{
+  "success": true,
+  "entities": [
+    {"uri": "https://example.org/Person/P001", "type": "Person", "label": "John Doe"}
+  ]
+}
+```
+
+---
+
 #### Get Triple Store Status
 
 ```http

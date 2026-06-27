@@ -1,0 +1,66 @@
+## Fix: Knowledge Graph Explorer blocked on PUBLISHED/IN-REVIEW domains
+
+### Context
+The Explorer's primary query endpoint (`POST /dtwin/sync/filter`) was being
+blocked by `PermissionMiddleware` when a domain was in PUBLISHED or IN-REVIEW
+status. The middleware listed the entire `/dtwin/sync/` path prefix in
+`_STATUS_GATE_EDIT_PATHS`, which treated all POSTs under that prefix as
+mutating operations — including the read-only filter queries powering the
+Explorer graph search and expand phases.
+
+The CSS layer (`permissions.css`) already correctly excluded `data-page="digitaltwin"`
+from read-only form-disable rules, so the UI remained interactive, but every
+Explorer query silently returned 403 server-side.
+
+### Changes
+
+1. `src/shared/fastapi/main.py`
+   - Replaced the broad `/dtwin/sync/` prefix in `_STATUS_GATE_EDIT_PATHS`
+     with the two specific mutating endpoints: `/dtwin/sync/start` and
+     `/dtwin/sync/load`.
+   - Added an explanatory comment clarifying that read-only POSTs such as
+     `/dtwin/sync/filter` must stay accessible on non-DRAFT versions.
+
+### Modified files
+- `src/shared/fastapi/main.py`
+
+### Test results
+- 2704 unit tests passed, 57 skipped
+- 1 pre-existing failure (pyshacl not installed locally, unrelated)
+- e2e and property test suites skipped (environment dependencies missing)
+
+---
+
+## Docs: Update lifecycle/status-gate documentation
+
+### Context
+The middleware fix that narrowed `_STATUS_GATE_EDIT_PATHS` from the broad
+`/dtwin/sync/` prefix to explicit `/dtwin/sync/start` and `/dtwin/sync/load`
+entries was not reflected in the user-facing documentation. Three files
+described the edit gate in ways that implied the entire Build/sync surface
+(including Explorer queries) was locked on non-DRAFT versions.
+
+### Changes
+
+1. `docs/user-guide.md`
+   — Lifecycle section: clarified that only Build (`/dtwin/sync/start`) and
+     Load (`/dtwin/sync/load`) are blocked when not DRAFT; read-only KG
+     operations (Explorer filter, stats, status) remain accessible.
+
+2. `docs/architecture.md`
+   — "Version lifecycle & API access" callout: expanded the one-liner about
+     the DRAFT edit gate to enumerate what is blocked vs. what stays open.
+
+3. `docs/api.md`
+   — Knowledge Graph Endpoints: replaced the single `GET /dtwin/sync/status`
+     stub with four documented endpoints (`POST /dtwin/sync/start`,
+     `POST /dtwin/sync/load`, `POST /dtwin/sync/filter`,
+     `GET /dtwin/sync/status`) plus a status-gate warning box on start/load.
+
+### Modified files
+- `docs/user-guide.md`
+- `docs/architecture.md`
+- `docs/api.md`
+
+### Test results
+- `uv run pytest -q --tb=no` → 2998 passed, 58 pre-existing failures (unrelated to this change — same count with and without these edits), 17 skipped

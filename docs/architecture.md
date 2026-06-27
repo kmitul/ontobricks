@@ -1322,8 +1322,12 @@ OntoBricks provides a stateless REST API at `/api/v1/` for external applications
 > `back.objects.registry.version_lifecycle`). The external REST API, GraphQL
 > (`/api/v1/graphql`) and MCP only serve **PUBLISHED** versions and default to
 > the **numeric-latest PUBLISHED** version. Editing a version is only allowed
-> while it is `DRAFT` (gated in `PermissionMiddleware`). The lifecycle replaces
-> the old per-version "Active"/`mcp_enabled` toggle.
+> while it is `DRAFT` (gated in `PermissionMiddleware`): the gate blocks
+> ontology/mapping edits, metadata/document saves, and KG Build/Load
+> (`/dtwin/sync/start`, `/dtwin/sync/load`). Read-only Knowledge Graph
+> operations — Explorer filter, stats, status — remain accessible on IN-REVIEW
+> and PUBLISHED versions. The lifecycle replaces the old per-version
+> "Active"/`mcp_enabled` toggle.
 
 ### Available Endpoints
 
