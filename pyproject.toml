@@ -41,7 +41,9 @@ dependencies = [
     # (CVE-2026-47707 / GHSA-fr49-mhgj-crfc) and circular-fragment DOS in
     # QueryDepthLimiter — both DOS via resource exhaustion.
     "strawberry-graphql[fastapi]>=0.315.7",
-    "mlflow>=3.11.1",
+    # mlflow<3.14.0: pypi-proxy.dev.databricks.com does not yet carry 3.14.x wheels.
+    # Remove the upper-bound once the proxy is updated.
+    "mlflow>=3.11.1,<3.14.0",
     "apscheduler>=3.10,<4",
     "owlrl>=7.0.0",
     "pyshacl>=0.26.0",
