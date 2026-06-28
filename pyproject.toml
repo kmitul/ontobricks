@@ -41,7 +41,11 @@ dependencies = [
     # (CVE-2026-47707 / GHSA-fr49-mhgj-crfc) and circular-fragment DOS in
     # QueryDepthLimiter — both DOS via resource exhaustion.
     "strawberry-graphql[fastapi]>=0.315.7",
-    "mlflow>=3.11.1",
+    # mlflow pinned to the last runtime-proven series (3.11.x, commit a649625). The
+    # 3.13.0 bump was an unvalidated transitive side-effect of the security sprint and
+    # was never exercised in the Apps container. Remove the <3.12 cap once the runtime
+    # crash is root-caused from logs. No mlflow security advisory is in scope here.
+    "mlflow>=3.11.1,<3.12.0",
     "apscheduler>=3.10,<4",
     "owlrl>=7.0.0",
     "pyshacl>=0.26.0",
@@ -125,23 +129,28 @@ constraint-dependencies = [
     # aiohttp 3.14.0 fixes two issues (pulled in transitively by mlflow):
     #   GHSA-jg22-mg44-37j8 (CVE-2026-34993)  CookieJar.load() pickle deserialization RCE
     #   GHSA-hg6j-4rv6-33pg (CVE-2026-47265)  per-request cookies leaked on cross-origin redirect
-    # aiohttp 3.14.1 fixes five additional issues:
-    #   GHSA-xcgm-r5h9-7989 (CVE-2026-54274)  incomplete WebSocket frame payloads bypass mem limits
-    #   GHSA-63hw-fmq6-xxg2 (CVE-2026-54277)  C HTTP parser bypasses max_line_size for frag lines
-    #   GHSA-4fvr-rgm6-gqmc (CVE-2026-54273)  HTTP/1 pipelined requests queue without limit
-    #   GHSA-…               + 5 more Low/Moderate aiohttp issues fixed in 3.14.1
-    "aiohttp>=3.14.1",
     # pyjwt>=2.13.0 fixes five issues (pulled in transitively):
     #   GHSA-xgmm-8j9v-c9wx (CVE-2026-48526)  public-key JWK accepted as HMAC secret → token forge
     #   GHSA-jq35-7prp-9v3f                   algorithm allow-list bypass with PyJWK/PyJWKClient
     #   GHSA-…                                 + SSRF, Base64URL DoS, JWKS kid DoS
+    # Pure-Python — safe to upgrade (exceptions are catchable, no native crash risk).
     "pyjwt>=2.13.0",
-    # msgpack>=1.2.1: out-of-bounds read / crash on Unpacker reuse after a caught error
-    # (GHSA-6v7p-g79w-8964) — DoS when Unpacker is reused on untrusted streaming input.
-    "msgpack>=1.2.1",
-    # cryptography>=48.0.1: statically linked OpenSSL in wheels was vulnerable to
-    # CVE-2026-34180 (GHSA-537c-gmf6-5ccf) — affects pre-built PyPI wheels only.
-    "cryptography>=48.0.1",
+    # ── Native C-extension wheels: reverted to last proven-good versions ──────────
+    # The deployed app reaches RUNNING then hard-CRASHES ~4min after startup. Since
+    # run.py only try/excepts create_app() and request/scheduler exceptions are caught,
+    # a process-level CRASH points to a native fault. These three are the only
+    # newly-bumped native wheels; the app performs crypto/OAuth (Lakebase token mint,
+    # SDK calls) minutes after boot, matching the crash timing. Pinned back to the
+    # versions proven to run in the Apps Linux container (last good = commit a649625).
+    # TODO: bump back to the patched versions below once the container logs confirm the
+    # root cause (logs are OAuth-gated; see deploy notes).
+    #   aiohttp 3.14.1      — GHSA-xcgm-r5h9-7989/63hw-fmq6-xxg2/4fvr-rgm6-gqmc (8 DoS)
+    #                         3.14.0 still retains the CookieJar RCE + cross-origin fixes.
+    #   msgpack 1.2.1       — GHSA-6v7p-g79w-8964 (Unpacker OOB read on reuse)
+    #   cryptography 48.0.1 — GHSA-537c-gmf6-5ccf / CVE-2026-34180 (OpenSSL-in-wheels)
+    "aiohttp>=3.14.0,<3.14.1",
+    "msgpack>=1.1.2,<1.2.0",
+    "cryptography>=46.0.7,<47.0.0",
 ]
 
 [tool.pytest.ini_options]
