@@ -184,3 +184,27 @@ URL back to the proxy (my `UV_INDEX_URL` points there), re-introducing the trap.
 **Test result:** `uv run --frozen pytest …` → 2787 passed, 28 skipped, 0 failed.
 Verified `uv run --frozen` imports all security packages and leaves the lock at
 0 proxy URLs (3653 files.pythonhosted.org + 333 pypi.org/simple).
+
+---
+
+## Fix: MCP server pydantic-settings advisory (#60/#61) + same proxy/frozen treatment
+
+**Context:** The MCP server pulled `pydantic-settings` transitively at 2.14.1,
+leaving Dependabot #60/#61 (GHSA-4xgf-cpjx-pc3j — NestedSecretsSettingsSource
+symlink traversal) unpatched in `src/mcp-server/uv.lock`. The MCP app was also
+crashing on the same proxy cold-cache (`Failed to download aiofile==3.11.1` /
+`exceptiongroup==1.3.1` → operation timed out).
+
+**Changes:**
+1. `src/mcp-server/pyproject.toml` — Added `[tool.uv] constraint-dependencies`
+   pinning `pydantic-settings>=2.14.2` (transitive via fastmcp/databricks-sdk).
+2. `src/mcp-server/uv.lock` — Re-locked (pydantic-settings 2.14.1 → 2.14.2) and
+   rewrote all 1143 proxy URLs to files.pythonhosted.org / pypi.org.
+
+**Modified files:**
+- `src/mcp-server/pyproject.toml`
+- `src/mcp-server/uv.lock`
+
+**Test result:** `uv run --frozen mcp-ontobricks --help` → exit 0; lock at 0 proxy
+URLs (1045 files.pythonhosted.org + 98 pypi.org/simple). Both apps RUNNING after
+redeploy with clean startup logs (Uvicorn running, no download timeouts).
