@@ -1,0 +1,186 @@
+## Fix: Display real Volume path in Documents section
+
+**Context:** The Volume path banner in the Documents panel was showing an incorrect path — using dot notation (`catalog.schema.volume`) and omitting the version segment. The actual storage path follows the pattern `/Volumes/{catalog}/{schema}/{volume}/domains/{folder}/V{version}/documents`.
+
+**Changes:**
+1. `src/front/static/domain/js/domain-documents.js` — Fixed `loadVolumeLocation()` to build the path as `/Volumes/{catalog}/{schema}/{volume}/domains/{folder}/V{version}/documents`, using the `version` field already present in the `/domain/version-status` response.
+
+**Modified files:**
+- `src/front/static/domain/js/domain-documents.js`
+
+**Test result:** N/A (frontend display fix, no unit tests affected)
+
+---
+
+## Fix: Stale sidebar menu references in documentation (GitHub issue #94)
+
+**Context:** Issue #94 reported that users following the documentation could not find menu items described in the docs. The root cause was that several Ontology sidebar labels had been renamed in `menu_config.json` without updating the documentation, and the "Constraints" panel was removed from the UI entirely but its documentation remained.
+
+**Changes:**
+1. `docs/get-started.md` — Updated "Ontology Sidebar Navigation" table to match actual menu labels; fixed "Design" → "Business Views", "Wizard" → "Generate", "OWL Content" → "OWL"; removed "Constraints" row; added missing entries (Groups, Business Views, Cohorts, Pitfalls); updated step 2 wording from "Design" to "Business Views" and "OWL Content" to "OWL".
+2. `docs/user-guide.md` — Removed the "Property Constraints" section that referenced the no-longer-existing "Constraints" sidebar panel; updated "Click **Design**" → "Click **Business Views**"; "Click **Wizard**" → "Click **Generate**"; "Click **OWL Content**" → "Click **OWL**"; "open **Wizard**" → "open **Generate**".
+3. `docs/images/ui-layout.svg` — Updated three sidebar labels in the UI diagram: "Constraints" → "Business Rules", "Design" → "Business Views", "OWL Content" → "OWL".
+
+**Modified files:**
+- `docs/get-started.md`
+- `docs/user-guide.md`
+- `docs/images/ui-layout.svg`
+
+**Test result:** docs-only change; no test impact
+
+---
+
+## Fix: Full documentation accuracy audit (all docs/*.md)
+
+**Context:** Comprehensive review of all online documentation for accuracy and relevance against the live app state (menu_config.json, route handlers, MCP server tool definitions). Found an additional set of stale sidebar label references, a removed KG section ("Triples"), MCP tool name mismatches, and a navigation step error in examples.md.
+
+**Changes:**
+1. `docs/user-guide.md` — Fixed KG sidebar labels: "Status" → "Build", "Quality" → "Data Quality", "Reasoning" → "Inference", "Graph Viewer" → "Explorer"; removed entire "Triples" sidebar section (no longer exists); updated workflow summary table (steps 6 & 7); fixed step instructions referencing stale names.
+2. `docs/get-started.md` — Fixed Step 6 (Explore Your Data): removed "Triples tab", corrected "Graph Viewer" → "Explorer", "Quality" → "Data Quality", "Reasoning" → "Inference"; updated Knowledge Graph Build instruction to use "Build" sidebar.
+3. `docs/features.md` — Fixed MCP tool names: `list_projects` → `list_domains`, `select_project` → `select_domain`; fixed "Ontology → Model" → "Ontology → Designer" for D3 graph feature.
+4. `docs/examples.md` — Fixed "Navigate to Configuration" → "Navigate to Settings".
+
+**Modified files:**
+- `docs/user-guide.md`
+- `docs/get-started.md`
+- `docs/features.md`
+- `docs/examples.md`
+
+**Test result:** docs-only changes; no test impact. Sphinx HTML rebuild needed separately.
+
+---
+
+## Fix: Add Data Source — SP permission check and warning (GitHub issue #91)
+
+Context: When the app service principal has USE CATALOG + USE SCHEMA but lacks
+SELECT on source tables, SHOW TABLES silently returns an empty list, misleading
+the user into thinking the schema contains no tables. Added two new probes that
+detect missing READ TABLES (via information_schema) and missing SELECT (via
+SELECT … LIMIT 0) and surface actionable warnings in the UI.
+
+Changes:
+
+1. src/back/core/databricks/UnityCatalog.py
+   Added probe_schema_has_tables() — queries information_schema.tables (requires
+   only USE SCHEMA) to detect hidden tables when SHOW TABLES returns empty.
+2. src/back/core/databricks/UnityCatalog.py
+   Added check_table_select_permission() — runs SELECT … LIMIT 0 on the first
+   available table to confirm the SP can read data (not just metadata).
+3. src/back/core/databricks/DatabricksClient.py
+   Exposed probe_schema_has_tables() and check_table_select_permission() as
+   facade methods on DatabricksClient.
+4. src/back/objects/domain/Domain.py
+   list_schema_tables_result() now calls both probes and returns a `permissions`
+   dict with can_list_tables, can_select, hidden_table_count, and
+   permission_warning fields.
+5. src/front/static/domain/js/domain-metadata.js
+   loadMetadataFromUC() surfaces permission_warning via showNotification when
+   tables are empty (hard error) or SELECT is denied (soft warning).
+   showTableSelectionModal() now accepts a perms argument and renders a
+   per-permission badge banner (List tables: OK/denied, SELECT data: OK/denied).
+6. src/front/templates/partials/domain/_domain_metadata.html
+   Added #tableSelectionPermBanner alert div above the table list inside the
+   Select Tables modal.
+
+Modified files:
+- src/back/core/databricks/UnityCatalog.py
+- src/back/core/databricks/DatabricksClient.py
+- src/back/objects/domain/Domain.py
+- src/front/static/domain/js/domain-metadata.js
+- src/front/templates/partials/domain/_domain_metadata.html
+
+Tests: uv run pytest -q … -k "unity_catalog or metadata or permission" → 342 passed, 0 failed in 4.67s
+
+---
+
+## Feature: Per-table SELECT permission column in Data Sources grid
+
+Context: The schema-level SELECT probe added for issue #91 only tells the user
+whether the service principal can read the *first* table of a schema during
+import. Once tables are loaded, the Data Sources grid gave no per-table signal
+of readability. Added a "Select" column to the loaded-tables grid showing, per
+table, whether the app service principal can SELECT it — reusing the existing
+SELECT … LIMIT 0 probe. Computed once at load/refresh time and persisted with
+the table metadata.
+
+Changes:
+
+1. src/back/core/databricks/MetadataService.py
+   _fetch_tables_metadata() now calls UnityCatalog.check_table_select_permission()
+   per table and stores `can_select` (bool) and `select_error` (str|None) on
+   each table dict; the error branch defaults can_select to False.
+2. src/front/templates/partials/domain/_domain_metadata.html
+   Added a "Select" <th> (dm-th-select-perm) between Cols and Description in the
+   #metadataTablesTable header.
+3. src/front/static/domain/js/domain-metadata.js
+   displayMetadataPreview() renders a per-row badge via new renderSelectPermCell()
+   helper: green check (can SELECT), red cross with the error as tooltip (denied),
+   grey dash (unknown — metadata loaded before this field existed). Empty-state
+   colspan bumped 5 → 6.
+4. src/front/static/domain/css/domain-metadata.css
+   Added .dm-th-select-perm (7%, centered) and rebalanced .dm-th-desc 51% → 44%.
+
+Modified files:
+- src/back/core/databricks/MetadataService.py
+- src/front/templates/partials/domain/_domain_metadata.html
+- src/front/static/domain/js/domain-metadata.js
+- src/front/static/domain/css/domain-metadata.css
+
+Tests: uv run pytest -q -k "metadata or unity_catalog or permission or select" →
+362 passed, 1 failed (pre-existing MCP async event-loop smoke test, unrelated).
+Full suite: 2987 passed, 58 failed — all failures pre-existing async event-loop
+RuntimeErrors in unrelated api endpoint tests (review / version-status /
+current-user / comments), none touched by this change.
+
+---
+
+## Fix: Deployed app crash on v0.6.0 security bumps — pin lock to public CDN + `uv run --frozen`
+
+**Context:** After landing the 24-advisory security sprint, the deployed app
+reported "App started successfully" then immediately CRASHED. The container logs
+(retrieved via `databricks apps logs ontobricks-060`) showed the true cause was
+never native code or a runtime fault — it was a dependency *download* failure at
+app start:
+
+```
+× Failed to download `python-multipart==0.0.32`
+ ├─▶ Failed to fetch: https://pypi-proxy.dev.databricks.com/packages/.../python_multipart-0.0.32-py3-none-any.whl
+ ├─▶ client error (Connect) ╰─▶ operation timed out
+```
+
+Root cause: the Databricks Apps base image defaults uv's index to the internal
+`pypi-proxy.dev.databricks.com`. That proxy **cold-caches** — it had not yet
+mirrored the freshly-published security wheels (python-multipart 0.0.32, etc.),
+so the container's cold fetch through the proxy timed out and the process exited
+before serving. The last-good deploy (a649625) worked only because every wheel
+it needed was already warm in the proxy cache; the security bump introduced new
+versions that were not. Each `uv lock` / `uv run` run locally rewrote every lock
+URL back to the proxy (my `UV_INDEX_URL` points there), re-introducing the trap.
+
+**Changes:**
+1. `uv.lock` — Restored the full security version set (aiohttp 3.14.1,
+   cryptography 48.0.1, msgpack 1.2.1, pyjwt 2.13.0, python-multipart 0.0.32,
+   starlette 1.3.1, pydantic-settings 2.14.2, mlflow 3.14.0) and rewrote all
+   3986 `pypi-proxy.dev.databricks.com` URLs to `files.pythonhosted.org`
+   (wheels/sdists) and `pypi.org/simple` (registry) — the public CDN is always
+   warm and reachable from the App container (same approach as commit cc84c98).
+2. `pyproject.toml` — Removed the proxy-driven version caps and the `mlflow<3.12`
+   cap added during the (incorrect) native-crash hypothesis; the native reverts
+   were chasing a phantom, since the failure was a download timeout, not a fault.
+3. `app.yaml.template` / `app.yaml` / `src/mcp-server/app.yaml` — Added
+   `--frozen` to the `uv run` startup command. This makes uv use `uv.lock`
+   verbatim and NEVER re-resolve in the container, so it cannot rewrite the
+   pinned pythonhosted URLs back to the flaky proxy. Without `--frozen` the
+   container's proxy-defaulted index would re-lock on startup and re-create the
+   cold-cache timeout.
+
+**Modified files:**
+- `pyproject.toml`
+- `uv.lock`
+- `app.yaml.template`
+- `app.yaml` (rendered)
+- `src/mcp-server/app.yaml` (rendered)
+
+**Test result:** `uv run --frozen pytest …` → 2787 passed, 28 skipped, 0 failed.
+Verified `uv run --frozen` imports all security packages and leaves the lock at
+0 proxy URLs (3653 files.pythonhosted.org + 333 pypi.org/simple).
