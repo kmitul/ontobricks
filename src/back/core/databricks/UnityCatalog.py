@@ -81,6 +81,50 @@ class UnityCatalog:
             logger.exception("Error fetching tables: %s", exc)
             return []
 
+    def probe_schema_has_tables(self, catalog: str, schema: str) -> int:
+        """Return the number of tables in *catalog*.*schema* via information_schema.
+
+        Requires only USE SCHEMA — works even when SHOW TABLES returns empty
+        due to missing SELECT grants on individual tables.  Returns -1 on error.
+        """
+        try:
+            params = self._auth.get_sql_connection_params()
+            with sql.connect(**params) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"SELECT count(*) FROM {catalog}.information_schema.tables "
+                        f"WHERE table_schema = '{schema}' AND table_type = 'BASE TABLE'"
+                    )
+                    row = cur.fetchone()
+                    return int(row[0]) if row else 0
+        except Exception as exc:
+            logger.warning("probe_schema_has_tables failed for %s.%s: %s", catalog, schema, exc)
+            return -1
+
+    def check_table_select_permission(
+        self, catalog: str, schema: str, table: str
+    ) -> Dict[str, Any]:
+        """Probe whether the caller can SELECT from *catalog*.*schema*.*table*.
+
+        Runs ``SELECT * … LIMIT 0`` — cheap, no data returned, but sufficient
+        to confirm row-level read access.
+
+        Returns:
+        - ``can_select`` (bool): True when the query succeeds
+        - ``error`` (str | None): human-readable reason when can_select is False
+        """
+        try:
+            params = self._auth.get_sql_connection_params()
+            with sql.connect(**params) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(f"SELECT * FROM {catalog}.{schema}.{table} LIMIT 0")
+            return {"can_select": True, "error": None}
+        except Exception as exc:
+            logger.info(
+                "SELECT probe failed for %s.%s.%s: %s", catalog, schema, table, exc
+            )
+            return {"can_select": False, "error": str(exc)}
+
     def get_table_columns(
         self, catalog: str, schema: str, table: str
     ) -> List[Dict[str, str]]:

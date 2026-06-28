@@ -99,6 +99,7 @@
                             <th class="dm-th-table">Table</th>
                             <th class="dm-th-datasource">Data Source <small class="text-muted">(click to change)</small></th>
                             <th class="dm-th-cols">Cols</th>
+                            <th class="dm-th-select-perm" title="Whether the service principal can SELECT this table">Select</th>
                             <th class="dm-th-desc">Description <small class="text-muted">(click to view/edit)</small></th>
                         </tr>
                     </thead>
@@ -127,6 +128,7 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
+                <div id="tableSelectionPermBanner" class="alert alert-light border py-2 px-3 mb-2 d-none small"></div>
                 <div class="mb-3 d-flex justify-content-between align-items-center">
                     <div>
                         <span id="tableSelectionInfo" class="text-muted small"></span>

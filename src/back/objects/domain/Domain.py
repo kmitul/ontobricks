@@ -1336,11 +1336,49 @@ class Domain:
                         "already_loaded": table_name in existing_table_names,
                     }
                 )
+
+            # Permission probes ------------------------------------------------
+            permissions: Dict[str, Any] = {
+                "can_list_tables": len(tables) > 0,
+                "can_select": None,        # None = unknown (no tables to probe)
+                "select_error": None,
+                "hidden_table_count": None,
+                "permission_warning": None,
+            }
+            if not tables:
+                # SHOW TABLES returned nothing — check if tables actually exist
+                hidden = await run_blocking(client.probe_schema_has_tables, catalog, schema)
+                if hidden > 0:
+                    permissions["hidden_table_count"] = hidden
+                    permissions["can_list_tables"] = False
+                    permissions["can_select"] = False
+                    permissions["permission_warning"] = (
+                        f"SHOW TABLES returned no results but "
+                        f"{catalog}.information_schema.tables reports {hidden} table(s). "
+                        "Grant SELECT (and USE CATALOG / USE SCHEMA) on the tables to "
+                        "the app service principal."
+                    )
+            else:
+                # Probe SELECT on the first table
+                probe_table = tables[0]
+                select_result = await run_blocking(
+                    client.check_table_select_permission, catalog, schema, probe_table
+                )
+                permissions["can_select"] = select_result["can_select"]
+                if not select_result["can_select"]:
+                    permissions["select_error"] = select_result["error"]
+                    permissions["permission_warning"] = (
+                        f"The service principal can list tables in {catalog}.{schema} "
+                        "but cannot SELECT from them. "
+                        "Grant SELECT on the tables (or the schema) to the app service principal."
+                    )
+
             return {
                 "success": True,
                 "tables": table_list,
                 "total_count": len(tables),
                 "existing_count": len(existing_table_names),
+                "permissions": permissions,
             }
         except OntoBricksError:
             raise

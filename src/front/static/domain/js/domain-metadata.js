@@ -226,23 +226,35 @@ async function loadMetadataFromUC() {
         statusSpan.textContent = '';
         
         if (data.success) {
-            // Store available tables
+            // Store available tables and permission info
             allAvailableTables = data.tables || [];
-            
+            const perms = data.permissions || {};
+
             if (allAvailableTables.length === 0) {
-                showNotification(`No tables found in ${catalog}.${schema}`, 'warning');
+                if (perms.permission_warning) {
+                    showNotification(
+                        `No tables visible in ${catalog}.${schema}. ` + perms.permission_warning,
+                        'error'
+                    );
+                } else {
+                    showNotification(`No tables found in ${catalog}.${schema}`, 'warning');
+                }
                 return;
             }
-            
+
+            // Non-blocking warning when SELECT is denied
+            if (perms.permission_warning) {
+                showNotification(perms.permission_warning, 'warning');
+            }
+
             // Initialize import selections (select all new tables by default)
             importTableSelections = {};
             allAvailableTables.forEach(table => {
-                // Pre-select tables that are not already loaded
                 importTableSelections[table.name] = !table.already_loaded;
             });
-            
-            // Show the selection modal
-            showTableSelectionModal(catalog, schema);
+
+            // Show the selection modal, pass permissions for the status banner
+            showTableSelectionModal(catalog, schema, perms);
         } else {
             showNotification('Error: ' + (data.message || 'Failed to list tables'), 'error');
         }
@@ -255,16 +267,48 @@ async function loadMetadataFromUC() {
     }
 }
 
-function showTableSelectionModal(catalog, schema) {
+function showTableSelectionModal(catalog, schema, perms) {
     const tbody = document.getElementById('tableSelectionBody');
     const infoSpan = document.getElementById('tableSelectionInfo');
-    
+
     const newCount = allAvailableTables.filter(t => !t.already_loaded).length;
     const existingCount = allAvailableTables.filter(t => t.already_loaded).length;
-    
+
     infoSpan.innerHTML = `<code>${catalog}.${schema}</code> - ${allAvailableTables.length} table(s) found`;
     if (existingCount > 0) {
         infoSpan.innerHTML += ` <span class="badge bg-info">${existingCount} already loaded</span>`;
+    }
+
+    // Permission status banner
+    const permBanner = document.getElementById('tableSelectionPermBanner');
+    if (permBanner) {
+        if (!perms) {
+            permBanner.classList.add('d-none');
+        } else {
+            const listOk  = perms.can_list_tables !== false;
+            const selOk   = perms.can_select === true;
+            const selUnk  = perms.can_select === null;
+
+            const listBadge = listOk
+                ? '<span class="badge bg-success me-1"><i class="bi bi-check-circle me-1"></i>List tables: OK</span>'
+                : '<span class="badge bg-danger me-1"><i class="bi bi-x-circle me-1"></i>List tables: denied</span>';
+
+            const selBadge = selUnk
+                ? '<span class="badge bg-secondary me-1"><i class="bi bi-dash-circle me-1"></i>SELECT: n/a</span>'
+                : selOk
+                    ? '<span class="badge bg-success me-1"><i class="bi bi-check-circle me-1"></i>SELECT data: OK</span>'
+                    : '<span class="badge bg-warning text-dark me-1"><i class="bi bi-exclamation-triangle me-1"></i>SELECT data: denied</span>';
+
+            permBanner.innerHTML = `
+                <div class="d-flex align-items-center flex-wrap gap-1">
+                    <small class="text-muted me-1">Service principal permissions:</small>
+                    ${listBadge}${selBadge}
+                    ${perms.permission_warning
+                        ? `<small class="text-warning ms-1"><i class="bi bi-exclamation-triangle me-1"></i>${perms.permission_warning}</small>`
+                        : ''}
+                </div>`;
+            permBanner.classList.remove('d-none');
+        }
     }
     
     // Build table rows
@@ -563,6 +607,7 @@ function displayMetadataPreview(metadata) {
         const parts = fullName.split('.');
         const displayName = parts.length === 3 ? parts[2] : fullName;
         const dataSource = parts.length >= 2 ? `${parts[0]}.${parts[1]}` : '';
+        const selectCell = renderSelectPermCell(table);
         
         html += `
             <tr class="${isMarked ? 'table-danger' : ''}" data-table-index="${index}">
@@ -583,6 +628,7 @@ function displayMetadataPreview(metadata) {
                 <td class="meta-cursor-pointer" data-meta-action="table-details" data-table-index="${index}">
                     <span class="badge bg-secondary">${columnCount}</span>
                 </td>
+                <td class="text-center">${selectCell}</td>
                 <td class="table-comment-cell meta-cursor-pointer" data-meta-action="table-details" data-table-index="${index}">
                     <span class="table-comment-text" id="tableComment_${index}">${tableComment || '<span class="text-muted fst-italic">Click to add description...</span>'}</span>
                 </td>
@@ -590,11 +636,27 @@ function displayMetadataPreview(metadata) {
         `;
     });
     
-    tbody.innerHTML = html || '<tr><td colspan="5" class="text-center text-muted">No tables found</td></tr>';
+    tbody.innerHTML = html || '<tr><td colspan="6" class="text-center text-muted">No tables found</td></tr>';
     previewDiv.classList.remove('d-none');
     
     updateSelectionCount();
     updateSelectAllCheckbox();
+}
+
+function renderSelectPermCell(table) {
+    // can_select may be undefined for metadata loaded before this field existed
+    if (table.can_select === undefined || table.can_select === null) {
+        return '<span class="text-muted" title="Unknown — refresh with Update from UC">'
+            + '<i class="bi bi-dash-circle"></i></span>';
+    }
+    if (table.can_select) {
+        return '<span class="text-success" title="Service principal can SELECT this table">'
+            + '<i class="bi bi-check-circle-fill"></i></span>';
+    }
+    const reason = (table.select_error || 'SELECT not permitted')
+        .toString()
+        .replace(/"/g, '&quot;');
+    return `<span class="text-danger" title="${reason}"><i class="bi bi-x-circle-fill"></i></span>`;
 }
 
 function toggleTableSelection(tableName, isChecked) {
