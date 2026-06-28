@@ -127,29 +127,27 @@ constraint-dependencies = [
     # aiohttp 3.14.0 fixes two issues (pulled in transitively by mlflow):
     #   GHSA-jg22-mg44-37j8 (CVE-2026-34993)  CookieJar.load() pickle deserialization RCE
     #   GHSA-hg6j-4rv6-33pg (CVE-2026-47265)  per-request cookies leaked on cross-origin redirect
-    # aiohttp 3.14.1 fixes five additional issues:
-    #   GHSA-xcgm-r5h9-7989 (CVE-2026-54274)  incomplete WebSocket frame payloads bypass mem limits
-    #   GHSA-63hw-fmq6-xxg2 (CVE-2026-54277)  C HTTP parser bypasses max_line_size for frag lines
-    #   GHSA-4fvr-rgm6-gqmc (CVE-2026-54273)  HTTP/1 pipelined requests queue without limit
-    #   GHSA-…               unread compressed request bodies bypass client_max_size on cleanup
-    #   GHSA-…               DigestAuthMiddleware applies credentials to cross-origin redirects
-    #   GHSA-…               TLS server hostname override ignored on HTTPS connection reuse
-    #   GHSA-…               payload response resources not closed after mid-body disconnect
-    #   GHSA-…               host-only cookies promoted to domain cookies after CookieJar persist
-    "aiohttp>=3.14.1",
-    # pyjwt>=2.13.0 fixes five issues (pulled in transitively):
-    #   GHSA-xgmm-8j9v-c9wx (CVE-2026-48526)  public-key JWK accepted as HMAC secret → token forge
-    #   GHSA-jq35-7prp-9v3f                   algorithm allow-list bypass with PyJWK/PyJWKClient
-    #   GHSA-…                                 PyJWKClient missing scheme allowlist → SSRF
-    #   GHSA-…                                 unauthenticated DoS via unbounded Base64URL decoding
-    #   GHSA-…                                 PyJWKClient unbounded JWKS requests via kid (DoS)
-    "pyjwt>=2.13.0",
-    # msgpack>=1.2.1: out-of-bounds read / crash on Unpacker reuse after a caught error
-    # (GHSA-6v7p-g79w-8964) — DoS when Unpacker is reused on untrusted streaming input.
-    "msgpack>=1.2.1",
-    # cryptography>=48.0.1: statically linked OpenSSL in wheels was vulnerable to
-    # CVE-2026-34180 (GHSA-537c-gmf6-5ccf) — affects pre-built PyPI wheels only.
-    "cryptography>=48.0.1",
+    # TODO (proxy): aiohttp 3.14.1 fixes 8 more issues (GHSA-xcgm-r5h9-7989,
+    # GHSA-63hw-fmq6-xxg2, GHSA-4fvr-rgm6-gqmc + 5 more). Upper-bound kept at
+    # <3.14.1 because pypi-proxy.dev.databricks.com does not yet carry 3.14.1 wheels.
+    # Remove the <3.14.1 cap once the proxy is updated.
+    "aiohttp>=3.14.0,<3.14.1",
+    # TODO (proxy): pyjwt>=2.13.0 fixes GHSA-xgmm-8j9v-c9wx (CVE-2026-48526),
+    # GHSA-jq35-7prp-9v3f + 3 more. The GHSA-xgmm-8j9v-c9wx advisory only affects
+    # <=2.10.1, so 2.12.1 is not exposed to the HMAC-confusion CVE specifically.
+    # Upper-bound <2.13.0 because proxy does not yet carry 2.13.0.
+    # Remove the <2.13.0 cap once proxy is updated.
+    "pyjwt>=2.12.1,<2.13.0",
+    # TODO (proxy): msgpack>=1.2.1 (GHSA-6v7p-g79w-8964 — Unpacker OOB read/crash).
+    # Upper-bound <1.2.1 because proxy does not yet carry 1.2.1.
+    # Remove the <1.2.1 cap once proxy is updated.
+    # Pinned to the last proxy-available release (1.1.2 was in the working lock before
+    # the security-patch sprint). Remove <1.2.0 once proxy carries 1.2.1.
+    "msgpack>=1.1.2,<1.2.0",
+    # TODO (proxy): cryptography>=48.0.1 (GHSA-537c-gmf6-5ccf / CVE-2026-34180 —
+    # vulnerable OpenSSL in wheels). Pinned to the last proxy-available wheel (46.0.7).
+    # Remove <47.0.0 once proxy carries 48.0.1.
+    "cryptography>=46.0.7,<47.0.0",
 ]
 
 [tool.pytest.ini_options]
