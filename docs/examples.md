@@ -73,7 +73,7 @@ foaf:gender a rdfs:Property .
 #### Step 1: Configure Connection
 
 1. Open OntoBricks in your browser
-2. Navigate to Configuration
+2. Navigate to **Settings**
 3. Enter your Databricks credentials:
    ```
    Host: https://your-workspace.cloud.databricks.com

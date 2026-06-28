@@ -11,7 +11,7 @@
 - **Ontology Pitfalls Detector**: Detect 19 structural, logical, and semantic pitfalls (P1.1–P4.7) in four categories via the **Ontology → Pitfalls** sidebar panel. Fast/graph-only checks run immediately; ML-heavy checks (semantic similarity, NLP naming) require the optional `[pitfalls]` extra (`uv sync --extra pitfalls`). Each check shows a description tooltip and ⚡/💻 speed indicator. Results group by category with an accordion display.
 - **OWL Generation**: Automatic generation of W3C-compliant OWL/Turtle from visual design.
 - **LLM-Powered Auto-Map Icons**: Automatically assign emoji icons to entities based on their names using the project's configured LLM serving endpoint (Ontology Designer toolbar).
-- **Ontology Model (D3 Graph)**: Force-directed graph view of the full ontology under **Ontology → Model** — click an entity to highlight its 1-hop neighbourhood (connected links + neighbours dimmed), click a relationship to highlight its two endpoints, toggle inheritance links on/off (state persisted), search any entity by name to pan/zoom to it with neighbourhood highlight, and right-click to create a Business View from a 1-hop neighbourhood (auto-named `Auto_<entity>`, numeric suffix on collision).
+- **Ontology Designer (D3 Graph)**: Force-directed graph view of the full ontology under **Ontology → Designer** — click an entity to highlight its 1-hop neighbourhood (connected links + neighbours dimmed), click a relationship to highlight its two endpoints, toggle inheritance links on/off (state persisted), search any entity by name to pan/zoom to it with neighbourhood highlight, and right-click to create a Business View from a 1-hop neighbourhood (auto-named `Auto_<entity>`, numeric suffix on collision).
 - **Dashboard Mapping**: Assign Databricks dashboards to entity types with parameter mapping for embedded display in the Graph Viewer.
 
 ## Data Mapping
@@ -78,7 +78,7 @@
 
 ## MCP Server (AI Integration)
 - **Model Context Protocol**: Expose the graph viewer to LLM agents via MCP (Streamable HTTP + stdio transports).
-- **Project Selection**: Two-step workflow — `list_projects` to browse available graph viewers, `select_project` to activate one.
+- **Project Selection**: Two-step workflow — `list_domains` to browse available graph viewers, `select_domain` to activate one.
 - **Entity Discovery**: `list_entity_types` and `describe_entity` provide human-readable text descriptions with BFS traversal.
 - **GraphQL via MCP**: `get_graphql_schema` and `query_graphql` tools let LLM agents introspect and query the typed GraphQL API.
 - **Databricks Playground**: Deployed as `mcp-ontobricks`, auto-discoverable by LLM agents in the Databricks Playground.

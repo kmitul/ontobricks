@@ -218,10 +218,10 @@ In local development mode, there are no restrictions — all users have full adm
 
 ### 2. Design an Ontology (Visual Designer)
 
-The fastest way to create an ontology is using the visual **Design** interface:
+The fastest way to create an ontology is using the visual **Business Views** interface:
 
 1. Go to the **Ontology** page (click on "Ontology" in the navbar)
-2. Click **Design** in the sidebar
+2. Click **Business Views** in the sidebar
 
 #### Create Entities
 1. Click **+ Add Entity** button
@@ -272,7 +272,7 @@ Alternatively, use the traditional form interface:
 
 ### 4. Preview and Save
 
-1. Click **OWL Content** to see your generated ontology in Turtle format
+1. Click **OWL** to see your generated ontology in Turtle format
 2. Click **Validate** to check your ontology
 3. Click **Save** to store in Unity Catalog
 
@@ -309,17 +309,15 @@ Alternatively, use the traditional form interface:
 ### 6. Explore Your Data (Knowledge Graph)
 
 1. Go to the **Knowledge Graph** page
-2. Click **Synchronize** to generate triples from your mappings and write them to the configured Unity Catalog table
-3. Once synced, browse the **Triples** tab to see the generated data in a sortable grid
-4. Explore the **Graph Viewer** tab for an interactive graph:
+2. Click **Build** in the sidebar, then click **Synchronize** to generate triples from your mappings and write them to Unity Catalog and Lakebase
+3. Click **Explorer** in the sidebar to explore your graph viewer interactively:
    - Click on entities to see details in the right panel
    - Use **Find** to search for specific entities
    - Use **Filters** to narrow down by entity type, field, or depth
    - View all mapped attributes, values, and relationships
-5. Run **Quality** checks to validate your data against ontology constraints
-6. Run **Data Quality** (SHACL) checks from the **Data Quality** sidebar section — validates cardinality, datatypes, patterns, and custom SPARQL rules against the triple store
-7. Run **Reasoning** from the **Reasoning** sidebar section — executes OWL 2 RL inference and SWRL business rules to discover inferred triples
-8. Access the **GraphQL** playground to query your graph viewer with auto-generated typed queries
+4. Run **Data Quality** checks from the **Data Quality** sidebar section — validates cardinality, datatypes, patterns, and custom SPARQL rules against the triple store
+5. Run inference from the **Inference** sidebar section — executes OWL 2 RL inference and SWRL business rules to discover inferred triples
+6. Access the **Query** sidebar section to query your graph viewer with auto-generated typed GraphQL queries
 
 ## Common Commands
 
@@ -362,20 +360,22 @@ The OntoBricks interface has a navigation bar with status indicators:
 
 | Menu Item | Description |
 |-----------|-------------|
-| **Wizard** | AI-powered ontology generation with quick templates |
-| **Design** | Visual drag-and-drop ontology designer |
 | **Information** | Basic ontology settings (name, URI) |
+| **Import** | Import OWL, RDFS, FIBO, CDISC, IOF standards |
+| **Generate** | AI-powered ontology generation from database schema using an LLM |
+| **Designer** | Interactive force-directed ontology graph (OntoViz canvas) |
+| **Groups** | Manage entity groupings |
+| **Business Views** | Visual drag-and-drop business view designer |
 | **Entities** | Manage classes with form interface |
 | **Relationships** | Manage object properties |
-| **Designer** | Interactive force-directed ontology graph (OntoViz canvas) |
-| **SWRL Rules** | Define SWRL inference rules |
 | **Data Quality** | SHACL shape-based data quality rules |
-| **Constraints** | Property cardinality and value constraints |
+| **Business Rules** | Define SWRL inference rules (graphical D3 editor) |
+| **Cohorts** | Define cohort queries for data slicing |
 | **Expr. & Axioms** | OWL class expressions and axioms |
-| **Import** | Import OWL, RDFS, FIBO, CDISC, IOF standards |
-| **OWL Content** | View generated Turtle/OWL |
+| **Pitfalls** | Automated ontology pitfall detection |
+| **OWL** | View generated Turtle/OWL |
 
-> **Tip**: The Wizard provides domain-specific quick templates (CRM, E-Commerce, IoT, Healthcare, Energy). These are defined in `src/shared/config/constants.py` and can be customised or extended.
+> **Tip**: The **Generate** wizard provides domain-specific quick templates (CRM, E-Commerce, IoT, Healthcare, Energy). These are defined in `src/shared/config/constants.py` and can be customised or extended.
 
 ## Troubleshooting
 

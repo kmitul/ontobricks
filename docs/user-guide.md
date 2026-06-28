@@ -28,7 +28,7 @@ Navigate to the **Ontology** page by clicking "Ontology" in the navigation bar.
 
 ### Option A: Visual Designer (Recommended)
 
-Click **Design** in the sidebar to use the visual drag-and-drop interface.
+Click **Business Views** in the sidebar to use the visual drag-and-drop interface.
 
 #### Creating Entities
 
@@ -171,29 +171,6 @@ Consequent: hasManager(?x, ?y)
 
 Rules are compiled to **Spark/Postgres SQL** for execution in the Reasoning pipeline. The capability flags on `GraphDBBackend` reserve a slot for a future Cypher / Gremlin engine.
 
-#### Property Constraints
-
-Click **Constraints** in the sidebar to define cardinality and value restrictions.
-
-1. Click **Add Constraint** button
-2. Select **Constraint Type**:
-   - **Cardinality**: Min/Max/Exact number of values
-   - **Value Restrictions**: allValuesFrom, someValuesFrom, hasValue
-   - **Property Characteristics**: Functional, Transitive, Symmetric, etc.
-3. Select the **Class** and **Property** to constrain
-4. Configure type-specific options
-5. Click **Save Constraint**
-
-**Example Constraints:**
-
-| Type | Property | Class | Value |
-|------|----------|-------|-------|
-| Exact Cardinality | hasManager | Employee | 1 |
-| Max Cardinality | hasPhone | Person | 3 |
-| All Values From | worksIn | Person | Department |
-| Functional | hasBirthDate | Person | - |
-| Transitive | isPartOf | Organization | - |
-
 #### Expressions & Axioms
 
 Click **Expr. & Axioms** in the sidebar to define OWL class expressions and axioms.
@@ -264,7 +241,7 @@ When viewing an entity in the Knowledge Graph visualization, the dashboard will 
 
 ### Option C: AI-Powered Wizard
 
-Click **Wizard** in the sidebar to generate an ontology automatically from your database schema using an LLM.
+Click **Generate** in the sidebar to generate an ontology automatically from your database schema using an LLM.
 
 1. Select the **LLM Endpoint** (a Databricks Model Serving endpoint)
 2. Choose which **catalog/schema** metadata to include
@@ -316,7 +293,7 @@ Industry-standard modules are fetched directly from their official servers/repos
 
 ### Preview OWL Output
 
-Click **OWL Content** in the sidebar to see the generated OWL in Turtle format.
+Click **OWL** in the sidebar to see the generated OWL in Turtle format.
 
 ### Save Your Ontology
 
@@ -467,36 +444,27 @@ Navigate to the **Knowledge Graph** page by clicking "Knowledge Graph" in the na
 
 > **Note**: You need both Ontology and Mapping loaded (green checkmarks in navbar). The Sync page shows a readiness status and disables actions until both are ready.
 
-### Sync (Sidebar)
+### Build (Sidebar)
 
-Click **Status** in the sidebar to manage your triple store:
+Click **Build** in the sidebar to manage your triple store:
 
 - **Readiness Status**: Shows whether Ontology and mappings (including attribute mappings) are all complete
 - **Synchronize**: Generates all triples from your mappings and writes them to the Delta view in Unity Catalog and to the configured Graph DB engine (Lakebase Postgres)
 - **Last Updated**: When the table contains data, the status area displays the last modification date and time (for Delta from Unity Catalog metadata; for Lakebase from the Postgres `count_triples` + table metadata)
 
-### Quality (Sidebar)
+### Data Quality (Sidebar)
 
-Click **Quality** in the sidebar to run data quality checks against the triple store:
+Click **Data Quality** in the sidebar to run SHACL-based quality checks against the triple store:
 
 - Quality checks run **asynchronously** as a background task with progress tracking
 - You can navigate away and return — the task resumes from where it left off
-- Validates cardinality constraints, value constraints, property characteristics, and global rules
+- Validates cardinality, value constraints, property characteristics, and global rules
 - Shows pass/fail results with violation details
 - Displays the generated SQL for each check
 
-### Triples (Sidebar)
+### Explorer (Sidebar)
 
-Click **Triples** in the sidebar to view triples in an interactive data grid. Triple store data is **automatically loaded** when you navigate to this section:
-
-- **Sortable columns**: Click headers to sort
-- **Resizable columns**: Drag column borders
-- **Result count**: Shown in tab badge
-- Cells show URIs and literal values
-
-### Graph Viewer (Sidebar)
-
-Click **Graph Viewer** in the sidebar to explore triples as an interactive sigma.js WebGL-powered graph. Triple store data is **automatically loaded** when you navigate to this section:
+Click **Explorer** in the sidebar to explore triples as an interactive sigma.js WebGL-powered graph. Triple store data is **automatically loaded** when you navigate to this section:
 
 **Main Graph Area (left):**
 - **Nodes**: Entities (colored by class type with emoji icons in labels)
@@ -624,7 +592,7 @@ Click the **Discussion** button (chat-bubble icon, top-right of the Analytics to
 
 ### Quality Checks (Sidebar)
 
-Click **Quality** in the sidebar to run automated quality checks on your triple store data:
+Click **Data Quality** in the sidebar to run automated quality checks on your triple store data:
 
 **Running Quality Checks:**
 1. Ensure your triple store has been synchronized
@@ -675,9 +643,9 @@ Click **Data Quality** in the Knowledge Graph sidebar to run SHACL shape validat
 4. Results show pass/fail status with violation counts and details
 5. For small datasets, PySHACL can validate in-memory without SQL
 
-### Reasoning (Sidebar)
+### Inference (Sidebar)
 
-Click **Reasoning** in the Knowledge Graph sidebar to run the multi-phase reasoning pipeline:
+Click **Inference** in the Knowledge Graph sidebar to run the multi-phase reasoning pipeline:
 
 1. **OWL 2 RL** — Forward-chaining deductive closure on the ontology (infers subclass hierarchies, domain/range typing, property entailments)
 2. **SWRL Rules** — Evaluates user-defined rules (violation detection and optional materialization)
@@ -1043,9 +1011,9 @@ See the [MCP Server documentation](mcp.md) for full details including local usag
 
 1. Go to **Knowledge Graph** → **Status** and click **Synchronize** to generate triples from your mappings
 2. Once synced, click **Triples** to browse all generated triples in a sortable grid
-3. Click **Graph Viewer** to explore the graph viewer as an interactive sigma.js WebGL graph
+3. Click **Explorer** to explore the graph viewer as an interactive sigma.js WebGL graph
 4. Click on any entity node to see its type, label, attributes, and values in the details panel
-5. Click **Quality** to run automated quality checks against your ontology constraints
+5. Click **Data Quality** to run automated quality checks against your ontology constraints
 
 ---
 
@@ -1251,7 +1219,7 @@ OntoBricks fetches column names, types, and comments from Unity Catalog for each
 
 ### Step 4: Generate the Ontology with the Wizard
 
-Navigate to **Ontology** in the top navbar, then open **Wizard** in the sidebar.
+Navigate to **Ontology** in the top navbar, then open **Generate** in the sidebar.
 
 The Wizard uses your LLM endpoint and the imported metadata to automatically design an ontology.
 
@@ -1334,7 +1302,7 @@ If all checks pass:
 
 ### Step 7: Validate with Quality Checks
 
-Still in the **Knowledge Graph** section, open **Quality** in the sidebar.
+Still in the **Knowledge Graph** section, open **Data Quality** in the sidebar.
 
 Quality checks validate the triple store against your ontology using two complementary systems:
 
@@ -1375,7 +1343,7 @@ SHACL shapes are compiled to **Spark SQL** for Delta execution and to **Postgres
 
 ### Step 7b: Run Reasoning (Optional)
 
-Still in the **Knowledge Graph** section, open **Reasoning** in the sidebar.
+Still in the **Knowledge Graph** section, open **Inference** in the sidebar.
 
 Reasoning discovers new facts (inferred triples) from your ontology rules:
 
@@ -1395,11 +1363,8 @@ Reasoning discovers new facts (inferred triples) from your ontology rules:
 
 After sync, you can explore the triple store:
 
-#### Triples Grid
-Open **Triples** in the sidebar to browse the raw triple data in a sortable, searchable grid.
-
-#### Graph Viewer
-Open **Graph Viewer** in the sidebar to explore the graph viewer interactively:
+#### Graph Explorer
+Open **Explorer** in the sidebar to explore the graph viewer interactively:
 - **Find** specific entities by name, type, or URI — matching entities and their neighbors are highlighted
 - **Filter** by entity type, field, match type, and relationship depth
 - **Navigate** relationships — click an entity to see its attributes, values, and connected entities in the detail panel
@@ -1415,10 +1380,10 @@ Open **Graph Viewer** in the sidebar to explore the graph viewer interactively:
 | 1 | Settings | Configure Databricks connection | Manual (one-time) |
 | 2 | Domain > Information | Set LLM endpoint and triple store table | Manual (one-time) |
 | 3 | Domain > Metadata | Import table metadata from Unity Catalog | One click |
-| 4 | Ontology > Wizard | Generate ontology from metadata using LLM | One click |
+| 4 | Ontology > Generate | Generate ontology from metadata using LLM | One click |
 | 5 | Mapping > Auto-Map | Auto-map entities and relationships to SQL | One click |
-| 6 | Knowledge Graph > Status | Synchronize to triple store | One click |
-| 7 | Knowledge Graph > Quality | Run quality checks | One click |
+| 6 | Knowledge Graph > Build | Synchronize to triple store | One click |
+| 7 | Knowledge Graph > Data Quality | Run quality checks | One click |
 
 After the initial one-time configuration (steps 1–2), the entire pipeline from metadata to triple store is **four clicks**: Import Metadata, Generate, Auto-Map, Synchronize.
 
