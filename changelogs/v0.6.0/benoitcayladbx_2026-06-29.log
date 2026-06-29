@@ -227,10 +227,18 @@ Changes:
 2. scripts/setup.sh
    Same `--frozen` pin on the initial environment sync (a dep change now
    requires an explicit `uv lock`, which is the desired forcing function).
+3. Makefile
+   `make install` (`uv sync`) also pinned to `--frozen`. NB: `make test`
+   already activates the venv and runs `pytest` directly (no `uv run`), so it
+   never churns. The remaining trigger is any *ad-hoc* `uv run` (e.g. the
+   canonical `uv run pytest -m "not scenario"`), which re-resolves against the
+   proxy `UV_INDEX_URL`; the universal guard is `UV_FROZEN=1` in the shell or
+   `uv run --frozen`.
 
 Modified files:
 - scripts/start.sh
 - scripts/setup.sh
+- Makefile
 
 Tests: not run — local dev tooling only, no Python touched. Validated with
 `bash -n scripts/start.sh scripts/setup.sh` (syntax OK); `uv.lock` restored to

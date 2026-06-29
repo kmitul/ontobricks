@@ -53,7 +53,7 @@ help:
 install:
 	@echo "Installing dependencies..."
 	uv venv
-	uv sync --extra lakebase --extra pitfalls
+	uv sync --frozen --extra lakebase --extra pitfalls
 
 setup:
 	@echo "Running setup..."
