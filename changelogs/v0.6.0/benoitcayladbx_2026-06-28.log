@@ -208,3 +208,41 @@ crashing on the same proxy cold-cache (`Failed to download aiofile==3.11.1` /
 **Test result:** `uv run --frozen mcp-ontobricks --help` → exit 0; lock at 0 proxy
 URLs (1045 files.pythonhosted.org + 98 pypi.org/simple). Both apps RUNNING after
 redeploy with clean startup logs (Uvicorn running, no download timeouts).
+
+---
+
+## Fix: Data Sources "Rights" column always Unknown + rename from "Select"
+
+**Context:** The per-table SELECT permission column in the Data Sources grid was
+labelled "Select" (confusing next to the row checkboxes) and showed a grey dash
+("Unknown") for every table loaded before the probe feature existed. The cell
+tooltip told users to "refresh with Update from UC", but the Update-from-UC path
+(`merge_table_metadata`) only refreshed columns and comments — it never
+re-probed `can_select`, so the column stayed Unknown forever.
+
+**Changes:**
+1. `src/front/templates/partials/domain/_domain_metadata.html` — Renamed the
+   grid header "Select" → "Rights" (`dm-th-select-perm` th).
+2. `src/back/objects/domain/Domain.py` — `merge_table_metadata()` now accepts an
+   optional `select_probe` arg and writes `can_select` / `select_error` onto the
+   table dict when provided; `update_metadata_tables()` runs
+   `check_table_select_permission()` per table and passes the result through, so
+   the sync refresh recomputes rights.
+3. `src/back/objects/domain/_metadata_tasks.py` — `run_metadata_update_task()`
+   (async Update from UC) likewise probes SELECT per table and forwards it to
+   `merge_table_metadata()`, so refreshing pre-existing metadata resolves the
+   Unknown state.
+
+**Modified files:**
+- `src/front/templates/partials/domain/_domain_metadata.html`
+- `src/back/objects/domain/Domain.py`
+- `src/back/objects/domain/_metadata_tasks.py`
+
+**Test result:** `uv run --frozen pytest -q -k "metadata or unity_catalog or
+permission or select or domain"` → 670 passed, 2 skipped, 11 failed. All 11
+failures are the pre-existing async event-loop RuntimeErrors in unrelated
+endpoints (current-user, review, set-version-status, comments, MCP smoke);
+none touch the metadata code changed here.
+
+---
+
