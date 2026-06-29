@@ -246,3 +246,118 @@ none touch the metadata code changed here.
 
 ---
 
+## Test: Full domain-lifecycle E2E journey (Playwright)
+
+**Context:** The existing E2E suites are per-endpoint contract tests — each
+test does one navigation plus one request. Nothing exercised the *whole*
+authoring flow as a single continuous session, where state must accumulate
+from step to step (the way it does for a real user). Added a new
+`tests/e2e/scenarios/` sub-suite with one journey test that walks the entire
+deterministic, session-only lifecycle and asserts the accumulated state at
+every hop. The flow alternates genuine DOM interactions (file-input OWL
+upload, the "Regenerate" R2RML button) with `page.context.request` mutations
+(the same endpoints the page JS hits), proving both the JS wiring and the
+session-cookie state-carry. The Databricks-backed tail (UC save/load, KG
+build, auto-assign, LLM wizard) is intentionally out of scope and left to the
+live-gated suites.
+
+**Changes:**
+1. `tests/e2e/scenarios/__init__.py` — New package marker for the journey sub-suite.
+2. `tests/e2e/scenarios/test_full_lifecycle.py` — New `TestFullDomainLifecycle::test_create_domain_to_r2rml_journey`. In one browser context (one `DomainSession`): creates a domain (`#domainName` fill + `POST /domain/info`), imports an ontology through the real `#importOwlFileInput` file input (drives the JS → `/ontology/parse-owl`), asserts the imported classes render in `#classHierarchyTree`, saves entity/relationship mappings (`POST /mapping/save`), generates R2RML via the real `#regenerateR2RMLBtn` button, round-trips OWL (`GET /ontology/export-owl`), and snapshots the full domain (`GET /domain/export`). Reuses the existing `sample_owl_content` and `sample_mapping_config` conftest fixtures (their URIs align so the mapping references the imported classes).
+
+**Modified files:**
+- `tests/e2e/scenarios/__init__.py` (new)
+- `tests/e2e/scenarios/test_full_lifecycle.py` (new)
+
+**Test result:** `ONTOBRICKS_E2E_FAKE_CREDS=1 uv run pytest tests/e2e/scenarios/ --no-cov` → 1 passed; verified stable across 3 consecutive runs (~9.5s each). Deterministic under fake creds (no workspace, warehouse, or LLM required).
+
+---
+
+## Test: Live `test_scenario_1` E2E — data-source import → Generate-page OWL → persist
+
+**Context:** The deterministic full-lifecycle journey deliberately skips the
+Databricks-backed tail (UC metadata read, the LLM Generate wizard, durable
+registry save). This new live-gated scenario covers exactly that tail end-to-end
+and, by design, leaves a **durable** domain behind for manual inspection. It
+runs against an *already-running* OntoBricks instance (default the local dev
+server on `http://localhost:8000`) so the persisted `test_scenario_1` lands in
+the same registry the local app reads. The journey: reset → create
+`test_scenario_1` with the `databricks-claude-sonnet-4-5` serving endpoint
+attached → import the `benoit_cayla.customer` data sources *beforehand*
+(`POST /domain/metadata/initialize`) → open the real **Generate** page
+(`/ontology?section=wizard`), confirm the imported tables render, and click the
+real `#wizardTopGenerateBtn` → the async LLM wizard runs and auto-applies the
+generated OWL → poll `/ontology/load` until classes land → `POST
+/domain/save-to-uc` and verify the domain is listed. The domain is intentionally
+NOT reset at the end.
+
+**Changes:**
+1. `tests/e2e/scenarios/test_scenario_1_generate_live.py` — New
+   `TestScenario1GenerateLive::test_import_sources_generate_owl_and_persist`.
+   Gated behind `ONTOBRICKS_SCENARIO_LIVE=1` (needs a running app + warehouse +
+   LLM and mutates the registry). Self-contained fixtures: `scenario_base`
+   (health-probes `/health` then `/healthz`, skips cleanly if no app is up) and
+   `scenario_page` (a fresh browser context on the running app, bypassing the
+   int-workspace `page` fixture so no int bearer is carried). Target/inputs are
+   env-overridable (`ONTOBRICKS_LIVE_BASE`, `…_CATALOG`, `…_SCHEMA`, `…_LLM`,
+   `…_GEN_TIMEOUT`). Direct POSTs carry the double-submit CSRF token from the
+   cookie; generation completion is detected by polling the session truth
+   (`/ontology/load`) rather than front-end state.
+
+**Modified files:**
+- `tests/e2e/scenarios/test_scenario_1_generate_live.py` (new)
+
+**Test result:** `ONTOBRICKS_SCENARIO_LIVE=1 ONTOBRICKS_LIVE_BASE=http://localhost:8000
+uv run pytest tests/e2e/scenarios/test_scenario_1_generate_live.py -v -s --no-cov`
+→ 1 passed in 114s against the live local app. The wizard generated an 11-class
+ontology (Call, Claim, Contract, Customer, CustomerInteraction, Interaction,
+Invoice, Meter, MeterReading, Payment, Subscription) from the 10 imported
+`benoit_cayla.customer` tables; `save-to-uc` returned "Domain saved" and
+`test_scenario_1` is listed in the registry (persisted for manual inspection).
+
+---
+
+## Test: Extend live `test_scenario_1` — Auto-Map (AI mapping) + Knowledge-Graph build
+
+**Context:** Extended the live `test_scenario_1` journey so it now exercises the
+*entire* Databricks-backed authoring pipeline end-to-end, not just OWL
+generation: after generating the ontology it runs **Auto-Map** (the AI mapping
+wizard that generates the SQL + column mappings for every entity/relationship)
+and then **builds the knowledge graph** (CREATE VIEW + populate the graph store),
+before persisting the durable domain for manual inspection. Several real
+behaviours of the persistence/async layer had to be accommodated to make the
+journey idempotent and reliably re-runnable.
+
+**Changes:**
+1. `tests/e2e/scenarios/test_scenario_1_generate_live.py` — Added two steps to
+   the journey and reworked the persistence flow:
+   - **Auto-Map**: navigates the real Mapping page (`/mapping?section=autoassign`),
+     waits for `MappingState.loadedOntology` to hydrate, then invokes
+     `AutoAssignModule.start()` directly (the button re-renders its label/gauges
+     on every status tick, so a DOM click races with "element not stable").
+     Polls `/mapping/load` until entities carry generated `sql_query` and the
+     module is no longer running.
+   - **KG build**: `POST /dtwin/sync/start`, then polls `GET /tasks/<id>` (new
+     `_poll_task` helper) to terminal state and asserts `completed`.
+   - **Idempotent persistence**: at start, deletes any prior `test_scenario_1`
+     (`DELETE /settings/registry/domains/{name}`, cache-invalidating) for a clean
+     rebuild; immediately claims the registry folder with an initial
+     `save-to-uc` (so the async Auto-Map/Build tasks — which persist their domain
+     *snapshot* on a background thread — overwrite the folder instead of
+     creating a conflicting entry); saves again pre-build and post-build to
+     capture the ontology+mappings and the build metadata.
+   - New env knobs: `ONTOBRICKS_SCENARIO_AUTOMAP_TIMEOUT` (default 600s),
+     `ONTOBRICKS_SCENARIO_BUILD_TIMEOUT` (default 420s). Renamed the test method
+     to `test_import_generate_automap_build_and_persist`.
+
+**Modified files:**
+- `tests/e2e/scenarios/test_scenario_1_generate_live.py`
+
+**Test result:** `ONTOBRICKS_SCENARIO_LIVE=1 ONTOBRICKS_LIVE_BASE=http://localhost:8000
+uv run pytest tests/e2e/scenarios/test_scenario_1_generate_live.py -v -s --no-cov`
+→ 1 passed in 396s against the live local app. End-to-end: generated a 10-class
+ontology from `benoit_cayla.customer`, Auto-Map produced 10 entity + 9
+relationship mappings with SQL, the KG build wrote 35,038 triples in 63s, and
+`test_scenario_1` was persisted to the registry for manual inspection. Still
+collects + skips cleanly in the default matrix (gated on
+`ONTOBRICKS_SCENARIO_LIVE=1`).

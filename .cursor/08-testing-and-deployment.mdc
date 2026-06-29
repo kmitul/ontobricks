@@ -7,7 +7,11 @@ scope:
 
 ### Testing and Deployment
 
-- **Test framework**: `pytest` for the backend. Run with `uv run pytest -q`.
+- **Test framework**: `pytest` for the backend.
+- **Default / routine test command** (post-change routine, code review, dev iteration, Ask mode): `uv run pytest -q -m "not scenario"`. This is what you run unless the user explicitly says otherwise.
+- **Scenarios are opt-in.** The journey suites under `tests/e2e/scenarios/` are tagged with the `scenario` marker (auto-applied by `tests/e2e/scenarios/conftest.py`). **Never** run them during routine/dev/Ask test runs. Run them **only when the user explicitly asks for a scenario** (e.g. "run the scenario"):
+  - All scenarios: `uv run pytest -m scenario`
+  - The live, billable scenario (`test_scenario_1_generate_live.py`) additionally needs a running app + warehouse + LLM and is gated behind `ONTOBRICKS_SCENARIO_LIVE=1`. It writes a durable domain to the registry.
 - Ensure proper input validation and error handling.
 - **Deployment**: Deployed as a Databricks App via `databricks bundle deploy` using `app.yaml` (Databricks Asset Bundle format).
 - **Development Server**: Run via `run.py` which imports `create_app` from `shared.fastapi.main`. Uvicorn with auto-reload for local development.

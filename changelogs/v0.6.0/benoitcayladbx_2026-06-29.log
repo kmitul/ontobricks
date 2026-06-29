@@ -1,0 +1,71 @@
+## Make scenario suites opt-in (excluded from routine/agent test runs)
+
+Context: The `tests/e2e/scenarios/` journey suites are long and, for the
+`*_live` ones, billable (warehouse + LLM + a durable registry write). They
+must not run during routine development, the post-change routine, code
+review, or Ask-mode test runs — only when the user explicitly asks. The live
+scenario was already env-gated, but `test_full_lifecycle.py` was collected by
+a plain `pytest` run. Introduced a `scenario` marker and made the canonical
+agent test command exclude it, then propagated that convention into the
+rules and skills.
+
+Changes:
+
+1. pyproject.toml
+   Registered the `scenario` pytest marker in `[tool.pytest.ini_options].markers`.
+2. pytest.ini
+   Mirrored the `scenario` marker (kept in sync with pyproject per the file's own note).
+3. tests/e2e/scenarios/conftest.py
+   New conftest that auto-tags every test collected under `tests/e2e/scenarios/`
+   with `pytest.mark.scenario`, filtering by path so the sub-dir hook does not
+   tag the whole session's items.
+4. .cursor/08-testing-and-deployment.mdc
+   Documented the default/routine command `uv run pytest -q -m "not scenario"`
+   and that scenarios are opt-in (`-m scenario`; live one also needs
+   `ONTOBRICKS_SCENARIO_LIVE=1`).
+5. .cursorrules
+   Updated both "Run all tests" steps (post-change routine + code review) to
+   use `-m "not scenario"` and point at `.cursor/08`.
+6. .claude/skills/changelog/SKILL.md
+   Post-change test step + the `Tests:` template now use `-m "not scenario"`.
+7. .claude/skills/code-review/SKILL.md
+   Review test step now uses `-m "not scenario"`.
+
+Modified files:
+- pyproject.toml
+- pytest.ini
+- tests/e2e/scenarios/conftest.py
+- .cursor/08-testing-and-deployment.mdc
+- .cursorrules
+- .claude/skills/changelog/SKILL.md
+- .claude/skills/code-review/SKILL.md
+
+Tests: `uv run pytest -q -m "not scenario"` → 2998 passed, 58 failed, 17 skipped, **2 deselected** (the scenario suites, as intended). The 58 failures are pre-existing and unrelated to this change: a full-suite pytest-asyncio ordering issue (`RuntimeError: Runner.run() cannot be called from a running event loop` across `tests/units/api/*` and `tests/mcp/integration/*`) plus flaky Playwright timeouts in `tests/e2e/navigation/`. Verified inert: `tests/units/api/test_comment_endpoints.py` passes 8/8 in isolation, and collection checks confirm only the 2 scenario tests are deselected (`-m scenario` → 2 selected / 3073 deselected).
+
+## Add scenario 2 — collaboration + review lifecycle (reuses scenario 1's domain)
+
+Context: New live, gated journey that exercises the human-in-the-loop workflow
+on top of a built domain. It deliberately **reuses the durable
+``test_scenario_1`` domain** (built + persisted by scenario 1) rather than
+regenerating one, then walks: add comments (ontology + mapping framing) →
+turn them into tasks → advance a task → submit for review (DRAFT → IN-REVIEW)
+→ reopen to DRAFT + new comment → publish (submit → sign-off → publish →
+PUBLISHED) → create a new version (V2). Mapped each step to the real
+internal API (``/comments/*``, ``/review/*``, ``/domain/create-version``).
+Key constraints honoured: ``submit`` requires a prior KG build (``last_build``),
+comments are writable only in DRAFT/IN-REVIEW, publish needs an IN-REVIEW
+version (admin meets the quorum via a self sign-off).
+
+Changes:
+
+1. tests/e2e/scenarios/test_scenario_2_collab_lifecycle.py
+   New scenario. Gated by ONTOBRICKS_SCENARIO_LIVE=1 + the `scenario` marker
+   (auto-applied by the scenarios conftest). Skips with guidance when
+   `test_scenario_1` is absent, never built, or already has versions > 1
+   (re-run scenario 1 for a clean single-version V1). Idempotent for the
+   comment/review steps (reopens V1 to DRAFT at start); creates V2.
+
+Modified files:
+- tests/e2e/scenarios/test_scenario_2_collab_lifecycle.py (new)
+
+Tests: `ONTOBRICKS_SCENARIO_LIVE=1 uv run pytest tests/e2e/scenarios/test_scenario_2_collab_lifecycle.py -m scenario -v -s --no-cov` → **1 passed in 49.03s** (V1 PUBLISHED with 3 comments + 2 tasks, V2 DRAFT). Routine suite unaffected (new test is `scenario`-marked → excluded from `-m "not scenario"`).
