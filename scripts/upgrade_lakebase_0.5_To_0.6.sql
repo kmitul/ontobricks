@@ -1,28 +1,38 @@
 -- ============================================================================
--- OntoBricks Lakebase registry upgrade: 0.5.x  ->  0.6.x
+-- OntoBricks Lakebase registry upgrade: 0.5.x  ->  0.6
 -- ----------------------------------------------------------------------------
--- Adds the collaborative *comments & tasks* (the "Discussions" feature):
+-- Single, clean, one-shot migration to the FINAL 0.6 schema. Adds the
+-- collaborative *comments & tasks* (the "Discussions" feature):
 --
---   * new table   domain_comments  — contextual threaded discussion anchored
---                 to a domain version (ontology class/property, mapping, graph
---                 node/edge, or the whole domain). A non-empty ``parent_id``
---                 makes the row a reply; ``resolved`` closes a thread without
---                 losing history.
+--   * new table   domain_comments  — domain-wide threaded discussion: every
+--                 comment belongs to the single per-(domain, version) thread.
+--                 A non-empty ``parent_id`` makes the row a reply; ``resolved``
+--                 closes a thread without losing history.
 --   * new table   domain_tasks     — personalised work items, usually born
 --                 from a comment (``comment_id``), surfaced in the assignee's
 --                 "My Tasks" worklist.
---   * indexes     idx_domain_comments_anchor, idx_domain_tasks_assignee,
+--   * indexes     idx_domain_comments_lookup, idx_domain_tasks_assignee,
 --                 idx_domain_tasks_domain.
 --
--- These tables carry the same CHECK constraints as the canonical
--- ``src/back/objects/registry/store/lakebase/schema.sql`` (anchor_type and
--- task status), so the registry stays fully constrained.
+-- These tables mirror the canonical
+-- ``src/back/objects/registry/store/lakebase/schema.sql``, so the registry
+-- stays fully constrained (task status CHECK).
+--
+-- NOTE — supersedes the two-step path. Discussions became domain-wide during
+-- the 0.6 cycle, so the early per-anchor columns (``anchor_type`` /
+-- ``anchor_ref``) were dropped. This script lands the final shape directly:
+-- if it finds those columns (left by an earlier draft of this script, the
+-- app's lazy self-heal, or ``make bootstrap-lakebase``), it drops them and the
+-- stale ``idx_domain_comments_anchor`` index. You therefore do NOT also need
+-- ``scripts/upgrade_lakebase_0.6_drop_comment_anchor.sql`` — it remains only
+-- for installs already migrated to the intermediate (anchored) 0.6 shape.
 --
 -- The app self-heals these tables lazily on first comment/task write
 -- (``_ensure_collab_tables``), and ``make bootstrap-lakebase`` provisions them
 -- as the schema owner. Run this script when you prefer an explicit, auditable
--- one-shot migration (e.g. a DBA applying it out-of-band). Nothing here is
--- destructive — no existing data is touched, no columns are dropped.
+-- one-shot migration (e.g. a DBA applying it out-of-band). The only data
+-- discarded is the dead ``anchor_type`` / ``anchor_ref`` values (if present);
+-- no comment bodies, authors, threading or resolved state are touched.
 --
 -- Idempotent: safe to run multiple times.
 -- ----------------------------------------------------------------------------
@@ -49,17 +59,12 @@ SET search_path TO :"reg_schema";
 
 BEGIN;
 
--- 1. Collaborative comments --------------------------------------------------
+-- 1. Collaborative comments (domain-wide thread; final 0.6 shape) ------------
 CREATE TABLE IF NOT EXISTS domain_comments (
     id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     domain_id   uuid NOT NULL
                 REFERENCES domains(id) ON DELETE CASCADE,
     version     text NOT NULL,
-    anchor_type text NOT NULL DEFAULT 'domain'
-                CHECK (anchor_type IN ('ontology_class', 'ontology_property',
-                                       'mapping', 'graph_node', 'graph_edge',
-                                       'domain')),
-    anchor_ref  text NOT NULL DEFAULT '',
     parent_id   uuid REFERENCES domain_comments(id) ON DELETE CASCADE,
     author      text NOT NULL,
     body        text NOT NULL DEFAULT '',
@@ -67,26 +72,15 @@ CREATE TABLE IF NOT EXISTS domain_comments (
     created_at  timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX IF NOT EXISTS idx_domain_comments_anchor
-    ON domain_comments(domain_id, version, anchor_type, anchor_ref);
+-- 1b. Converge pre-existing tables on the final shape: drop the dead per-anchor
+--     columns + their index (left by an earlier anchored 0.6 draft / lazy
+--     self-heal). The anchor_type CHECK constraint drops with its column.
+DROP INDEX IF EXISTS idx_domain_comments_anchor;
+ALTER TABLE IF EXISTS domain_comments DROP COLUMN IF EXISTS anchor_type;
+ALTER TABLE IF EXISTS domain_comments DROP COLUMN IF EXISTS anchor_ref;
 
--- 1b. Backfill the anchor_type CHECK on registries whose table was created by
---     the app's lazy self-heal path (which omits the constraint).
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'domain_comments_anchor_type_check'
-          AND conrelid = 'domain_comments'::regclass
-    ) THEN
-        ALTER TABLE domain_comments
-            ADD CONSTRAINT domain_comments_anchor_type_check
-            CHECK (anchor_type IN ('ontology_class', 'ontology_property',
-                                   'mapping', 'graph_node', 'graph_edge',
-                                   'domain'));
-    END IF;
-END$$;
+CREATE INDEX IF NOT EXISTS idx_domain_comments_lookup
+    ON domain_comments(domain_id, version, created_at);
 
 -- 2. Collaborative tasks -----------------------------------------------------
 CREATE TABLE IF NOT EXISTS domain_tasks (
@@ -111,7 +105,8 @@ CREATE INDEX IF NOT EXISTS idx_domain_tasks_assignee
 CREATE INDEX IF NOT EXISTS idx_domain_tasks_domain
     ON domain_tasks(domain_id, version);
 
--- 2b. Backfill the status CHECK on lazily-created tables (see 1b). ------------
+-- 2b. Backfill the status CHECK on tables created by the app's lazy self-heal
+--     path (which omits the constraint). ----------------------------------------
 DO $$
 BEGIN
     IF NOT EXISTS (

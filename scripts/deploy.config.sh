@@ -84,7 +84,10 @@ export WAREHOUSE_ID="${WAREHOUSE_ID:-$DEFAULT_WAREHOUSE_ID}"
 
 # Unity Catalog Volume securable.
 export REGISTRY_CATALOG="${REGISTRY_CATALOG:-$DEFAULT_REGISTRY_CATALOG}"
-export REGISTRY_SCHEMA="${DEFAULT_REGISTRY_SCHEMA}"
+# Env-overridable so `scripts/update-deployed-app.sh` can pin the schema it
+# read back from a live app. `make deploy` `unset`s REGISTRY_SCHEMA first, so
+# the routine deploy still always uses DEFAULT_REGISTRY_SCHEMA.
+export REGISTRY_SCHEMA="${REGISTRY_SCHEMA:-$DEFAULT_REGISTRY_SCHEMA}"
 export REGISTRY_VOLUME="${REGISTRY_VOLUME:-$DEFAULT_REGISTRY_VOLUME}"
 
 # Lakebase project / branch.

@@ -317,9 +317,52 @@ CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_review_events (
 );
 CREATE INDEX IF NOT EXISTS idx_review_events_domain_version
     ON "${SCHEMA}".domain_review_events(domain_id, version, created_at);
+
+-- domain_comments + domain_tasks (collaborative Discussions, v0.6 — final,
+-- domain-wide shape; mirrors schema.sql). Created here so every deploy /
+-- in-place update provisions them as the schema owner instead of relying on
+-- the app's lazy self-heal. Converge any pre-existing table created with the
+-- early per-anchor columns onto the final shape (drop anchor_type/anchor_ref).
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_comments (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id   uuid NOT NULL
+                REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version     text NOT NULL,
+    parent_id   uuid REFERENCES "${SCHEMA}".domain_comments(id) ON DELETE CASCADE,
+    author      text NOT NULL,
+    body        text NOT NULL DEFAULT '',
+    resolved    boolean NOT NULL DEFAULT false,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+DROP INDEX IF EXISTS "${SCHEMA}".idx_domain_comments_anchor;
+ALTER TABLE IF EXISTS "${SCHEMA}".domain_comments DROP COLUMN IF EXISTS anchor_type;
+ALTER TABLE IF EXISTS "${SCHEMA}".domain_comments DROP COLUMN IF EXISTS anchor_ref;
+CREATE INDEX IF NOT EXISTS idx_domain_comments_lookup
+    ON "${SCHEMA}".domain_comments(domain_id, version, created_at);
+
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_tasks (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id   uuid NOT NULL
+                REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version     text NOT NULL,
+    assignee    text NOT NULL,
+    created_by  text NOT NULL,
+    title       text NOT NULL,
+    description text NOT NULL DEFAULT '',
+    status      text NOT NULL DEFAULT 'open'
+                CHECK (status IN ('open', 'in_progress', 'done', 'cancelled')),
+    due_date    date,
+    comment_id  uuid REFERENCES "${SCHEMA}".domain_comments(id) ON DELETE SET NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_domain_tasks_assignee
+    ON "${SCHEMA}".domain_tasks(lower(assignee), status);
+CREATE INDEX IF NOT EXISTS idx_domain_tasks_domain
+    ON "${SCHEMA}".domain_tasks(domain_id, version);
 SQL
     then
-        echo "  ✓ schema migrations applied (domain_versions.status, domains.review_quorum, build_runs, domain_review_events)"
+        echo "  ✓ schema migrations applied (domain_versions.status, domains.review_quorum, build_runs, domain_review_events, domain_comments, domain_tasks)"
     else
         echo "  ⚠ schema migration failed — continuing (SP grants below may partially succeed)"
     fi

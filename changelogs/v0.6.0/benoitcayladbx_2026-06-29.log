@@ -69,3 +69,88 @@ Modified files:
 - tests/e2e/scenarios/test_scenario_2_collab_lifecycle.py (new)
 
 Tests: `ONTOBRICKS_SCENARIO_LIVE=1 uv run pytest tests/e2e/scenarios/test_scenario_2_collab_lifecycle.py -m scenario -v -s --no-cov` → **1 passed in 49.03s** (V1 PUBLISHED with 3 comments + 2 tasks, V2 DRAFT). Routine suite unaffected (new test is `scenario`-marked → excluded from `-m "not scenario"`).
+
+## Consolidate 0.5.x → 0.6 Lakebase upgrade into a single clean script
+
+Context: The `scripts/upgrade_lakebase_0.5_To_0.6.sql` migration created
+`domain_comments` in the early, *anchored* 0.6 shape (`anchor_type` /
+`anchor_ref` columns + `idx_domain_comments_anchor`). Discussions later became
+domain-wide within the 0.6 cycle, so reaching the final schema required a
+second pass, `scripts/upgrade_lakebase_0.6_drop_comment_anchor.sql`. A user
+upgrading "0.5.x → 0.6" therefore had to run two scripts and briefly
+materialise dead columns. Folded the anchor-drop into the main script so it
+lands the final 0.6 shape (matching the canonical
+`src/back/objects/registry/store/lakebase/schema.sql`) in one idempotent pass.
+
+Changes:
+
+1. scripts/upgrade_lakebase_0.5_To_0.6.sql
+   - `domain_comments` now created in its final (anchor-less) form.
+   - Added a converge step that `DROP INDEX IF EXISTS idx_domain_comments_anchor`
+     and `ALTER TABLE ... DROP COLUMN IF EXISTS anchor_type / anchor_ref`, so
+     installs already created with the anchored shape (earlier draft, app lazy
+     self-heal, or `make bootstrap-lakebase`) converge cleanly. The
+     `anchor_type` CHECK drops with its column.
+   - Replaced the now-irrelevant `idx_domain_comments_anchor` with
+     `idx_domain_comments_lookup (domain_id, version, created_at)`.
+   - Removed the dead `anchor_type` CHECK backfill block; fixed the stale
+     "see 1b" cross-reference in the `domain_tasks` status-CHECK backfill.
+   - Rewrote the header to document the one-shot path and that
+     `upgrade_lakebase_0.6_drop_comment_anchor.sql` is no longer required
+     (kept only for installs already on the intermediate anchored 0.6 shape).
+   - Part 2 (graph `datatype` / `lang` backfill) unchanged.
+
+Note: no schema change was needed for the per-table SELECT "Rights" feature —
+`can_select` / `select_error` live in the version `info` JSONB blob, not a
+column.
+
+Modified files:
+- scripts/upgrade_lakebase_0.5_To_0.6.sql
+
+Tests: not run — SQL-only migration script + changelog, no Python touched. The
+script mirrors the canonical `schema.sql` and is idempotent (`IF EXISTS` /
+`IF NOT EXISTS` guards throughout).
+
+## In-place "update deployed app" script (code + SQL) reusing live config
+
+Context: Updating an already-deployed OntoBricks instance (e.g. pushing the
+latest code + applying pending registry migrations to `ontobricks-060`)
+required editing `scripts/deploy.config.sh` and running `make deploy`. We
+wanted a one-command updater whose ONLY inputs are the two app names, that
+reads every coordinate back from the live apps so it never drifts from
+`deploy.config.sh`. Built it to reuse the existing orchestrators rather than
+duplicate them.
+
+Changes:
+
+1. scripts/update-deployed-app.sh (new)
+   `update-deployed-app.sh <UI_APP> <MCP_APP>`. Introspects each app via
+   `databricks apps get -o json` for its SQL warehouse, registry Volume
+   (catalog.schema.volume), and Lakebase postgres binding (project / branch /
+   db-… segment); fetches the deployed `app.yaml` (UI + MCP) verbatim via
+   `databricks workspace export` so the runtime env (LAKEBASE_SCHEMA /
+   LAKEBASE_DATABASE, triplestore table, MLflow URI, …) is preserved; then
+   delegates the code push to `scripts/deploy.sh -t <target> --skip-app-yaml
+   --no-bootstrap` and the SQL/grants to `scripts/bootstrap-lakebase-perms.sh`
+   with the introspected schema. Volume-only apps skip the SQL step. Mirrors
+   `deploy.sh`'s output/error-trap style.
+2. scripts/deploy.config.sh
+   Made `REGISTRY_SCHEMA` env-overridable (`${REGISTRY_SCHEMA:-$DEFAULT_…}`)
+   so the new script can pin the schema it read back from a live app. Safe:
+   every `make` deploy target already `unset`s `REGISTRY_SCHEMA`, so the
+   routine deploy still uses `DEFAULT_REGISTRY_SCHEMA`.
+3. scripts/bootstrap-lakebase-perms.sh
+   Extended the idempotent step-2b registry migration to also provision
+   `domain_comments` + `domain_tasks` in their final (anchor-less) 0.6 shape
+   (converging any pre-existing anchored table), so both `make deploy` and the
+   new in-place updater provision the collaboration tables as the schema
+   owner instead of relying on the app's lazy self-heal.
+
+Modified files:
+- scripts/update-deployed-app.sh (new)
+- scripts/deploy.config.sh
+- scripts/bootstrap-lakebase-perms.sh
+
+Tests: not run — shell/SQL tooling only, no Python touched. Validated with
+`bash -n` on all three scripts (syntax OK) and verified `deploy.config.sh`
+honours both the `REGISTRY_SCHEMA` override and the `unset` (default) path.
