@@ -1216,6 +1216,32 @@ class LakebaseRegistryStore(RegistryStore):
             )
             return False, str(exc)
 
+    def get_version_status(
+        self, folder: str, version: str
+    ) -> Optional[str]:
+        """Cheap single-column lifecycle status lookup (no document read)."""
+        try:
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT v.status
+                    FROM {self._q(self._schema)}.domain_versions v
+                    JOIN {self._q(self._schema)}.domains d
+                      ON d.id = v.domain_id
+                    WHERE d.registry_id = %s
+                      AND d.folder = %s
+                      AND v.version = %s
+                    """,
+                    (self._registry(), folder, version),
+                )
+                row = cur.fetchone()
+            return row[0] if row else None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "get_version_status(%s/%s) failed: %s", folder, version, exc
+            )
+            return None
+
     # ------------------------------------------------------------------
     # Permissions
     # ------------------------------------------------------------------

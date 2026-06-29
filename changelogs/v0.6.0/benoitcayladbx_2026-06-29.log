@@ -154,3 +154,55 @@ Modified files:
 Tests: not run — shell/SQL tooling only, no Python touched. Validated with
 `bash -n` on all three scripts (syntax OK) and verified `deploy.config.sh`
 honours both the `REGISTRY_SCHEMA` override and the `unset` (default) path.
+
+## Fix published-version edit lock + stale lifecycle status
+
+Context: A PUBLISHED version (`test_scenario_1 V1`, published out-of-band by
+the scenario-2 collab suite) still showed a `Draft` badge in the navbar and
+stayed editable. Two distinct defects: (1) the navbar badge and the
+read-only gate derived the lifecycle status from the in-session `info.status`
+snapshot taken at load time, so a publish/reopen done in another session was
+never reflected without a manual reload; (2) read-only was enforced only by a
+frontend CSS body-class — `version_lifecycle.is_editable()` was dead code, so
+the backend would happily overwrite (and silently revert to DRAFT) a PUBLISHED
+version via `save-to-uc`, a direct API call, or a stale session.
+
+Changes:
+
+1. src/back/objects/registry/store/base.py
+   Added a concrete default `get_version_status(folder, version) -> str|None`
+   on the store ABC (derives status from the full document; never raises on a
+   missing domain/version).
+2. src/back/objects/registry/store/lakebase/store.py
+   Overrode `get_version_status` with a cheap single-column SELECT on the
+   denormalised `domain_versions.status` (no full-document read) — version
+   status is polled frequently by the UI.
+3. src/back/objects/registry/RegistryService.py
+   Exposed a `get_version_status` passthrough to the store.
+4. src/back/objects/domain/Domain.py
+   `get_version_status` now reads the authoritative lifecycle status from the
+   registry for the loaded version and self-heals the in-session snapshot
+   (`info.status` + `save()`), so an out-of-band transition surfaces without a
+   reload. `save_domain_to_uc` now rejects an overwrite of any non-DRAFT
+   version with a `ConflictError` (mirrors `CommentService._require_writable`),
+   making `is_editable()` an enforced server-side gate. Imported `is_editable`.
+5. tests/units/domain/test_domain_service.py
+   Added `TestGetVersionStatusAuthoritative` (self-heal from registry; keep
+   session status when registry is silent) and `TestSaveDomainToUcLifecycleLock`
+   (reject PUBLISHED/IN-REVIEW overwrite; allow DRAFT).
+
+Modified files:
+- src/back/objects/registry/store/base.py
+- src/back/objects/registry/store/lakebase/store.py
+- src/back/objects/registry/RegistryService.py
+- src/back/objects/domain/Domain.py
+- tests/units/domain/test_domain_service.py
+
+Tests: `uv run pytest -q -m "not scenario"` → 3003 passed, 58 failed, 17
+skipped, 3 deselected in 261s. All 58 failures are the pre-existing
+event-loop/test-isolation flakes (`RuntimeError: Runner.run() cannot be called
+from a running event loop`) in the MCP/API endpoint suites — confirmed
+unrelated by re-running the affected files in isolation (13/13 passed). The 5
+new tests pass. Also verified live against the dev server: loading PUBLISHED
+`test_scenario_1 V1` then `POST /domain/save-to-uc` now returns `HTTP 409`
+("Version 1 is PUBLISHED (read-only)…").

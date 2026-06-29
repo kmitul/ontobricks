@@ -45,6 +45,7 @@ from back.core.helpers import (
 from back.core.logging import get_logger
 from back.objects.registry import RegistryService
 from back.objects.registry.registry_cache import invalidate_registry_cache
+from back.objects.registry.version_lifecycle import is_editable
 from back.objects.session import sanitize_domain_folder
 from back.core.task_manager import get_task_manager
 from back.objects.domain._metadata_tasks import (
@@ -70,17 +71,27 @@ def merge_table_metadata(
     catalog: str,
     schema: str,
     table_name: str,
+    select_probe: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Merge freshly-fetched UC metadata into an existing table dict in-place.
 
     Preserves user-edited column comments that the UC schema has lost.
     Shared by :meth:`Domain.update_metadata_tables` and the async
     task variant in ``_metadata_tasks``.
+
+    When *select_probe* is provided (the dict returned by
+    :meth:`UnityCatalog.check_table_select_permission`), the table's
+    ``can_select`` / ``select_error`` fields are refreshed so the Data Sources
+    "Rights" column stops reporting *unknown* for tables loaded before the probe
+    existed.
     """
     old_table["full_name"] = f"{catalog}.{schema}.{table_name}"
     if table_comment:
         old_table["comment"] = table_comment
         old_table["description"] = table_comment
+    if select_probe is not None:
+        old_table["can_select"] = select_probe.get("can_select")
+        old_table["select_error"] = select_probe.get("error")
     if new_columns:
         old_column_comments: Dict[str, str] = {}
         for col in old_table.get("columns", []):
@@ -705,6 +716,19 @@ class Domain:
                     f'A domain named "{folder}" already exists in the registry. Please choose a different name.',
                 )
             version = self._s.current_version or "1"
+            # Lifecycle lock: never overwrite a version that is no longer a
+            # DRAFT. Mirrors ``CommentService._require_writable`` so the
+            # published (or in-review) artifact is protected on the server
+            # even when the UI read-only gate is bypassed — e.g. a stale
+            # session or a direct API call. Absent version (None) means a
+            # brand-new version row, which is always writable.
+            if not is_new_domain:
+                live_status = svc.get_version_status(folder, version)
+                if live_status and not is_editable(live_status):
+                    raise ConflictError(
+                        f"Version {version} is {live_status} (read-only). "
+                        f"Reopen it to DRAFT before saving changes."
+                    )
             export_data = self._s.export_for_save()
             # A brand-new domain always starts as DRAFT; an overwrite of an
             # existing version preserves whatever status the session carries.
@@ -954,6 +978,7 @@ class Domain:
 
             available_versions: List[str] = []
             active_version: Optional[str] = None
+            live_status: Optional[str] = None
             if has_registry:
                 try:
                     svc = self.build_registry_service()
@@ -961,6 +986,7 @@ class Domain:
                     available_versions = svc.list_versions_sorted(folder)
                     mcp_ver, _ = svc.find_mcp_version(folder)
                     active_version = mcp_ver
+                    live_status = svc.get_version_status(folder, version)
                 except Exception as e:
                     logger.warning("Could not fetch versions from UC: %s", e)
                     available_versions = [version]
@@ -975,7 +1001,21 @@ class Domain:
             # is exposed separately via ``active_version`` so the Cockpit
             # tile can show what's actually live on the API/MCP surface.
             is_active = is_latest
+            # Lifecycle status is authoritative from the registry: a
+            # transition performed out-of-band (e.g. a publish in another
+            # session) must be reflected without a manual reload. Self-heal
+            # the in-session snapshot so the navbar badge and the read-only
+            # gate stay consistent with reality.
             status = self._s.info.get("status", "DRAFT")
+            if live_status and live_status != status:
+                status = live_status
+                self._s.info["status"] = live_status
+                try:
+                    self._s.save()
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug(
+                        "version status self-heal save failed: %s", exc
+                    )
             result = {
                 "success": True,
                 "version": version,
@@ -1807,6 +1847,9 @@ class Domain:
                     logger.debug(
                         "Metadata update: table comment from UC: %s", table_comment
                     )
+                    select_probe = client.check_table_select_permission(
+                        catalog, schema, table_name
+                    )
                     merge_table_metadata(
                         old_table,
                         new_columns,
@@ -1814,6 +1857,7 @@ class Domain:
                         catalog,
                         schema,
                         table_name,
+                        select_probe=select_probe,
                     )
                     updated_count += 1
                     logger.debug("Metadata update: successfully updated %s", table_name)

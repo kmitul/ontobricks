@@ -869,6 +869,12 @@ class RegistryService:
             invalidate_registry_cache(self.cache_key)
         return ok, msg
 
+    def get_version_status(
+        self, folder: str, version: str
+    ) -> Optional[str]:
+        """Live lifecycle status of one version (``None`` when absent)."""
+        return self._store.get_version_status(folder, version)
+
     # -- review / validation audit log -------------------------------
 
     def record_review_event(

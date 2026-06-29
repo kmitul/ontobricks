@@ -247,6 +247,20 @@ class RegistryStore(ABC):
         a single (domain, version) without rewriting the full document.
         """
 
+    def get_version_status(
+        self, folder: str, version: str
+    ) -> Optional[str]:
+        """Return the lifecycle status of one version, or ``None`` if absent.
+
+        Default derives it from the full document; stores with a
+        denormalised ``status`` column should override with a cheap query.
+        Must NOT raise on missing domain/version.
+        """
+        ok, data, _ = self.read_version(folder, version)
+        if not ok:
+            return None
+        return (data.get("info", {}) or {}).get("status")
+
     # ------------------------------------------------------------------
     # Domain-level permissions
     # ------------------------------------------------------------------
