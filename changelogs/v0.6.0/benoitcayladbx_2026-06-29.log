@@ -206,3 +206,32 @@ unrelated by re-running the affected files in isolation (13/13 passed). The 5
 new tests pass. Also verified live against the dev server: loading PUBLISHED
 `test_scenario_1 V1` then `POST /domain/save-to-uc` now returns `HTTP 409`
 ("Version 1 is PUBLISHED (read-only)…").
+
+## Pin local uv sync to --frozen (stop lockfile index-URL churn)
+
+Context: `uv.lock` kept showing as modified after every `scripts/start.sh` /
+test run. The diff was 4040/4040 lines with **zero dependency-version changes**
+— purely the package index being rewritten from the public CDN
+(`pypi.org` / `files.pythonhosted.org`) to the internal proxy
+(`pypi-proxy.dev.databricks.com`), driven by the shell's `UV_INDEX_URL` /
+`PIP_INDEX_URL`. The committed lock is deliberately pinned to the public CDN
+(see `afa8d32` / `d9cf05a` / `cb0a6ee`) because the Databricks Apps deploy runs
+`uv run --frozen` and the proxy cold-cache crashed deploys. Local `uv sync`
+without `--frozen` was re-resolving and rewriting those URLs.
+
+Changes:
+
+1. scripts/start.sh
+   `uv sync` → `uv sync --frozen` so starting the dev server installs exactly
+   from the committed lockfile and never rewrites its index URLs.
+2. scripts/setup.sh
+   Same `--frozen` pin on the initial environment sync (a dep change now
+   requires an explicit `uv lock`, which is the desired forcing function).
+
+Modified files:
+- scripts/start.sh
+- scripts/setup.sh
+
+Tests: not run — local dev tooling only, no Python touched. Validated with
+`bash -n scripts/start.sh scripts/setup.sh` (syntax OK); `uv.lock` restored to
+the committed public-CDN state and no longer shows as modified.
