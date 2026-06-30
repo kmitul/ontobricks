@@ -404,7 +404,7 @@ async def detect_clusters(
         resolution = float(data.get("resolution", 1.0))
         predicate_filter = data.get("predicate_filter")
         class_filter = data.get("class_filter")
-        max_triples = int(data.get("max_triples", 500_000))
+        max_triples = int(data.get("max_triples", settings.analytics_max_triples))
 
         domain = get_domain(session_mgr)
         graph_name = effective_graph_name(domain)
@@ -487,7 +487,7 @@ async def compute_graph_metrics(
             data = {}
         predicate_filter = data.get("predicate_filter")
         class_filter = data.get("class_filter")
-        max_triples = int(data.get("max_triples", 500_000))
+        max_triples = int(data.get("max_triples", settings.analytics_max_triples))
         max_nodes_betweenness = int(data.get("max_nodes_betweenness", 2_000))
 
         domain = get_domain(session_mgr)
@@ -496,6 +496,22 @@ async def compute_graph_metrics(
             raise ValidationError("Graph name is not configured")
 
         store = _require_graph_store(domain, settings)
+
+        # Fail fast on graphs too large for in-memory analysis — the triple
+        # count is already known, so reject here instead of spawning a
+        # background task that would only fail after loading everything.
+        try:
+            total_triples = int(store.get_aggregate_stats(graph_name).get("total", 0))
+        except Exception:  # noqa: BLE001
+            total_triples = 0
+        if total_triples and total_triples > max_triples:
+            raise ValidationError(
+                f"This Knowledge Graph has {total_triples:,} triples, which "
+                f"exceeds the analytics limit of {max_triples:,}. In-memory "
+                f"centrality/structure analysis is disabled for graphs this "
+                f"large — reduce the synced graph (exclude entity types in "
+                f"KG → Sync) or raise ONTOBRICKS_ANALYTICS_MAX_TRIPLES."
+            )
 
         tm = get_task_manager()
         task = tm.create_task(
@@ -1285,6 +1301,10 @@ async def triplestore_stats(
             "type_assertion_count": type_count,
             "relationship_count": max(relationship_count, 0),
             "inferred_triples": inferred_count,
+            # Effective KG-analytics safety limit, so the Analytics page can
+            # warn up-front when total_triples exceeds it (in-memory NetworkX
+            # guard; see Settings.analytics_max_triples).
+            "analytics_max_triples": settings.analytics_max_triples,
         }
         DigitalTwin(domain).set_ts_cache("stats", result)
         return result

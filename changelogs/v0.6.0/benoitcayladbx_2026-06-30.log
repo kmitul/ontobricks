@@ -1,3 +1,94 @@
+## Analytics — refactor pass + full verification
+
+Context: Post-change cleanup of this session's analytics work, plus a full test
+run, docs sweep, and deployment/SQL verification (no behaviour change).
+
+Changes:
+
+1. src/back/objects/digitaltwin/DigitalTwin.py
+   - Extract Function: new `DigitalTwin._analytics_run_entry(...)` builds a
+     `graph_analytics_runs` history row in one place; `run_metrics_task` success
+     and failure paths now call it instead of duplicating the dict literal.
+2. docs/get-started.md
+   - Documented `ONTOBRICKS_ANALYTICS_MAX_TRIPLES` (new env var table row +
+     `.env` example).
+
+Deployment / SQL verification (no code change):
+- `scripts/deploy.sh` runs `scripts/bootstrap-lakebase-perms.sh` on every
+  Lakebase-target deploy; its inline migration block now creates
+  `graph_analytics` and `graph_analytics_runs` (idempotent, ON_ERROR_STOP),
+  and the subsequent GRANT step covers ALL TABLES + ALL SEQUENCES (so the app
+  SP can INSERT into the bigserial-keyed run-history table). `schema.sql` and
+  `scripts/upgrade_lakebase_0.6_add_graph_analytics.sql` carry the same DDL.
+- `make bundle-validate` → OK (only pre-existing benign sync.exclude warnings).
+- `uv.lock` verified deploy-safe (restored to public CDN; 0 proxy URLs).
+
+Modified files:
+- src/back/objects/digitaltwin/DigitalTwin.py
+- docs/get-started.md
+
+Tests: full `uv run pytest -q -m "not scenario"` → 3021 passed, 58 failed,
+17 skipped. The 58 are the pre-existing full-suite event-loop/test-isolation
+flakes (test_comment_endpoints / test_review_endpoints /
+test_set_version_status_endpoint / test_domain_current_user_endpoint) —
+confirmed unrelated: they pass when run in isolation.
+
+
+## Analytics — warn up-front when the graph exceeds the triple limit
+
+Context: On a large store, Run Analysis failed only after the background task
+loaded everything: "Triple count (7641879) exceeds max_triples (500000)". The
+500k limit was a hardcoded default (`MetricsRequest.max_triples`, read by the
+compute endpoints as `data.get("max_triples", 500_000)`, enforced in
+`GraphBuilder._load_triples`). Two problems: (1) the triple count is already
+known via `/dtwin/sync/stats`, so the user should be warned *before* running;
+(2) the error advised "use a predicate or class filter", but the guard runs on
+the FULL load — filters are applied later in `_build_graph` and do not reduce
+what is read, so they never lift the limit.
+
+Fix:
+- Made the limit a configurable setting `analytics_max_triples`
+  (env `ONTOBRICKS_ANALYTICS_MAX_TRIPLES`, default 500_000); both compute
+  endpoints now default to it.
+- `/dtwin/sync/stats` returns `analytics_max_triples`; the Analytics page reads
+  it alongside `total_triples` and, when over the limit, shows a red banner and
+  disables Run Analysis up-front (with a backstop check on click).
+- The async compute endpoint fails fast (clear `ValidationError`) when the known
+  triple count already exceeds the limit, instead of spawning a doomed task.
+- Corrected the `GraphBuilder._load_triples` message (and added a code comment)
+  to advise reducing the synced graph or raising the limit — not filtering.
+
+Changes:
+
+1. src/shared/config/settings.py
+   New `analytics_max_triples` setting (env `ONTOBRICKS_ANALYTICS_MAX_TRIPLES`).
+2. src/api/routers/internal/dtwin.py
+   Both `max_triples` defaults now use `settings.analytics_max_triples`;
+   `/metrics/compute` pre-checks `get_aggregate_stats().total` and raises a
+   clear `ValidationError` when over the limit; `/sync/stats` returns
+   `analytics_max_triples`.
+3. src/back/core/graph_analysis/GraphBuilder.py
+   Accurate over-limit message + clarifying comment (filters don't reduce the
+   load).
+4. src/front/templates/partials/dtwin/_query_analytics.html
+   `_loadEntityTypes()` captures `total_triples` / `analytics_max_triples`,
+   shows `_showOverLimitBanner()` and disables Run Analysis when over the limit;
+   `analyticsCompute()` backstop blocks a doomed run.
+5. docs/user-guide.md
+   Documented the graph-size limit and the up-front warning.
+
+Modified files:
+- src/shared/config/settings.py
+- src/api/routers/internal/dtwin.py
+- src/back/core/graph_analysis/GraphBuilder.py
+- src/front/templates/partials/dtwin/_query_analytics.html
+- docs/user-guide.md
+
+Tests: `uv run pytest -q -m "not scenario" tests/units/core/test_graph_metrics.py
+tests/units/core/test_community_detector.py tests/units/dtwin/test_digitaltwin_api.py`
+→ 89 passed.
+
+
 ## Analytics — always render the last run in the result tabs on open
 
 Context: Opening the Analytics section should immediately populate the result

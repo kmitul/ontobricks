@@ -528,6 +528,8 @@ Click **Analytics** in the sidebar to compute and visualise centrality and struc
 
 Because this computation can take a while on large graphs, it runs **asynchronously** in the background. The **last** result is persisted in the registry (the `graph_analytics` table), so re-opening the Analytics page (or the Domain Validation cockpit) shows the previously computed result immediately without recomputing — a "Last computed …" line marks when it was produced.
 
+> **Graph-size limit.** The analysis loads the full triple set into memory (NetworkX), so it is capped at `ONTOBRICKS_ANALYTICS_MAX_TRIPLES` triples (default **500,000**). Because the triple count is already known, the Analytics page warns and disables **Run Analysis** up-front when the graph is over the limit — you never wait for a background job only to see it fail. Class/predicate filters narrow the *charts*, not the load, so they do **not** lift this limit; reduce the synced graph (exclude entity types in **KG → Sync**) or raise the setting.
+
 #### Running an Analysis
 
 1. (Optional) Select an **entity type** from the dropdown to restrict the analysis to one class (e.g. "Customer"). Selecting a type shows only instances of that type in the charts while still computing metrics on the full connected subgraph for accuracy. "All types (full graph)" includes every entity.

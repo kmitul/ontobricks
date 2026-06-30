@@ -499,6 +499,12 @@ the workspace token (locally) or the SP token (in Apps).
 |----------|-------------|---------|
 | `ONTOBRICKS_URL` | URL of the main OntoBricks app (used by the MCP server) | `http://localhost:8000` |
 
+#### Knowledge Graph Analytics
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ONTOBRICKS_ANALYTICS_MAX_TRIPLES` | Max triples loaded into memory for the NetworkX centrality/structure analysis. Graphs larger than this are rejected up-front (the Analytics page warns and disables **Run Analysis** using the known triple count). Class/predicate filters narrow the charts, not the load, so they don't lift this limit. | `500000` |
+
 #### Databricks Runtime Detection
 
 | Variable | Description | Set By |
@@ -527,6 +533,7 @@ DATABRICKS_APP_PORT=8000
 LOG_FORMAT=json                        # Structured JSON logging (default: text)
 LOG_LEVEL=INFO                         # DEBUG, INFO, WARNING, ERROR, CRITICAL
 ONTOBRICKS_THREAD_POOL_SIZE=20         # Max threads for blocking I/O
+ONTOBRICKS_ANALYTICS_MAX_TRIPLES=500000  # KG analytics in-memory triple cap
 ```
 
 #### Shell Export

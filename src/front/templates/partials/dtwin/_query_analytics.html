@@ -380,6 +380,8 @@
     var _analyticsLastSections = null;
     var _charts = {};
     var _allTypes = [];   // [{ name, uri, count }] — populated from /dtwin/sync/stats
+    var _totalTriples = null;   // known triple count (from /dtwin/sync/stats)
+    var _maxTriples   = null;   // analytics safety limit (from /dtwin/sync/stats)
 
     // ------------------------------------------------------------------
     // Metric explanations — shown in popup when user clicks ? on a card
@@ -505,6 +507,34 @@
         }
     }
 
+    // Warn (and block) up-front when the graph is too large for in-memory
+    // analytics — the triple count is already known from /dtwin/sync/stats, so
+    // there is no point letting the user start a background job that will fail.
+    function _showOverLimitBanner(show) {
+        var existing = document.getElementById('analyticsOverLimitBanner');
+        if (show && !existing) {
+            var banner = document.createElement('div');
+            banner.id = 'analyticsOverLimitBanner';
+            banner.className = 'alert alert-danger d-flex align-items-start gap-2 small mb-3';
+            banner.innerHTML = '<i class="bi bi-exclamation-octagon-fill flex-shrink-0 mt-1"></i>'
+                + '<span>This Knowledge Graph has <strong>' + (_totalTriples || 0).toLocaleString() + '</strong> triples, '
+                + 'which exceeds the analytics limit of <strong>' + (_maxTriples || 0).toLocaleString() + '</strong>. '
+                + 'In-memory centrality &amp; structure analysis is disabled for graphs this large — '
+                + 'reduce the synced graph (exclude entity types in <strong>KG &rarr; Sync</strong>) '
+                + 'or ask an admin to raise <code>ONTOBRICKS_ANALYTICS_MAX_TRIPLES</code>.</span>';
+            var section = document.getElementById('analyticsSection');
+            var header = section && section.querySelector('.section-header');
+            if (header) header.insertAdjacentElement('afterend', banner);
+        } else if (!show && existing) {
+            existing.remove();
+        }
+    }
+
+    // True when the known triple count is over the analytics limit.
+    function _isOverTripleLimit() {
+        return _totalTriples != null && _maxTriples != null && _totalTriples > _maxTriples;
+    }
+
     // Load entity types from the live KG stats and populate the <select>
     async function _loadEntityTypes() {
         var sel = document.getElementById('analyticsTypeSelect');
@@ -538,8 +568,21 @@
             }
             _allTypes = data.entity_types || [];
             _populateTypeSelect(sel);
-            _setComputeBtnState(true);
             _showNoGraphBanner(false);
+
+            // Pre-flight size guard: the triple count is known here, so warn
+            // and disable Run Analysis up-front rather than failing later.
+            _totalTriples = (data.total_triples != null) ? data.total_triples : null;
+            _maxTriples   = data.analytics_max_triples || _maxTriples;
+            if (_isOverTripleLimit()) {
+                _showOverLimitBanner(true);
+                _setComputeBtnState(false,
+                    'Graph too large: ' + _totalTriples.toLocaleString()
+                    + ' triples exceeds the analytics limit of ' + _maxTriples.toLocaleString());
+            } else {
+                _showOverLimitBanner(false);
+                _setComputeBtnState(true);
+            }
         } catch (e) {
             sel.innerHTML = '<option value="">All types (full graph)</option>';
         }
@@ -812,6 +855,16 @@
     };
 
     window.analyticsCompute = async function () {
+        // Backstop: never start a doomed run when the graph is over the limit.
+        if (_isOverTripleLimit()) {
+            _showOverLimitBanner(true);
+            _showAnalyticsError('This graph has ' + _totalTriples.toLocaleString()
+                + ' triples, which exceeds the analytics limit of '
+                + _maxTriples.toLocaleString()
+                + '. Reduce the synced graph (KG → Sync) or raise ONTOBRICKS_ANALYTICS_MAX_TRIPLES.');
+            return;
+        }
+
         _setAnalysisBusy(true);
 
         _resetAnalyticsCards();

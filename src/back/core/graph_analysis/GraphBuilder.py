@@ -37,11 +37,16 @@ class GraphBuilder:
     def _load_triples(self, request: Any) -> List[Dict[str, str]]:
         """Query triples from the store with a max_triples guard."""
         triples = self._store.query_triples(self._graph_name)
+        # NOTE: the guard is on the *full* triple load — class/predicate filters
+        # are applied later in ``_build_graph`` and do NOT reduce what is read
+        # here, so the only levers are shrinking the synced graph or raising the
+        # limit (``ONTOBRICKS_ANALYTICS_MAX_TRIPLES``).
         if len(triples) > request.max_triples:
             raise ValueError(
                 f"Triple count ({len(triples)}) exceeds max_triples "
-                f"({request.max_triples}). Use a predicate or class filter, "
-                f"or increase max_triples."
+                f"({request.max_triples}). Reduce the synced graph (exclude "
+                f"entity types in KG \u2192 Sync) or raise the analytics limit "
+                f"(ONTOBRICKS_ANALYTICS_MAX_TRIPLES)."
             )
         return triples
 

@@ -2578,6 +2578,37 @@ class DigitalTwin:
                 tm.fail_task(task_id, failure_message)
 
     @staticmethod
+    def _analytics_run_entry(
+        *,
+        status: str,
+        class_filter: List[str],
+        task_id: str,
+        duration_ms: int,
+        computed_at: str,
+        stats: Optional[Dict[str, Any]] = None,
+        error: str = "",
+    ) -> Dict[str, Any]:
+        """Build one ``graph_analytics_runs`` history row (success or failure).
+
+        Shared by the success and failure paths of :meth:`run_metrics_task` so
+        the lightweight metric metadata is shaped in exactly one place.
+        """
+        stats = stats or {}
+        return {
+            "status": status,
+            "class_filter": class_filter,
+            "node_count": int(stats.get("node_count", 0) or 0),
+            "edge_count": int(stats.get("edge_count", 0) or 0),
+            "connected_components": int(stats.get("connected_components", 0) or 0),
+            "avg_degree": float(stats.get("avg_degree", 0) or 0),
+            "density": float(stats.get("density", 0) or 0),
+            "duration_ms": duration_ms,
+            "task_id": task_id,
+            "error": error,
+            "computed_at": computed_at,
+        }
+
+    @staticmethod
     def run_metrics_task(
         tm,
         task_id: str,
@@ -2648,21 +2679,14 @@ class DigitalTwin:
                 svc.record_graph_analytics_run(
                     folder,
                     version,
-                    {
-                        "status": "completed",
-                        "class_filter": class_filter_list,
-                        "node_count": int(stats.get("node_count", 0) or 0),
-                        "edge_count": int(stats.get("edge_count", 0) or 0),
-                        "connected_components": int(
-                            stats.get("connected_components", 0) or 0
-                        ),
-                        "avg_degree": float(stats.get("avg_degree", 0) or 0),
-                        "density": float(stats.get("density", 0) or 0),
-                        "duration_ms": duration_ms,
-                        "task_id": task_id,
-                        "error": "",
-                        "computed_at": now_iso,
-                    },
+                    DigitalTwin._analytics_run_entry(
+                        status="completed",
+                        class_filter=class_filter_list,
+                        task_id=task_id,
+                        duration_ms=duration_ms,
+                        computed_at=now_iso,
+                        stats=stats,
+                    ),
                 )
             else:
                 logger.warning(
@@ -2691,14 +2715,14 @@ class DigitalTwin:
                     ).record_graph_analytics_run(
                         folder,
                         version,
-                        {
-                            "status": "failed",
-                            "class_filter": class_filter_list,
-                            "duration_ms": int((_time.time() - t0) * 1000),
-                            "task_id": task_id,
-                            "error": str(exc),
-                            "computed_at": datetime.now(timezone.utc).isoformat(),
-                        },
+                        DigitalTwin._analytics_run_entry(
+                            status="failed",
+                            class_filter=class_filter_list,
+                            task_id=task_id,
+                            duration_ms=int((_time.time() - t0) * 1000),
+                            computed_at=datetime.now(timezone.utc).isoformat(),
+                            error=str(exc),
+                        ),
                     )
                 except Exception:  # noqa: BLE001
                     pass
