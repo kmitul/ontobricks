@@ -1,0 +1,101 @@
+## Add scenario 3 — rules → data quality → reasoning → analysis → audit trail
+
+Context: New live, gated journey that runs **after scenarios 1 and 2** and
+reuses the durable ``test_scenario_1`` domain. It exercises the "governed
+enrichment" loop on top of a built knowledge graph: generate data-quality
+rules (SHACL) and business rules (SWRL / decision tables / SPARQL / aggregate),
+run the data-quality rules on the knowledge graph, run the business rules and
+materialise the inferred triples back into the graph, then run the graph
+Analysis, interpret it with the graph-interpreter agent, and record the
+interpreted result in the unified audit trail. Mapped each step to the real
+internal API and honoured the lifecycle constraints discovered while reading
+the code.
+
+Key design decisions:
+- Targets the highest **DRAFT** version (V2 after scenario 2), never the
+  PUBLISHED V1: comments/tasks — the surface the audit trail is written through
+  — are writable only in DRAFT/IN-REVIEW.
+- A freshly branched version (scenario 2's ``create-version``) carries the
+  ontology + mappings but has no graph data, so the scenario builds the KG once
+  (and skips the costly rebuild on re-runs by checking ``/dtwin/sync/status``).
+- Data-quality generation uses the deterministic
+  ``GET /ontology/dataquality/suggest`` + ``accept-suggestions`` (no LLM);
+  business-rule generation uses the async ``agent_business_rules_generator``.
+- Data-quality runs against ``backend=graph``; reasoning enables every phase
+  (tbox/swrl/graph/decision_tables/sparql_rules/aggregate_rules), then
+  ``/dtwin/reasoning/materialize`` writes the inferred triples to the graph.
+- Analysis = ``/dtwin/metrics/compute`` then ``/dtwin/metrics/interpret``.
+- "Add the result to the audit trail": a plain comment is *not* recorded in the
+  review audit log, but a task that anchors a comment appends a ``commented``
+  row — so the scenario posts the full write-up as a comment, creates a task
+  referencing it, and asserts the event surfaces in ``/domain/audit-trail``.
+
+Changes:
+
+1. tests/e2e/scenarios/test_scenario_3_rules_analysis.py (new)
+   New scenario ``TestScenario3RulesAnalysis``. Gated by
+   ``ONTOBRICKS_SCENARIO_LIVE=1`` + the ``scenario`` marker (auto-applied by
+   the scenarios conftest). Skips with guidance when the domain is absent or has
+   no DRAFT version (run scenarios 1 & 2 first). Idempotent: reuses an existing
+   KG, only accepts new rule suggestions, and tolerates a run that infers
+   nothing (materialise step becomes a no-op). Env-tunable timeouts for build /
+   rule-gen / data-quality / reasoning / analysis.
+
+Modified files:
+- tests/e2e/scenarios/test_scenario_3_rules_analysis.py (new)
+
+Tests: `uv run pytest -q -m "not scenario"` → 3003 passed, 58 failed, 17
+skipped, 4 deselected in 271s. The new scenario is `scenario`-marked, so it is
+deselected from the routine run; it collects cleanly (`--collect-only` → 1 item)
+and the gate skips it without the env var (`1 skipped`). The 58 failures are the
+pre-existing full-suite event-loop/test-isolation flakes in the API/MCP suites
+(`RuntimeError: Runner.run() cannot be called from a running event loop`) —
+confirmed unrelated by re-running the affected files in isolation/together
+(e.g. `test_review_endpoints.py` + `test_comment_endpoints.py` → 16/16 passed).
+The live journey itself was not executed (requires a running app + SQL
+warehouse + LLM serving endpoint + scenarios 1 & 2 having run); run it with
+`ONTOBRICKS_SCENARIO_LIVE=1 uv run pytest
+tests/e2e/scenarios/test_scenario_3_rules_analysis.py -m scenario -v -s --no-cov`.
+
+
+## Mapping Diagnostics — exclude relationships of excluded entities + row counts
+
+Context: In Mapping Diagnostics a relationship pointing at an excluded entity
+(e.g. `has: Meter → MeterReading` when `MeterReading` is excluded) was wrongly
+reported as an "target entity not found" error. The relationship should follow
+the entity and be treated as excluded too. Also added per-item row counts:
+each Entity and Relationship now shows the number of rows returned by its source
+query so users can spot empty/large sources at a glance.
+
+Changes:
+
+1. src/back/objects/mapping/Mapping.py
+   - `run_diagnostics`: drop relationships whose source/target resolves to an
+     excluded entity (new `_references_excluded_entity` helper), so they no
+     longer surface as errors. Genuinely missing (non-excluded) entities still
+     error as before.
+   - Extracted `_index_entities_by_alias` from `_build_entity_lookup` so the
+     same alias index can be built for excluded entities (Extract Method).
+   - Replaced `_check_query_has_data` with `_probe_query_rows`, a single
+     `COUNT(*)` round-trip returning both the data-presence check and the row
+     count (no extra query). Entity/relationship results now carry `row_count`.
+2. src/front/static/mapping/js/mapping-diagnostics.js
+   - New `_countBadge` helper; render the row-count badge in entity and
+     relationship headers.
+3. src/front/static/mapping/css/mapping-diagnostics.css
+   - Styles for `.diag-count-badge` (and `.diag-count-empty` for zero rows).
+4. tests/units/mapping/test_mapping_service.py
+   - New `TestProbeQueryRows`, `TestRunDiagnosticsExcludedEntityRelationships`,
+     and `TestRunDiagnosticsRowCounts`.
+
+Modified files:
+- src/back/objects/mapping/Mapping.py
+- src/front/static/mapping/js/mapping-diagnostics.js
+- src/front/static/mapping/css/mapping-diagnostics.css
+- tests/units/mapping/test_mapping_service.py
+
+Tests: `uv run pytest -q tests/units/mapping/test_mapping_service.py` → 51 passed.
+Full `uv run pytest -q -m "not scenario"` → 3013 passed, 58 failed (the same
+pre-existing full-suite event-loop/test-isolation flakes documented above;
+confirmed unrelated — the affected API files pass in isolation and alongside the
+mapping tests, 64/64).

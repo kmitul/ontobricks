@@ -1432,12 +1432,43 @@ class Mapping:
             },
         }
 
-    @staticmethod
-    def _check_query_has_data(sql_query: str, client: Any) -> Dict[str, str]:
-        """Execute *sql_query* with LIMIT 1 and report whether it returns rows.
+    @classmethod
+    def _references_excluded_entity(
+        cls, rel: Dict[str, Any], excluded_lookup: Dict[str, Dict]
+    ) -> bool:
+        """Return ``True`` when *rel*'s source or target resolves to an
+        entity the user has excluded.
 
-        Returns a check dict with keys ``check``, ``status``, ``detail``
-        suitable for inclusion in an entity or relationship ``checks`` list.
+        Such a relationship is treated as excluded by the diagnostics —
+        e.g. ``has: Meter → MeterReading`` is dropped when ``MeterReading``
+        is excluded, instead of being reported as a "target entity not
+        found" error.
+        """
+        if not excluded_lookup:
+            return False
+        src = cls._resolve_entity(
+            excluded_lookup,
+            rel.get("source_class", ""),
+            rel.get("source_class_label", ""),
+        )
+        tgt = cls._resolve_entity(
+            excluded_lookup,
+            rel.get("target_class", ""),
+            rel.get("target_class_label", ""),
+        )
+        return bool(src or tgt)
+
+    @staticmethod
+    def _probe_query_rows(
+        sql_query: str, client: Any
+    ) -> Tuple[Dict[str, str], Optional[int]]:
+        """Run ``COUNT(*)`` over *sql_query* and report row presence + count.
+
+        Returns ``(check, row_count)`` where *check* is a dict with keys
+        ``check``, ``status``, ``detail`` suitable for an entity/relationship
+        ``checks`` list, and *row_count* is the number of rows the query
+        returns (``None`` when the probe failed). A single ``COUNT(*)``
+        round-trip yields both the row count and the data-presence signal.
         Errors thrown by the warehouse (e.g. syntax errors, missing tables)
         are surfaced as ``error`` status so the user sees an actionable
         message rather than a silent failure.
@@ -1449,24 +1480,44 @@ class Mapping:
                 sql_query.strip().rstrip(";"),
                 flags=re.IGNORECASE,
             ).strip()
-            rows = client.execute_query(f"{probe} LIMIT 1")
+            rows = client.execute_query(
+                f"SELECT COUNT(*) AS cnt FROM ({probe}) AS _diag_count"
+            )
+            count = 0
             if rows:
-                return {
+                first = rows[0]
+                value = (
+                    next(iter(first.values()))
+                    if isinstance(first, dict)
+                    else first[0]
+                )
+                count = int(value) if value is not None else 0
+            if count > 0:
+                return (
+                    {
+                        "check": "has_data",
+                        "status": "ok",
+                        "detail": f"Query returns {count:,} row(s)",
+                    },
+                    count,
+                )
+            return (
+                {
                     "check": "has_data",
-                    "status": "ok",
-                    "detail": "Query returns data",
-                }
-            return {
-                "check": "has_data",
-                "status": "warning",
-                "detail": "Query returns no rows — source table may be empty",
-            }
+                    "status": "warning",
+                    "detail": "Query returns no rows — source table may be empty",
+                },
+                0,
+            )
         except Exception as exc:  # noqa: BLE001
-            return {
-                "check": "has_data",
-                "status": "error",
-                "detail": f"Query execution failed: {exc}",
-            }
+            return (
+                {
+                    "check": "has_data",
+                    "status": "error",
+                    "detail": f"Query execution failed: {exc}",
+                },
+                None,
+            )
 
     def run_diagnostics(self, *, client: Any = None) -> Dict[str, Any]:
         """Run comprehensive validation on all entity and relationship mappings.
@@ -1492,7 +1543,19 @@ class Mapping:
         entity_lookup = self._build_entity_lookup(entities)
 
         active_entities = [e for e in entities if not e.get("excluded")]
-        active_rels = [r for r in relationships if not r.get("excluded")]
+
+        # A relationship whose source *or* target entity has been excluded is
+        # itself implicitly excluded — flagging it as a "missing entity" error
+        # would be misleading because the user deliberately dropped that side.
+        excluded_lookup = self._index_entities_by_alias(
+            [e for e in entities if e.get("excluded")]
+        )
+        active_rels = [
+            r
+            for r in relationships
+            if not r.get("excluded")
+            and not self._references_excluded_entity(r, excluded_lookup)
+        ]
 
         entity_results = [
             self._diagnose_entity(ent, ont_index) for ent in active_entities
@@ -1502,20 +1565,23 @@ class Mapping:
             for rel in active_rels
         ]
 
-        # When a warehouse client is available, probe each SQL query for data.
+        # When a warehouse client is available, probe each SQL query for row
+        # presence and count, surfacing both in the per-item result.
         if client is not None:
             for ent, result in zip(active_entities, entity_results):
                 sql = (ent.get("sql_query") or "").strip()
                 if sql:
-                    data_check = self._check_query_has_data(sql, client)
+                    data_check, count = self._probe_query_rows(sql, client)
                     result["checks"].append(data_check)
+                    result["row_count"] = count
                     result["status"] = self._aggregate_status(result["checks"])
 
             for rel, result in zip(active_rels, rel_results):
                 sql = (rel.get("sql_query") or "").strip()
                 if sql:
-                    data_check = self._check_query_has_data(sql, client)
+                    data_check, count = self._probe_query_rows(sql, client)
                     result["checks"].append(data_check)
+                    result["row_count"] = count
                     result["status"] = self._aggregate_status(result["checks"])
 
         permission_section = self._run_permission_checks(client)
@@ -1578,12 +1644,11 @@ class Mapping:
         }
 
     @staticmethod
-    def _build_entity_lookup(entities: List[Dict]) -> Dict[str, Dict]:
-        """Index non-excluded entity mappings by every alias used downstream."""
+    def _index_entities_by_alias(entities: List[Dict]) -> Dict[str, Dict]:
+        """Index *entities* by every alias (table, label, class URI, local name)
+        used downstream — no ``excluded`` filtering is applied here."""
         entity_lookup: Dict[str, Dict] = {}
         for m in entities:
-            if m.get("excluded"):
-                continue
             for key in (
                 m.get("table"),
                 m.get("ontology_class_label"),
@@ -1599,6 +1664,13 @@ class Mapping:
                     entity_lookup[local] = m
                     entity_lookup[local.lower()] = m
         return entity_lookup
+
+    @staticmethod
+    def _build_entity_lookup(entities: List[Dict]) -> Dict[str, Dict]:
+        """Index non-excluded entity mappings by every alias used downstream."""
+        return Mapping._index_entities_by_alias(
+            [m for m in entities if not m.get("excluded")]
+        )
 
     @staticmethod
     def _aggregate_status(checks: List[Dict[str, str]]) -> str:
@@ -1748,6 +1820,7 @@ class Mapping:
             "available_columns": (
                 sorted(available_cols) if available_cols else None
             ),
+            "row_count": None,
             "checks": checks,
         }
 
@@ -1916,6 +1989,7 @@ class Mapping:
             "source_class": src_label or src_class,
             "target_class": tgt_label or tgt_class,
             "status": cls._aggregate_status(checks),
+            "row_count": None,
             "checks": checks,
         }
 
