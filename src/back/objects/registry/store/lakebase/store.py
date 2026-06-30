@@ -875,6 +875,106 @@ class LakebaseRegistryStore(RegistryStore):
             logger.exception("Lakebase initialise failed")
             return False, f"Failed to initialise Lakebase registry: {exc}"
 
+    def grant_app_permissions(
+        self, *, app_names: List[str], uc_catalog: str = ""
+    ) -> Dict[str, Any]:
+        """In-app port of ``scripts/bootstrap-lakebase-perms.sh`` (registry schema).
+
+        Runs as the app's own service principal, which **owns** the
+        registry schema after *Initialize* and can therefore ``GRANT`` to
+        the other app service principals (e.g. the MCP companion). Applies,
+        idempotently and best-effort (mirroring the bash script):
+
+        - ``CAN_USE`` on the Lakebase project (control-plane; needs manage
+          on the project),
+        - ``USAGE``/``CREATE``/DML + default privileges on the registry
+          schema (data-plane; needs schema ownership — which the SP has),
+        - ``ALL_PRIVILEGES`` on the Unity Catalog *uc_catalog* when set
+          (needs ``MANAGE`` on the catalog).
+
+        Returns ``{success, granted: [...], warnings: [...], error,
+        schema, apps}``. Control-plane failures degrade to warnings rather
+        than aborting, so the schema grants (the part the SP can always do)
+        still apply.
+        """
+        from back.core.databricks.lakebase_grants import (  # noqa: PLC0415
+            grant_can_use_on_project,
+            grant_schema_privileges,
+            grant_uc_catalog,
+            resolve_app_service_principals,
+        )
+
+        try:
+            from databricks.sdk import WorkspaceClient  # noqa: PLC0415
+
+            api = getattr(WorkspaceClient(), "api_client", None)
+        except Exception as exc:  # noqa: BLE001
+            return {
+                "success": False,
+                "granted": [],
+                "warnings": [],
+                "error": f"Databricks SDK unavailable: {exc}",
+            }
+        if api is None or not hasattr(api, "do"):
+            return {
+                "success": False,
+                "granted": [],
+                "warnings": [],
+                "error": "Databricks api_client unavailable",
+            }
+
+        sp_ids, warnings = resolve_app_service_principals(api, app_names)
+        granted: List[str] = []
+        if not sp_ids:
+            return {
+                "success": False,
+                "granted": granted,
+                "warnings": warnings,
+                "error": (
+                    "Could not resolve any app service principal to grant — "
+                    "check the app name(s)."
+                ),
+            }
+
+        # ── CAN_USE on the Lakebase project (control-plane) ──────────────
+        try:
+            project_short = self._auth.instance_name
+        except Exception as exc:  # noqa: BLE001
+            project_short = ""
+            warnings.append(
+                f"Could not resolve the Lakebase project for the CAN_USE "
+                f"grant ({exc}); skipped."
+            )
+        if project_short:
+            g, w = grant_can_use_on_project(api, project_short, sp_ids)
+            granted.extend(g)
+            warnings.extend(w)
+
+        # ── Postgres schema grants (we own the schema) ───────────────────
+        try:
+            with self._connect() as conn:
+                g, w = grant_schema_privileges(conn, self._schema, sp_ids)
+            granted.extend(g)
+            warnings.extend(w)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Registry schema grants failed to run: %s", exc)
+            warnings.append(f"Schema grants could not run ({exc}).")
+
+        # ── Unity Catalog ALL_PRIVILEGES (managed_synced readback) ───────
+        if uc_catalog:
+            g, w = grant_uc_catalog(api, uc_catalog, sp_ids)
+            granted.extend(g)
+            warnings.extend(w)
+
+        return {
+            "success": True,
+            "granted": granted,
+            "warnings": warnings,
+            "error": None,
+            "schema": self._schema,
+            "apps": list(sp_ids.keys()),
+        }
+
     # ------------------------------------------------------------------
     # Domain listings
     # ------------------------------------------------------------------

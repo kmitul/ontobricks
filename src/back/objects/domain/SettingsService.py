@@ -834,7 +834,23 @@ class SettingsService:
                     "Skipping graph_engine seed after registry init",
                     exc_info=True,
                 )
-            return {"success": ok, "message": msg}
+            # Self-serve the Lakebase grants the app + MCP service principals
+            # need (in-app port of scripts/bootstrap-lakebase-perms.sh). The
+            # app SP owns the schema it just created, so the Postgres grants
+            # always apply; CAN_USE / UC grants are best-effort. Failures are
+            # surfaced in the payload, never fatal to Initialize itself.
+            result: Dict[str, Any] = {"success": ok, "message": msg}
+            try:
+                grant_summary = SettingsService._grant_registry_permissions(
+                    session_mgr, settings
+                )
+                if grant_summary is not None:
+                    result["permissions"] = grant_summary
+            except Exception:  # noqa: BLE001
+                logger.debug(
+                    "Post-initialize permission grant skipped", exc_info=True
+                )
+            return result
         except OntoBricksError:
             raise
         except Exception as e:
@@ -842,6 +858,101 @@ class SettingsService:
             raise InfrastructureError(
                 "Initialize registry failed", detail=str(e)
             ) from e
+
+    @staticmethod
+    def _registry_grant_app_names(settings: Settings) -> List[str]:
+        """Apps whose service principals receive the registry grants.
+
+        The running app first, then the MCP companion (``MCP_APP_NAME`` env
+        → ``mcp-ontobricks`` default) — same resolution as the graph-DB
+        provisioning flow.
+        """
+        app_name = (getattr(settings, "ontobricks_app_name", "") or "").strip()
+        mcp_app_name = (
+            os.environ.get("MCP_APP_NAME", "").strip() or "mcp-ontobricks"
+        )
+        names: List[str] = []
+        for candidate in (app_name, mcp_app_name):
+            if candidate and candidate not in names:
+                names.append(candidate)
+        return names
+
+    @staticmethod
+    def _grant_registry_permissions(
+        session_mgr: SessionManager, settings: Settings
+    ) -> Optional[Dict[str, Any]]:
+        """Apply Lakebase project + registry-schema + UC grants to the app SPs.
+
+        Synchronous core shared by :meth:`initialize_registry_result`
+        (auto-run) and :meth:`grant_registry_permissions_result` (the
+        explicit *Repair permissions* button). Returns ``None`` when the
+        registry is not configured or the Lakebase backend is unavailable;
+        otherwise the ``grant_app_permissions`` summary dict.
+        """
+        rcfg = RegistryCfg.from_session(session_mgr, settings)
+        if not rcfg.is_configured:
+            return None
+        app_names = SettingsService._registry_grant_app_names(settings)
+        if not app_names:
+            return {
+                "success": False,
+                "granted": [],
+                "warnings": [],
+                "error": (
+                    "Could not determine the app name to grant — set "
+                    "ONTOBRICKS_APP_NAME."
+                ),
+            }
+        try:
+            from back.objects.registry.store import RegistryFactory  # noqa: PLC0415
+
+            store = RegistryFactory.lakebase(
+                registry_cfg=rcfg,
+                schema=rcfg.lakebase_schema,
+                database=rcfg.lakebase_database,
+            )
+        except ImportError:
+            return {
+                "success": False,
+                "granted": [],
+                "warnings": [],
+                "error": "psycopg is not installed — Lakebase backend unavailable.",
+            }
+        return store.grant_app_permissions(
+            app_names=app_names,
+            uc_catalog=(rcfg.catalog or "").strip(),
+        )
+
+    @staticmethod
+    async def grant_registry_permissions_result(
+        session_mgr: SessionManager, settings: Settings
+    ) -> Dict[str, Any]:
+        """Explicit *Repair permissions* action for the Registry page.
+
+        In-app equivalent of ``scripts/bootstrap-lakebase-perms.sh`` for the
+        registry schema: re-applies CAN_USE on the project, USAGE/DML on the
+        schema, and ALL_PRIVILEGES on the UC catalog to the app + MCP service
+        principals. Idempotent and safe to re-run after a rebind/redeploy.
+        """
+        rcfg = RegistryCfg.from_session(session_mgr, settings)
+        if not rcfg.is_configured:
+            return {
+                "success": False,
+                "error": "Registry not configured — set REGISTRY_CATALOG / REGISTRY_SCHEMA",
+            }
+        try:
+            summary = await run_blocking(
+                SettingsService._grant_registry_permissions, session_mgr, settings
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("grant_registry_permissions failed: %s", exc)
+            return {"success": False, "error": str(exc)}
+        if summary is None:
+            return {
+                "success": False,
+                "error": "Lakebase registry backend is not available.",
+            }
+        return summary
 
     @staticmethod
     def list_registry_domains_result(

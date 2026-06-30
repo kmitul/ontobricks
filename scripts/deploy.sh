@@ -49,6 +49,9 @@ set -euo pipefail
 #
 # Prerequisites:
 #   - Databricks CLI >= 0.250.0
+#   - python3
+#   - psql (libpq) — only for the Lakebase GRANT bootstrap (step 11);
+#     preflight warns + prompts if it is missing on a Lakebase target.
 #   - Authenticated profile (`databricks auth login --host ...`)
 #   - `databricks.yml` + `app.yaml.template` + `scripts/deploy.config.sh` at the project root
 
@@ -166,10 +169,44 @@ fi
 begin_step "Preflight checks"
 
 # 1a. Required tooling.
+#   - Hard dependencies (databricks, python3) abort immediately: nothing
+#     in this script works without them.
+#   - Soft dependencies (psql, only when the run will reach the Lakebase
+#     GRANT bootstrap in step 11) are checked here too, up front, so a
+#     missing tool surfaces NOW instead of after a full deploy. They are
+#     not fatal — we warn, list them, and ask whether to continue.
 require_cmd databricks "install the Databricks CLI ≥ 0.250.0 — https://docs.databricks.com/dev-tools/cli/"
 require_cmd python3 "needed to render app.yaml and parse CLI JSON output"
 _cli_ver="$(databricks version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)"
-ok "tooling present (databricks${_cli_ver:+ v$_cli_ver}, python3)"
+ok "hard dependencies present (databricks${_cli_ver:+ v$_cli_ver}, python3)"
+
+# Collect every missing optional tool, then warn once and let the user
+# decide whether to proceed (the deploy itself succeeds without them —
+# only the dependent step is skipped/fails).
+_missing_soft=()
+check_soft_cmd() { command -v "$1" >/dev/null 2>&1 || _missing_soft+=("$1${2:+ — $2}"); }
+
+if $IS_LAKEBASE && $DO_BOOTSTRAP; then
+    check_soft_cmd psql "libpq client — needed by the Lakebase schema GRANT bootstrap (step 11); brew install libpq && brew link --force libpq"
+fi
+
+if [[ ${#_missing_soft[@]} -gt 0 ]]; then
+    warn "the following optional dependencies are NOT installed:"
+    for _m in "${_missing_soft[@]}"; do echo "      • ${_m}" >&2; done
+    warn "the deploy will run, but the step(s) relying on them will be skipped or fail."
+    if [[ -t 0 ]]; then
+        printf "  %sContinue anyway?%s [y/N] " "$_C_YEL" "$_C_RST" >&2
+        read -r _ans
+        case "$_ans" in
+            y|Y|yes|YES) info "continuing without the optional dependencies above." ;;
+            *) die "aborted by user — install the missing dependencies and re-run." ;;
+        esac
+    else
+        warn "non-interactive shell — continuing without the optional dependencies above."
+    fi
+else
+    ok "optional dependencies present"
+fi
 
 # 1b. Required files (only those the chosen flags will actually use).
 require_file "databricks.yml" "the DAB bundle definition"

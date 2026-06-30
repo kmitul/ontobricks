@@ -77,7 +77,14 @@
         <div class="border rounded p-3 bg-body-tertiary">
             <div class="d-flex justify-content-between align-items-center mb-2">
                 <strong class="small"><i class="bi bi-database me-1"></i> Lakebase Connection</strong>
-                <span id="lakebaseStatusBadge" class="badge bg-secondary">unknown</span>
+                <div class="d-flex align-items-center gap-2">
+                    <button type="button" class="btn btn-sm btn-outline-primary" id="btnRepairRegistryPerms"
+                            data-requires-app="admin"
+                            title="Re-apply the Lakebase grants the app & MCP service principals need (CAN_USE on the project, USAGE/DML on the registry schema, UC catalog privileges). In-app equivalent of scripts/bootstrap-lakebase-perms.sh — safe to re-run.">
+                        <i class="bi bi-key me-1"></i>Repair permissions
+                    </button>
+                    <span id="lakebaseStatusBadge" class="badge bg-secondary">unknown</span>
+                </div>
             </div>
 
             <div class="text-uppercase text-muted small fw-semibold mb-1">
@@ -161,6 +168,17 @@
             </div>
             <div class="small text-muted mb-2" id="lbChecksContext"></div>
             <div id="lbChecksBody"></div>
+        </div>
+    </div>
+
+    <!-- Lakebase permission-grant results (shown after Initialize / Repair permissions) -->
+    <div id="lbGrantPanel" style="display:none;" class="mb-3">
+        <div class="border rounded p-3 bg-body-tertiary">
+            <div class="d-flex justify-content-between align-items-center mb-2">
+                <strong class="small"><i class="bi bi-key me-1 text-primary"></i>Permission Grants</strong>
+                <span id="lbGrantSummaryBadge"></span>
+            </div>
+            <div id="lbGrantBody"></div>
         </div>
     </div>
 </div>
@@ -378,6 +396,95 @@
         } finally {
             btn.disabled = false;
             btn.innerHTML = '<i class="bi bi-shield-check me-1"></i>Check Access';
+        }
+    });
+
+    // ── Permission grant results ──────────────────────────────────────
+    // Renders the {granted: [...], warnings: [...]} summary returned by
+    // POST /settings/registry/grant-permissions (Repair button) and by
+    // POST /settings/registry/initialize (the ``permissions`` key).
+    function _renderGrantResult(perm) {
+        var panel   = document.getElementById('lbGrantPanel');
+        var body    = document.getElementById('lbGrantBody');
+        var summary = document.getElementById('lbGrantSummaryBadge');
+        if (!panel || !body || !perm) return;
+
+        var granted  = perm.granted || [];
+        var warnings = perm.warnings || [];
+        var ok = perm.success !== false && warnings.length === 0;
+
+        if (summary) {
+            if (perm.success === false) {
+                summary.innerHTML = '<span class="badge bg-danger">failed</span>';
+            } else if (warnings.length) {
+                summary.innerHTML = '<span class="badge bg-warning text-dark">' +
+                    granted.length + ' applied · ' + warnings.length + ' warning' +
+                    (warnings.length === 1 ? '' : 's') + '</span>';
+            } else {
+                summary.innerHTML = '<span class="badge bg-success">' +
+                    granted.length + ' applied</span>';
+            }
+        }
+
+        var html = '';
+        if (perm.error) {
+            html += '<div class="text-danger small mb-2"><i class="bi bi-x-circle me-1"></i>' +
+                _esc(perm.error) + '</div>';
+        }
+        if (granted.length) {
+            html += '<ul class="list-unstyled small mb-2">';
+            granted.forEach(function (g) {
+                html += '<li class="text-success"><i class="bi bi-check-circle me-1"></i>' +
+                    _esc(g) + '</li>';
+            });
+            html += '</ul>';
+        }
+        if (warnings.length) {
+            html += '<ul class="list-unstyled small mb-0">';
+            warnings.forEach(function (w) {
+                html += '<li class="text-warning"><i class="bi bi-exclamation-triangle me-1"></i>' +
+                    _esc(w) + '</li>';
+            });
+            html += '</ul>';
+        }
+        if (!html) {
+            html = '<div class="text-muted small">No grants reported.</div>';
+        }
+        body.innerHTML = html;
+        panel.style.display = '';
+        return ok;
+    }
+
+    // Expose so registry.js can surface the post-Initialize ``permissions``.
+    window._obRenderRegistryGrants = _renderGrantResult;
+
+    document.getElementById('btnRepairRegistryPerms')?.addEventListener('click', async function () {
+        var btn = this;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Repairing…';
+        try {
+            var resp = await fetch('/settings/registry/grant-permissions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                credentials: 'same-origin'
+            });
+            var data = await resp.json();
+            _renderGrantResult(data);
+            if (typeof showNotification === 'function') {
+                if (data.success === false) {
+                    showNotification('Permission repair failed: ' + (data.error || 'unknown error'), 'danger');
+                } else if ((data.warnings || []).length) {
+                    showNotification('Permissions applied with warnings — review the details below.', 'warning');
+                } else {
+                    showNotification('Lakebase permissions re-applied to the app service principals.', 'success');
+                }
+            }
+        } catch (e) {
+            if (typeof showNotification === 'function')
+                showNotification('Permission repair failed: ' + e.message, 'danger');
+        } finally {
+            btn.disabled = false;
+            btn.innerHTML = '<i class="bi bi-key me-1"></i>Repair permissions';
         }
     });
 })();

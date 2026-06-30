@@ -513,3 +513,110 @@ Modified files:
 - CLAUDE.md
 
 Tests: not run — documentation/rules only, no Python touched.
+
+
+## Preflight soft-dependency check (psql) in deploy.sh
+
+Context: `psql` (libpq) is only validated deep inside
+`bootstrap-lakebase-perms.sh` (step 11), so on a Lakebase-target deploy a
+missing client was discovered only AFTER the whole bundle had already been
+deployed and started. Surface optional tooling up front during preflight,
+warn with an actionable list, and prompt to continue.
+
+Changes:
+
+1. scripts/deploy.sh
+   - Step 1a: split tooling check into hard deps (databricks, python3 — still
+     abort) and a new soft-dep pass. `check_soft_cmd` collects every missing
+     optional tool into `_missing_soft`; `psql` is checked only when the run
+     will actually reach the Lakebase GRANT bootstrap (`$IS_LAKEBASE &&
+     $DO_BOOTSTRAP`).
+   - On any missing soft dep: warn, list each tool + install hint, then prompt
+     `Continue anyway? [y/N]` on a TTY (abort via `die` on no), or warn-and-
+     continue on a non-interactive shell so CI is never blocked.
+   - Updated the Prerequisites header comment to list python3 + psql.
+
+Modified files:
+- scripts/deploy.sh
+
+Tests: uv run pytest -q -m "not scenario" → 3021 passed, 58 failed, 17 skipped
+in 271.90s. All 58 failures are pre-existing API-endpoint unit tests
+(test_review_endpoints.py, test_domain_current_user_endpoint.py,
+test_set_version_status_endpoint.py) — unrelated to this bash-only change
+(no Python touched).
+
+
+## In-app registry permission grants (Initialize + Repair permissions button)
+
+Context: The Lakebase registry-schema GRANTs (CAN_USE on the project,
+USAGE/CREATE/DML on the schema, UC catalog ALL_PRIVILEGES) were only available
+via scripts/bootstrap-lakebase-perms.sh, which needs psql at deploy time. The
+app connects to Lakebase as its own service principal and OWNS the registry
+schema after Initialize, so it can run these GRANTs itself — exactly as the
+in-app graph-DB provisioner already does for the graph schema. Surfaced the
+same capability for the registry: Initialize now auto-applies the grants and a
+new "Repair permissions" button re-applies them idempotently. This removes the
+psql dependency for the everyday registry schema grants (control-plane CAN_USE/
+UC grants stay best-effort in-app, mirroring the bash script).
+
+Changes:
+
+1. src/back/core/databricks/lakebase_grants.py (new)
+   - Extracted the grant primitives into one reusable, TaskManager-free module:
+     resolve_app_service_principals, grant_can_use_on_project,
+     grant_schema_privileges, grant_uc_catalog. Each returns (granted, warnings);
+     control-plane grants are best-effort. Single source of truth for the GRANT
+     SQL/API previously inlined in the provisioner.
+2. src/back/core/graphdb/lakebase/provisioner.py
+   - Refactored _step_grant_can_use / _step_grant_schema / _step_grant_uc and
+     _resolve_service_principals to delegate to lakebase_grants (removed the
+     duplicated GRANT bodies and the now-unused _app_service_principal). Behaviour
+     unchanged — the graph-DB provision flow still applies the same grants.
+3. src/back/objects/registry/store/lakebase/store.py
+   - Added LakebaseRegistryStore.grant_app_permissions(app_names, uc_catalog):
+     in-app port of bootstrap-lakebase-perms.sh for the registry schema. Resolves
+     each app SP via the Apps API, grants CAN_USE on the project (best-effort),
+     USAGE/DML on the schema (the SP owns it), and UC ALL_PRIVILEGES when set.
+     Returns {success, granted, warnings, error, schema, apps}.
+4. src/back/objects/domain/SettingsService.py
+   - Added _registry_grant_app_names (running app + MCP app), the shared sync
+     core _grant_registry_permissions, and the async
+     grant_registry_permissions_result. Hooked _grant_registry_permissions into
+     initialize_registry_result so Initialize self-applies the grants and returns
+     them under a new "permissions" key (best-effort, never fatal to Initialize).
+5. src/api/routers/internal/settings.py
+   - New admin-only route POST /settings/registry/grant-permissions →
+     grant_registry_permissions_result. initialize_registry now runs via
+     run_blocking (the auto-grant does blocking I/O) and documents the new
+     permissions key.
+6. src/front/templates/partials/registry/_registry_configuration.html
+   - Added the admin-gated "Repair permissions" button (Lakebase Connection
+     panel), a "Permission Grants" results panel, the _renderGrantResult renderer
+     (exposed as window._obRenderRegistryGrants), and the button click handler.
+7. src/front/static/registry/js/registry.js
+   - Initialize handler now renders the returned permissions summary and warns
+     when any grant produced a warning.
+8. docs/deployment.md
+   - Documented the in-app alternative (no psql) in Step 5b and the Initialize /
+     Repair permissions behaviour in Step 8.
+9. docs/sphinx/api/app.core.databricks.rst
+   - Added the lakebase_grants automodule entry.
+
+Modified files:
+- src/back/core/databricks/lakebase_grants.py (new)
+- src/back/core/graphdb/lakebase/provisioner.py
+- src/back/objects/registry/store/lakebase/store.py
+- src/back/objects/domain/SettingsService.py
+- src/api/routers/internal/settings.py
+- src/front/templates/partials/registry/_registry_configuration.html
+- src/front/static/registry/js/registry.js
+- docs/deployment.md
+- docs/sphinx/api/app.core.databricks.rst
+
+Tests: uv run pytest -q -m "not scenario" → 3021 passed, 58 failed, 17 skipped
+in 279.57s. Identical 58 pre-existing failures as the baseline above (same
+test files: test_review_endpoints.py, test_comment_endpoints.py,
+test_domain_current_user_endpoint.py, test_set_version_status_endpoint.py) —
+no regressions. tests/units/settings/ (incl. test_lakebase_provision.py, which
+covers the refactored provisioner grant steps) → 126 passed.
+

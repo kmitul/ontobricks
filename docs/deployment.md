@@ -561,6 +561,19 @@ The deploy script is **registry-scoped**: it bootstraps only the
 project, so its grant is handled by the in-app "Create graph DB" flow
 or a manual `bootstrap-lakebase-perms.sh` run.
 
+> **In-app alternative (no `psql` needed).** The registry schema grants
+> are now also applied **from inside the app**: **Settings → Registry →
+> Initialize** auto-runs them right after creating the schema (the app SP
+> owns the schema, so it can `GRANT` to the MCP SP), and the **Repair
+> permissions** button on the same panel re-applies them on demand
+> (idempotent — useful after a rebind/redeploy drops the schema GRANTs).
+> The control-plane grants (project `CAN_USE`, UC catalog
+> `ALL_PRIVILEGES`) are best-effort in-app and degrade to a warning when
+> the SP lacks manage rights — those still rely on the script/CLI. So
+> `bootstrap-lakebase-perms.sh` (and its `psql` dependency) remains the
+> documented path for the full set, but the everyday schema GRANTs no
+> longer require it.
+
 | Schema | When to bootstrap | Who runs it |
 |--------|-------------------|-------------|
 | Registry (`ontobricks_registry`) | After **Settings → Registry → Initialize** has created the schema | `deploy.sh` automatically (`LAKEBASE_REGISTRY_SCHEMA` in `deploy.config.sh`) |
@@ -636,7 +649,11 @@ If the volume is empty (first deployment):
 
 1. Open the app URL
 2. Go to **Settings > Registry**
-3. Click **Initialize** to bootstrap the registry
+3. Click **Initialize** to bootstrap the registry — on the Lakebase
+   backend this also self-applies the schema/project/UC grants the app +
+   MCP service principals need (results shown under **Permission Grants**).
+   Use **Repair permissions** on the Lakebase Connection panel to re-apply
+   them later (e.g. after a rebind).
 
 ### Step 9 — Verify
 

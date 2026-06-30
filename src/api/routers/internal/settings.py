@@ -243,8 +243,38 @@ async def initialize_registry(
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
-    """Create the registry Volume (and root marker) if they do not exist."""
-    return config_service.initialize_registry_result(session_mgr, settings)
+    """Create the registry Volume (and root marker) if they do not exist.
+
+    On the Lakebase backend this also self-serves the project/schema/UC
+    grants the app + MCP service principals need (in-app port of
+    ``scripts/bootstrap-lakebase-perms.sh``); the per-SP outcome is
+    returned under the ``permissions`` key.
+    """
+    return await run_blocking(
+        config_service.initialize_registry_result, session_mgr, settings
+    )
+
+
+@router.post(
+    "/registry/grant-permissions",
+    dependencies=[Depends(require(ROLE_ADMIN))],
+)
+async def grant_registry_permissions(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Re-apply Lakebase grants for the registry schema to the app SPs.
+
+    Admin-only, in-app equivalent of ``scripts/bootstrap-lakebase-perms.sh``:
+    grants ``CAN_USE`` on the project, ``USAGE``/DML on the registry schema,
+    and ``ALL_PRIVILEGES`` on the UC catalog to the app + MCP service
+    principals. Idempotent — safe to re-run after a rebind/redeploy that
+    dropped the schema GRANTs. Control-plane grants are best-effort.
+    """
+    with map_route_errors("registry grant permissions", logger):
+        return await config_service.grant_registry_permissions_result(
+            session_mgr, settings
+        )
 
 
 @router.get(
