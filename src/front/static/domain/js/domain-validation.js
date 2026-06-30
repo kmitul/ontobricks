@@ -56,10 +56,20 @@ async function loadGraphMetricsSummary() {
     const spinner = document.getElementById('graphStructureSpinner');
     const content = document.getElementById('graphStructureContent');
     const errorEl = document.getElementById('graphStructureError');
+    const emptyEl = document.getElementById('graphStructureEmpty');
     const badge = document.getElementById('graphStructureBadge');
     try {
         const resp = await fetch('/dtwin/metrics/summary', { credentials: 'same-origin' });
         const data = await resp.json();
+        // No analysis has been run yet for this version: the metrics are now
+        // computed asynchronously on the KG Analytics page and cached, so show
+        // a prompt instead of recomputing here.
+        if (data.success && data.has_result === false) {
+            if (spinner) spinner.classList.add('d-none');
+            if (emptyEl) emptyEl.classList.remove('d-none');
+            if (badge) { badge.textContent = 'Not computed'; badge.className = 'badge bg-secondary'; }
+            return;
+        }
         if (!data.success || !data.stats) {
             if (spinner) spinner.classList.add('d-none');
             if (errorEl) errorEl.classList.remove('d-none');

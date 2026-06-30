@@ -52,6 +52,8 @@ class _InMemoryStore(RegistryStore):
         self._schedules: Dict[str, Dict[str, Any]] = {}
         self._history: Dict[str, List[ScheduleHistoryEntry]] = {}
         self._build_runs: Dict[str, List[Dict[str, Any]]] = {}
+        self._graph_analytics: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._graph_analytics_runs: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
         self._review_events: List[Dict[str, Any]] = []
         self._comments: List[Dict[str, Any]] = []
         self._tasks: List[Dict[str, Any]] = []
@@ -197,6 +199,30 @@ class _InMemoryStore(RegistryStore):
             "active_build": dict(active) if active else None,
             "per_version": [],
         }
+
+    def save_graph_analytics(
+        self, folder: str, version: str, entry: Dict[str, Any]
+    ) -> None:
+        # UPSERT: one row per (folder, version) — only the last survives.
+        self._graph_analytics[(folder, version)] = dict(entry)
+
+    def load_graph_analytics(self, folder: str, version: str):
+        row = self._graph_analytics.get((folder, version))
+        return dict(row) if row is not None else None
+
+    def record_graph_analytics_run(
+        self, folder: str, version: str, entry: Dict[str, Any]
+    ) -> None:
+        # Append-only run history (newest stored first on read).
+        self._graph_analytics_runs.setdefault((folder, version), []).append(
+            dict(entry)
+        )
+
+    def load_graph_analytics_runs(
+        self, folder: str, version: str, *, limit: int = 100
+    ):
+        rows = list(reversed(self._graph_analytics_runs.get((folder, version), [])))
+        return [dict(r) for r in rows[:limit]]
 
     def record_review_event(
         self,
@@ -563,6 +589,76 @@ class TestStoreContract:
         assert a["total_runs"] == 0
         assert a["active_build"] is None
         assert a["success_rate"] == 0.0
+
+    def test_graph_analytics_missing_returns_none(self, store):
+        assert store.load_graph_analytics("demo", "1") is None
+
+    def test_graph_analytics_round_trip(self, store):
+        store.save_graph_analytics(
+            "demo",
+            "1",
+            {
+                "status": "completed",
+                "graph_name": "g_demo_v1",
+                "class_filter": ["http://x/Person"],
+                "stats": {"node_count": 42},
+                "top_pagerank": ["http://x/a"],
+                "result": {"nodes": {"http://x/a": {"degree": 0.5}}},
+                "duration_ms": 1234,
+                "computed_at": "2026-01-01T00:00:00",
+            },
+        )
+        row = store.load_graph_analytics("demo", "1")
+        assert row is not None
+        assert row["stats"]["node_count"] == 42
+        assert row["class_filter"] == ["http://x/Person"]
+        assert row["result"]["nodes"]["http://x/a"]["degree"] == 0.5
+
+    def test_graph_analytics_upsert_keeps_only_last(self, store):
+        store.save_graph_analytics(
+            "demo", "1", {"stats": {"node_count": 1}, "duration_ms": 10}
+        )
+        store.save_graph_analytics(
+            "demo", "1", {"stats": {"node_count": 2}, "duration_ms": 20}
+        )
+        row = store.load_graph_analytics("demo", "1")
+        assert row["stats"]["node_count"] == 2
+        assert row["duration_ms"] == 20
+
+    def test_graph_analytics_scoped_by_version(self, store):
+        store.save_graph_analytics("demo", "1", {"stats": {"node_count": 1}})
+        store.save_graph_analytics("demo", "2", {"stats": {"node_count": 9}})
+        assert store.load_graph_analytics("demo", "1")["stats"]["node_count"] == 1
+        assert store.load_graph_analytics("demo", "2")["stats"]["node_count"] == 9
+
+    def test_graph_analytics_runs_empty_by_default(self, store):
+        assert store.load_graph_analytics_runs("demo", "1") == []
+
+    def test_graph_analytics_runs_newest_first(self, store):
+        store.record_graph_analytics_run(
+            "demo", "1", {"status": "completed", "node_count": 1}
+        )
+        store.record_graph_analytics_run(
+            "demo", "1", {"status": "failed", "error": "boom"}
+        )
+        runs = store.load_graph_analytics_runs("demo", "1")
+        assert [r["status"] for r in runs] == ["failed", "completed"]
+        assert runs[0]["error"] == "boom"
+
+    def test_graph_analytics_runs_limit(self, store):
+        for i in range(5):
+            store.record_graph_analytics_run(
+                "demo", "1", {"status": "completed", "node_count": i}
+            )
+        runs = store.load_graph_analytics_runs("demo", "1", limit=2)
+        assert len(runs) == 2
+        assert runs[0]["node_count"] == 4
+
+    def test_graph_analytics_runs_scoped_by_version(self, store):
+        store.record_graph_analytics_run("demo", "1", {"node_count": 1})
+        store.record_graph_analytics_run("demo", "2", {"node_count": 9})
+        assert len(store.load_graph_analytics_runs("demo", "1")) == 1
+        assert store.load_graph_analytics_runs("demo", "2")[0]["node_count"] == 9
 
     def test_review_events_round_trip_oldest_first(self, store):
         store.record_review_event(

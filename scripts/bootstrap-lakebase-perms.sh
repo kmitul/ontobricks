@@ -301,6 +301,46 @@ CREATE TABLE IF NOT EXISTS "${SCHEMA}".build_runs (
 CREATE INDEX IF NOT EXISTS idx_build_runs_domain_version
     ON "${SCHEMA}".build_runs(domain_id, version, started_at DESC);
 
+-- graph_analytics (async KG analytics cache added after initial release —
+-- one row per (domain_id, version), replaced on every successful recompute)
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".graph_analytics (
+    domain_id    uuid NOT NULL
+                 REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version      text NOT NULL,
+    status       text NOT NULL DEFAULT 'completed',
+    graph_name   text NOT NULL DEFAULT '',
+    class_filter jsonb NOT NULL DEFAULT '[]'::jsonb,
+    stats        jsonb NOT NULL DEFAULT '{}'::jsonb,
+    top_pagerank jsonb NOT NULL DEFAULT '[]'::jsonb,
+    result       jsonb NOT NULL DEFAULT '{}'::jsonb,
+    error        text NOT NULL DEFAULT '',
+    task_id      text NOT NULL DEFAULT '',
+    duration_ms  bigint NOT NULL DEFAULT 0,
+    computed_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain_id, version)
+);
+
+-- graph_analytics_runs (append-only analysis run history)
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".graph_analytics_runs (
+    id                  bigserial PRIMARY KEY,
+    domain_id           uuid NOT NULL
+                        REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version             text NOT NULL,
+    status              text NOT NULL DEFAULT 'completed',
+    class_filter        jsonb NOT NULL DEFAULT '[]'::jsonb,
+    node_count          bigint NOT NULL DEFAULT 0,
+    edge_count          bigint NOT NULL DEFAULT 0,
+    connected_components integer NOT NULL DEFAULT 0,
+    avg_degree          double precision NOT NULL DEFAULT 0,
+    density             double precision NOT NULL DEFAULT 0,
+    duration_ms         bigint NOT NULL DEFAULT 0,
+    task_id             text NOT NULL DEFAULT '',
+    error               text NOT NULL DEFAULT '',
+    computed_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_graph_analytics_runs_domain_version
+    ON "${SCHEMA}".graph_analytics_runs(domain_id, version, computed_at DESC);
+
 -- domain_review_events (validation/review audit log added after initial release)
 CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_review_events (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -362,7 +402,7 @@ CREATE INDEX IF NOT EXISTS idx_domain_tasks_domain
     ON "${SCHEMA}".domain_tasks(domain_id, version);
 SQL
     then
-        echo "  ✓ schema migrations applied (domain_versions.status, domains.review_quorum, build_runs, domain_review_events, domain_comments, domain_tasks)"
+        echo "  ✓ schema migrations applied (domain_versions.status, domains.review_quorum, build_runs, graph_analytics, graph_analytics_runs, domain_review_events, domain_comments, domain_tasks)"
     else
         echo "  ⚠ schema migration failed — continuing (SP grants below may partially succeed)"
     fi

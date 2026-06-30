@@ -68,6 +68,11 @@
             <i class="bi bi-funnel me-1"></i><span id="analyticsSubtitleText"></span>
         </p>
 
+        <!-- Last-computed timestamp (stored result provenance) -->
+        <p id="analyticsComputedAt" class="text-muted small mb-2 d-none">
+            <i class="bi bi-clock-history me-1"></i><span id="analyticsComputedAtText"></span>
+        </p>
+
         <!-- Aggregate stats row — always visible above tabs -->
         <div class="row g-2 mb-3" id="analyticsStatsRow">
             <div class="col-6 col-md-4 col-lg-2">
@@ -163,6 +168,12 @@
                 <button class="nav-link" id="atab-btn-insights" data-bs-toggle="tab"
                         data-bs-target="#atab-insights" type="button" role="tab">
                     <i class="bi bi-stars me-1 text-warning"></i>AI Insights
+                </button>
+            </li>
+            <li class="nav-item" role="presentation">
+                <button class="nav-link" id="atab-btn-history" data-bs-toggle="tab"
+                        data-bs-target="#atab-history" type="button" role="tab">
+                    <i class="bi bi-clock-history me-1 text-secondary"></i>History
                 </button>
             </li>
         </ul>
@@ -301,6 +312,42 @@
                     <div id="analyticsInsightsSpinner" class="text-center py-3 d-none">
                         <div class="spinner-border spinner-border-sm text-warning" role="status"></div>
                         <span class="ms-2 small text-muted">Interpreting results…</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- ── TAB: History ── -->
+            <div class="tab-pane fade" id="atab-history" role="tabpanel">
+                <div class="card mt-1">
+                    <div class="card-header py-2 small fw-semibold d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-clock-history me-1 text-secondary"></i>Analysis history</span>
+                        <button class="btn btn-link btn-sm p-0 text-muted" onclick="analyticsLoadHistory()" title="Refresh history">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                    </div>
+                    <div class="card-body p-0">
+                        <div class="table-responsive">
+                            <table class="table table-sm table-hover align-middle mb-0" style="font-size:0.82rem">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th class="ps-3">When</th>
+                                        <th>Scope</th>
+                                        <th>Status</th>
+                                        <th class="text-end">Nodes</th>
+                                        <th class="text-end">Edges</th>
+                                        <th class="text-end">Components</th>
+                                        <th class="text-end">Avg Degree</th>
+                                        <th class="text-end">Density</th>
+                                        <th class="text-end pe-3">Duration</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="analyticsHistoryBody"></tbody>
+                            </table>
+                        </div>
+                        <div id="analyticsHistoryEmpty" class="text-center text-muted small py-5 d-none">
+                            <i class="bi bi-clock-history fs-4 d-block mb-2"></i>
+                            No analyses recorded yet — click <strong>Run Analysis</strong> to start one.
+                        </div>
                     </div>
                 </div>
             </div>
@@ -472,6 +519,14 @@
             return;
         }
 
+        // A graph is configured — enable Run Analysis immediately rather than
+        // waiting for the /dtwin/sync/stats round-trip below. The entity-type
+        // dropdown is only an optional filter and is enriched asynchronously,
+        // so it must not gate the button (avoids a multi-second disabled state
+        // on first open).
+        _setComputeBtnState(true);
+        _showNoGraphBanner(false);
+
         try {
             var resp = await fetch('/dtwin/sync/stats', { credentials: 'same-origin' });
             var data = await resp.json();
@@ -514,20 +569,12 @@
         return [sel.value];
     }
 
-    window.analyticsCompute = async function () {
-        var btn     = document.getElementById('analyticsComputeBtn');
-        var spinner = document.getElementById('analyticsSpinner');
-        var noData  = document.getElementById('analyticsNoData');
-
-        if (btn) btn.disabled = true;
-        if (spinner) spinner.classList.remove('d-none');
-
-        // Reset cards from any previous run
+    // Reset the AI Insights / health cards to their pristine prompt state.
+    function _resetAnalyticsCards() {
         var _hc = document.getElementById('analyticsHealthCard');
         if (_hc) _hc.classList.add('d-none');
         var _he = document.getElementById('analyticsHealthEmpty');
         if (_he) _he.classList.add('d-none');
-        // Reset AI Insights tab to prompt state
         var _ib = document.getElementById('analyticsInsightsBody');
         if (_ib) _ib.innerHTML = '<div class="text-center text-muted small py-5">'
             + '<i class="bi bi-stars fs-3 d-block mb-2 text-warning-emphasis"></i>'
@@ -536,6 +583,238 @@
         if (_is) _is.classList.add('d-none');
         var _ias = document.getElementById('analyticsInsightsStatus');
         if (_ias) _ias.textContent = '';
+    }
+
+    // Format an ISO timestamp into a short "x ago" / locale string.
+    function _formatComputedAt(iso) {
+        if (!iso) return '';
+        var d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        var diffSec = Math.floor((Date.now() - d.getTime()) / 1000);
+        if (diffSec < 60) return 'just now';
+        if (diffSec < 3600) return Math.floor(diffSec / 60) + 'm ago';
+        if (diffSec < 86400) return Math.floor(diffSec / 3600) + 'h ago';
+        return d.toLocaleString();
+    }
+
+    // Render a metrics payload (from compute OR from the stored cache) into
+    // the stat cards, charts and type profiles. ``meta`` carries provenance
+    // for the stored-result path (computed_at, class_filter).
+    function _renderAnalyticsData(data, meta) {
+        meta = meta || {};
+        _analyticsData = data;
+
+        // Restore the entity-type filter selection from a stored result so
+        // the subtitle and re-runs reflect what was actually computed.
+        var _selEl = document.getElementById('analyticsTypeSelect');
+        if (meta.class_filter && meta.class_filter.length && _selEl) {
+            var wanted = meta.class_filter[0];
+            if (Array.from(_selEl.options).some(function (o) { return o.value === wanted; })) {
+                _selEl.value = wanted;
+            }
+        }
+
+        // Update subtitle with the active filter
+        var _subtitle    = document.getElementById('analyticsSubtitle');
+        var _subtitleTxt = document.getElementById('analyticsSubtitleText');
+        var _selOpt = _selEl && _selEl.selectedIndex >= 0 ? _selEl.options[_selEl.selectedIndex] : null;
+        if (_subtitle && _subtitleTxt) {
+            if (_selOpt && _selEl.value) {
+                _subtitleTxt.textContent = _selOpt.text.trim();
+                _subtitle.classList.remove('d-none');
+            } else {
+                _subtitle.classList.add('d-none');
+            }
+        }
+
+        // "Last computed" provenance line
+        var _ca    = document.getElementById('analyticsComputedAt');
+        var _caTxt = document.getElementById('analyticsComputedAtText');
+        if (_ca && _caTxt) {
+            var when = _formatComputedAt(meta.computed_at);
+            if (when) {
+                _caTxt.textContent = 'Last computed ' + when;
+                _ca.classList.remove('d-none');
+            } else {
+                _ca.classList.add('d-none');
+            }
+        }
+
+        var s = data.stats || {};
+        _setText('aStatNodes',      s.node_count        != null ? s.node_count.toLocaleString()  : '—');
+        _setText('aStatEdges',      s.edge_count        != null ? s.edge_count.toLocaleString()  : '—');
+        _setText('aStatComponents', s.connected_components != null ? s.connected_components      : '—');
+        _setText('aStatAvgDegree',  s.avg_degree        != null ? s.avg_degree.toFixed(2)        : '—');
+        _setText('aStatDensity',    s.density           != null ? s.density.toFixed(6)           : '—');
+        _setText('aStatElapsed',    s.elapsed_ms        != null ? s.elapsed_ms + ' ms'           : '—');
+
+        // Show graph_node_count sub-label when filter was applied
+        var graphNodeEl = document.getElementById('aStatGraphNodes');
+        if (graphNodeEl) {
+            var gn = s.graph_node_count;
+            graphNodeEl.textContent = (gn && gn !== s.node_count) ? '(' + gn.toLocaleString() + ' in subgraph)' : '';
+        }
+
+        analyticsRenderCharts();
+        _renderTypeProfiles(data.entity_type_profiles, !!_getSelectedTypes());
+
+        var results = document.getElementById('analyticsResults');
+        if (results) results.classList.remove('d-none');
+
+        // Reveal the Interpret button; reset audit button
+        var interpretBtn = document.getElementById('analyticsInterpretBtn');
+        if (interpretBtn) interpretBtn.classList.remove('d-none');
+        var auditBtn = document.getElementById('analyticsAuditBtn');
+        if (auditBtn) auditBtn.classList.add('d-none');
+        _analyticsLastSections = null;
+
+        // Refresh the run-history tab alongside the result.
+        if (typeof window.analyticsLoadHistory === 'function') window.analyticsLoadHistory();
+    }
+
+    // Load and render the LAST persisted analytics result for this domain.
+    // Returns true when a stored result was rendered. Shows the spinner while
+    // the stored result is being fetched/rendered (e.g. on section open).
+    window.analyticsLoadLatest = async function () {
+        var spinner = document.getElementById('analyticsSpinner');
+        var spinnerMsg = spinner ? spinner.querySelector('p') : null;
+        var prevMsg = spinnerMsg ? spinnerMsg.textContent : '';
+        if (spinnerMsg) spinnerMsg.textContent = 'Loading the last analysis…';
+        if (spinner) spinner.classList.remove('d-none');
+        try {
+            var resp = await fetch('/dtwin/metrics/latest', { credentials: 'same-origin' });
+            var data = await resp.json();
+            if (!data.success || !data.has_result) return false;
+            _renderAnalyticsData(data, {
+                computed_at: data.computed_at,
+                class_filter: data.class_filter
+            });
+            return true;
+        } catch (e) {
+            return false;
+        } finally {
+            if (spinner) spinner.classList.add('d-none');
+            if (spinnerMsg) spinnerMsg.textContent = prevMsg;
+        }
+    };
+
+    // ── Run history ────────────────────────────────────────────────────────
+    // Load the analysis run history (newest-first) into the History tab.
+    window.analyticsLoadHistory = async function () {
+        var tbody = document.getElementById('analyticsHistoryBody');
+        var emptyEl = document.getElementById('analyticsHistoryEmpty');
+        if (!tbody) return;
+        var runs = [];
+        try {
+            var resp = await fetch('/dtwin/metrics/history', { credentials: 'same-origin' });
+            var data = await resp.json();
+            if (data && data.success) runs = data.runs || [];
+        } catch (e) {
+            runs = [];
+        }
+
+        tbody.innerHTML = '';
+        if (!runs.length) {
+            if (emptyEl) emptyEl.classList.remove('d-none');
+            return;
+        }
+        if (emptyEl) emptyEl.classList.add('d-none');
+
+        runs.forEach(function (r) {
+            var when = _formatComputedAt(r.computed_at) || '—';
+            var whenFull = r.computed_at ? new Date(r.computed_at).toLocaleString() : '';
+            var scope = (r.class_filter && r.class_filter.length)
+                ? _esc(_localName(r.class_filter[0]))
+                : '<span class="text-muted">All types</span>';
+            var failed = r.status === 'failed';
+            var statusBadge = failed
+                ? '<span class="badge bg-danger-subtle text-danger-emphasis border border-danger" title="' + _esc(r.error || 'Analysis failed') + '"><i class="bi bi-x-circle me-1"></i>failed</span>'
+                : '<span class="badge bg-success-subtle text-success-emphasis border border-success"><i class="bi bi-check-circle me-1"></i>completed</span>';
+            var dash = '<span class="text-muted">—</span>';
+            var nodes = failed ? dash : (r.node_count || 0).toLocaleString();
+            var edges = failed ? dash : (r.edge_count || 0).toLocaleString();
+            var comps = failed ? dash : String(r.connected_components || 0);
+            var avgd  = failed ? dash : (r.avg_degree || 0).toFixed(2);
+            var dens  = failed ? dash : (r.density || 0).toFixed(6);
+            var dur   = (r.duration_ms != null) ? (r.duration_ms + ' ms') : '—';
+
+            tbody.insertAdjacentHTML('beforeend',
+                '<tr>'
+                + '<td class="ps-3" title="' + _esc(whenFull) + '">' + _esc(when) + '</td>'
+                + '<td>' + scope + '</td>'
+                + '<td>' + statusBadge + '</td>'
+                + '<td class="text-end">' + nodes + '</td>'
+                + '<td class="text-end">' + edges + '</td>'
+                + '<td class="text-end">' + comps + '</td>'
+                + '<td class="text-end font-monospace">' + avgd + '</td>'
+                + '<td class="text-end font-monospace">' + dens + '</td>'
+                + '<td class="text-end pe-3">' + dur + '</td>'
+                + '</tr>'
+            );
+        });
+    };
+
+    // Toggle the "analysis in progress" UI: spinner on/off + button disabled.
+    function _setAnalysisBusy(busy) {
+        var btn     = document.getElementById('analyticsComputeBtn');
+        var spinner = document.getElementById('analyticsSpinner');
+        if (btn) btn.disabled = !!busy;
+        if (spinner) spinner.classList.toggle('d-none', !busy);
+    }
+
+    // Find an in-flight graph-analytics background task, if any. Lets the
+    // Analytics page resume its spinner after the user navigates away and back
+    // while a computation is still running in the TaskManager.
+    async function _findRunningAnalyticsTask() {
+        try {
+            var resp = await fetch('/tasks/?include_completed=false', { credentials: 'same-origin' });
+            var data = await resp.json();
+            if (!data.success) return null;
+            var tasks = data.tasks || [];
+            for (var i = 0; i < tasks.length; i++) {
+                var t = tasks[i];
+                if (t.task_type === 'graph_analytics'
+                    && (t.status === 'running' || t.status === 'pending')) {
+                    return t;
+                }
+            }
+            return null;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    // Wait for an already-running analysis task to finish, then load its result.
+    async function _waitAndLoad(taskId) {
+        _setAnalysisBusy(true);
+        try {
+            await waitForTask(taskId);
+            var ok = await window.analyticsLoadLatest();
+            if (!ok) _showAnalyticsError('Analysis finished but no result could be loaded');
+        } catch (e) {
+            _showAnalyticsError('Analysis failed: ' + (e && e.message ? e.message : e));
+        } finally {
+            _setAnalysisBusy(false);
+        }
+    }
+
+    // Called on section open. ALWAYS render the last stored run first so the
+    // PageRank / Betweenness / … tabs are populated immediately, independent of
+    // any in-flight task. Then, if a computation is still running in the
+    // background, re-show the spinner and resume waiting (the last result stays
+    // visible underneath until the new one lands).
+    window.analyticsResume = async function () {
+        await window.analyticsLoadLatest();
+        var running = await _findRunningAnalyticsTask();
+        if (running) {
+            await _waitAndLoad(running.id);
+        }
+    };
+
+    window.analyticsCompute = async function () {
+        _setAnalysisBusy(true);
+
+        _resetAnalyticsCards();
 
         // Ensure entity types are loaded (fallback if section was opened directly)
         if (_allTypes.length === 0) _loadEntityTypes();
@@ -548,61 +827,33 @@
                 body: JSON.stringify({ class_filter: _getSelectedTypes() })
             });
             var data = await resp.json();
-            if (!data.success) { _showAnalyticsError(data.message || 'Metrics computation failed'); return; }
-
-            _analyticsData = data;
-
-            // Update subtitle with the active filter
-            var _subtitle    = document.getElementById('analyticsSubtitle');
-            var _subtitleTxt = document.getElementById('analyticsSubtitleText');
-            var _selEl = document.getElementById('analyticsTypeSelect');
-            var _selOpt = _selEl && _selEl.selectedIndex >= 0 ? _selEl.options[_selEl.selectedIndex] : null;
-            if (_subtitle && _subtitleTxt) {
-                if (_selOpt && _selEl.value) {
-                    _subtitleTxt.textContent = _selOpt.text.trim();
-                    _subtitle.classList.remove('d-none');
-                } else {
-                    _subtitle.classList.add('d-none');
-                }
+            if (!data.success || !data.task_id) {
+                _showAnalyticsError(data.message || 'Could not start the analysis');
+                return;
             }
 
-            var s = data.stats;
-            _setText('aStatNodes',      s.node_count        != null ? s.node_count.toLocaleString()  : '—');
-            _setText('aStatEdges',      s.edge_count        != null ? s.edge_count.toLocaleString()  : '—');
-            _setText('aStatComponents', s.connected_components != null ? s.connected_components      : '—');
-            _setText('aStatAvgDegree',  s.avg_degree        != null ? s.avg_degree.toFixed(2)        : '—');
-            _setText('aStatDensity',    s.density           != null ? s.density.toFixed(6)           : '—');
-            _setText('aStatElapsed',    s.elapsed_ms        != null ? s.elapsed_ms + ' ms'           : '—');
+            // Refresh the global task tracker so the new job shows immediately.
+            if (typeof refreshTasks === 'function') refreshTasks();
 
-            // Show graph_node_count sub-label when filter was applied
-            var graphNodeEl = document.getElementById('aStatGraphNodes');
-            if (graphNodeEl) {
-                var gn = s.graph_node_count;
-                graphNodeEl.textContent = (gn && gn !== s.node_count) ? '(' + gn.toLocaleString() + ' in subgraph)' : '';
+            // Wait for the background task to finish, then render from storage.
+            await waitForTask(data.task_id);
+
+            var ok = await window.analyticsLoadLatest();
+            if (!ok) {
+                _showAnalyticsError('Analysis finished but no result could be loaded');
+                return;
             }
 
-            analyticsRenderCharts();
-            _renderTypeProfiles(data.entity_type_profiles, !!_getSelectedTypes());
-
-            if (spinner) spinner.classList.add('d-none');
-            var results = document.getElementById('analyticsResults');
-            if (results) results.classList.remove('d-none');
-
-            // Reveal the Interpret button; reset audit button
-            var interpretBtn = document.getElementById('analyticsInterpretBtn');
-            if (interpretBtn) interpretBtn.classList.remove('d-none');
-            var auditBtn = document.getElementById('analyticsAuditBtn');
-            if (auditBtn) auditBtn.classList.add('d-none');
-            _analyticsLastSections = null;
-
-            if (typeof showNotification === 'function')
-                showNotification('Analysis done: ' + Object.keys(data.nodes).length + ' nodes in ' + s.elapsed_ms + 'ms', 'success');
+            if (typeof showNotification === 'function') {
+                var n = _analyticsData && _analyticsData.nodes ? Object.keys(_analyticsData.nodes).length : 0;
+                var ms = _analyticsData && _analyticsData.stats ? _analyticsData.stats.elapsed_ms : '';
+                showNotification('Analysis done: ' + n + ' nodes' + (ms ? ' in ' + ms + 'ms' : ''), 'success');
+            }
 
         } catch (e) {
-            _showAnalyticsError('Error: ' + e.message);
+            _showAnalyticsError('Error: ' + (e && e.message ? e.message : e));
         } finally {
-            if (btn) btn.disabled = false;
-            if (spinner) spinner.classList.add('d-none');
+            _setAnalysisBusy(false);
         }
     };
 
@@ -879,9 +1130,16 @@
     function _setText(id, val) { var el = document.getElementById(id); if (el) el.textContent = val; }
 
 
-    // Exposed so query.js can populate the dropdown on section activation
+    // Exposed so query.js can populate the dropdown on section activation.
+    // Also hydrates the page from the LAST stored analytics result (if any) —
+    // or, when a computation is still running in the background, re-shows the
+    // spinner and resumes waiting (so navigating away and back keeps progress).
     window.analyticsLoadTypes = function () {
-        _loadEntityTypes();
+        _loadEntityTypes().then(function () {
+            window.analyticsResume();
+        }).catch(function () {
+            window.analyticsResume();
+        });
     };
 
     // Run an immediate guard on load: if the config already tells us there is no graph,

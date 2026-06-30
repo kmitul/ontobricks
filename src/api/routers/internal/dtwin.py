@@ -442,13 +442,44 @@ async def detect_clusters(
 # ===========================================
 
 
+def _load_stored_metrics(domain, settings) -> Optional[dict]:
+    """Return the cached ``graph_analytics`` row for the active domain/version.
+
+    Resolves ``(folder, version)`` from the domain session and reads the
+    last persisted result via the registry. ``None`` when nothing is
+    stored yet or the lookup is not possible. Never raises.
+    """
+    from back.objects.registry.RegistryService import RegistryService
+
+    folder = getattr(domain, "uc_domain_folder", "") or ""
+    version = str(getattr(domain, "current_version", "") or "")
+    if not folder or not version:
+        return None
+    try:
+        svc = RegistryService.from_context(domain, settings)
+        return svc.load_graph_analytics(folder, version)
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("load_graph_analytics failed: %s", exc)
+        return None
+
+
 @router.post("/metrics/compute")
 async def compute_graph_metrics(
     request: Request,
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
-    """Compute centrality and structural metrics on the full knowledge graph."""
+    """Start an asynchronous knowledge-graph metrics computation.
+
+    The NetworkX analysis can take a while on large graphs, so it runs in
+    a background :class:`TaskManager` thread. The result (only the LAST
+    one) is persisted to the registry ``graph_analytics`` cache; clients
+    poll ``/tasks/{task_id}`` and then read ``/dtwin/metrics/latest``.
+    """
+    import threading
+
+    from back.core.task_manager import get_task_manager
+
     try:
         try:
             data = await request.json()
@@ -466,18 +497,38 @@ async def compute_graph_metrics(
 
         store = _require_graph_store(domain, settings)
 
-        dt = DigitalTwin(domain)
-        result = await run_blocking(
-            dt.compute_graph_metrics,
-            store,
-            graph_name,
-            predicate_filter=predicate_filter,
-            class_filter=class_filter,
-            max_triples=max_triples,
-            max_nodes_betweenness=max_nodes_betweenness,
+        tm = get_task_manager()
+        task = tm.create_task(
+            name="Graph Analytics",
+            task_type="graph_analytics",
+            steps=[
+                {"name": "compute", "description": "Computing graph metrics"},
+                {"name": "store", "description": "Storing analytics result"},
+            ],
         )
 
-        return {"success": True, **result}
+        def run_metrics():
+            DigitalTwin.run_metrics_task(
+                tm,
+                task.id,
+                domain,
+                settings,
+                store,
+                graph_name,
+                predicate_filter=predicate_filter,
+                class_filter=class_filter,
+                max_triples=max_triples,
+                max_nodes_betweenness=max_nodes_betweenness,
+            )
+
+        thread = threading.Thread(target=run_metrics, daemon=True)
+        thread.start()
+
+        return {
+            "success": True,
+            "task_id": task.id,
+            "message": "Analysis started",
+        }
 
     except (ValidationError, InfrastructureError, NotFoundError):
         raise
@@ -489,38 +540,98 @@ async def compute_graph_metrics(
         raise InfrastructureError("Graph metrics computation failed", detail=str(e))
 
 
+@router.get("/metrics/latest")
+async def get_latest_graph_metrics(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Return the LAST persisted metrics result for the active domain/version.
+
+    Reads the ``graph_analytics`` cache populated by the background
+    compute task. ``{success, has_result: false}`` when no analysis has
+    been run yet for this version.
+    """
+    try:
+        domain = get_domain(session_mgr)
+        stored = _load_stored_metrics(domain, settings)
+        if not stored:
+            return {"success": True, "has_result": False}
+
+        result = stored.get("result") or {}
+        return {
+            "success": True,
+            "has_result": True,
+            "computed_at": stored.get("computed_at", ""),
+            "duration_ms": stored.get("duration_ms", 0),
+            "class_filter": stored.get("class_filter") or [],
+            "graph_name": stored.get("graph_name", ""),
+            **result,
+        }
+
+    except (ValidationError, InfrastructureError, NotFoundError):
+        raise
+    except Exception as e:
+        logger.exception("Loading latest graph metrics failed: %s", e)
+        raise InfrastructureError("Loading latest graph metrics failed", detail=str(e))
+
+
+@router.get("/metrics/history")
+async def get_graph_metrics_history(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Return the analytics run history (newest-first) for this domain/version.
+
+    Lightweight metadata per run from the ``graph_analytics_runs`` trace —
+    backs the Analytics page "History" tab.
+    """
+    from back.objects.registry.RegistryService import RegistryService
+
+    try:
+        domain = get_domain(session_mgr)
+        folder = getattr(domain, "uc_domain_folder", "") or ""
+        version = str(getattr(domain, "current_version", "") or "")
+        if not folder or not version:
+            return {"success": True, "runs": []}
+
+        svc = RegistryService.from_context(domain, settings)
+        runs = svc.load_graph_analytics_runs(folder, version, limit=100)
+        return {"success": True, "runs": runs}
+
+    except (ValidationError, InfrastructureError, NotFoundError):
+        raise
+    except Exception as e:
+        logger.exception("Loading graph metrics history failed: %s", e)
+        raise InfrastructureError("Loading graph metrics history failed", detail=str(e))
+
+
 @router.get("/metrics/summary")
 async def get_graph_metrics_summary(
     session_mgr: SessionManager = Depends(get_session_manager),
     settings: Settings = Depends(get_settings),
 ):
-    """Return aggregate graph structure stats and top-PageRank nodes (cockpit card)."""
+    """Return stored graph structure stats and top-PageRank nodes (cockpit card).
+
+    Reads from the ``graph_analytics`` cache instead of recomputing, so
+    opening the Domain Validation page no longer blocks on a full NetworkX
+    run. ``{success, has_result: false}`` when no analysis has been run.
+    """
     try:
         domain = get_domain(session_mgr)
-        graph_name = effective_graph_name(domain)
-        if not graph_name:
-            raise ValidationError("Graph name is not configured")
-
-        store = _require_graph_store(domain, settings)
-
-        dt = DigitalTwin(domain)
-        result = await run_blocking(
-            dt.compute_graph_metrics,
-            store,
-            graph_name,
-        )
+        stored = _load_stored_metrics(domain, settings)
+        if not stored:
+            return {"success": True, "has_result": False}
 
         return {
             "success": True,
-            "stats": result["stats"],
-            "top_pagerank": result["top_pagerank"],
+            "has_result": True,
+            "stats": stored.get("stats") or {},
+            "top_pagerank": stored.get("top_pagerank") or [],
+            "computed_at": stored.get("computed_at", ""),
         }
 
     except (ValidationError, InfrastructureError, NotFoundError):
         raise
-    except ValueError as e:
-        logger.warning("Graph metrics summary rejected: %s", e)
-        raise ValidationError("Graph metrics summary failed", detail=str(e))
     except Exception as e:
         logger.exception("Graph metrics summary failed: %s", e)
         raise InfrastructureError("Graph metrics summary failed", detail=str(e))

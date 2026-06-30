@@ -2578,6 +2578,133 @@ class DigitalTwin:
                 tm.fail_task(task_id, failure_message)
 
     @staticmethod
+    def run_metrics_task(
+        tm,
+        task_id: str,
+        domain,
+        settings,
+        store: Any,
+        graph_name: str,
+        *,
+        predicate_filter: Optional[List[str]] = None,
+        class_filter: Optional[List[str]] = None,
+        max_triples: int = 500_000,
+        max_nodes_betweenness: int = 2_000,
+    ) -> None:
+        """Compute graph metrics in a worker thread and persist the LAST result.
+
+        Runs the same NetworkX pipeline as the synchronous
+        :meth:`compute_graph_metrics`, then UPSERTs the result into the
+        registry ``graph_analytics`` cache keyed by ``(folder, version)``
+        so the Analytics page and the Domain Validation cockpit can render
+        from storage. On success the previous cached row is replaced; on
+        failure it is left intact (the error surfaces through the global
+        task tracker, not the cache).
+        """
+        import time as _time
+        from datetime import datetime, timezone
+
+        from back.objects.registry.RegistryService import RegistryService
+
+        folder = getattr(domain, "uc_domain_folder", "") or ""
+        version = str(getattr(domain, "current_version", "") or "")
+        class_filter_list = list(class_filter or [])
+        t0 = _time.time()
+        try:
+            tm.start_task(task_id, "Computing knowledge graph metrics...")
+            tm.update_progress(task_id, 20, "Running centrality analysis")
+
+            dt = DigitalTwin(domain)
+            result = dt.compute_graph_metrics(
+                store,
+                graph_name,
+                predicate_filter=predicate_filter,
+                class_filter=class_filter,
+                max_triples=max_triples,
+                max_nodes_betweenness=max_nodes_betweenness,
+            )
+
+            tm.update_progress(task_id, 85, "Storing analytics result")
+
+            duration_ms = int((_time.time() - t0) * 1000)
+            now_iso = datetime.now(timezone.utc).isoformat()
+            stats = result.get("stats", {}) or {}
+            entry = {
+                "status": "completed",
+                "graph_name": graph_name,
+                "class_filter": class_filter_list,
+                "stats": stats,
+                "top_pagerank": result.get("top_pagerank", []),
+                "result": result,
+                "error": "",
+                "task_id": task_id,
+                "duration_ms": duration_ms,
+                "computed_at": now_iso,
+            }
+            if folder and version:
+                svc = RegistryService.from_context(domain, settings)
+                svc.save_graph_analytics(folder, version, entry)
+                # Append a lightweight row to the run history.
+                svc.record_graph_analytics_run(
+                    folder,
+                    version,
+                    {
+                        "status": "completed",
+                        "class_filter": class_filter_list,
+                        "node_count": int(stats.get("node_count", 0) or 0),
+                        "edge_count": int(stats.get("edge_count", 0) or 0),
+                        "connected_components": int(
+                            stats.get("connected_components", 0) or 0
+                        ),
+                        "avg_degree": float(stats.get("avg_degree", 0) or 0),
+                        "density": float(stats.get("density", 0) or 0),
+                        "duration_ms": duration_ms,
+                        "task_id": task_id,
+                        "error": "",
+                        "computed_at": now_iso,
+                    },
+                )
+            else:
+                logger.warning(
+                    "run_metrics_task %s: missing folder/version (%r/%r) — "
+                    "result not persisted",
+                    task_id,
+                    folder,
+                    version,
+                )
+
+            node_count = stats.get("node_count", 0)
+            tm.complete_task(
+                task_id,
+                result={"node_count": node_count, "duration_ms": duration_ms},
+                message=f"Analysis done: {node_count} nodes in {duration_ms} ms",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Graph metrics task failed: %s", exc)
+            # Record the failed run in the history (best-effort) so users can
+            # see it in the Analytics History tab. The last good cached result
+            # is intentionally left untouched.
+            if folder and version:
+                try:
+                    RegistryService.from_context(
+                        domain, settings
+                    ).record_graph_analytics_run(
+                        folder,
+                        version,
+                        {
+                            "status": "failed",
+                            "class_filter": class_filter_list,
+                            "duration_ms": int((_time.time() - t0) * 1000),
+                            "task_id": task_id,
+                            "error": str(exc),
+                            "computed_at": datetime.now(timezone.utc).isoformat(),
+                        },
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+            tm.fail_task(task_id, str(exc))
+
+    @staticmethod
     def run_inference_task(
         tm,
         task_id: str,

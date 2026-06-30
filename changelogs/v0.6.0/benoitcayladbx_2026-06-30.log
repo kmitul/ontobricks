@@ -1,3 +1,255 @@
+## Analytics — always render the last run in the result tabs on open
+
+Context: Opening the Analytics section should immediately populate the result
+tabs (PageRank, Betweenness, Degree, Closeness, Clustering, Data Model Health)
+with the last stored analysis. `analyticsResume()` checked for an in-flight
+`graph_analytics` task *first* and only rendered the stored result in the `else`
+branch — so a running (or stale/leftover) background task delayed or blocked the
+last run from showing in the tabs.
+
+Fix: `analyticsResume()` now calls `analyticsLoadLatest()` unconditionally first
+(so the tabs are populated right away from the `graph_analytics` cache),
+then checks for a running task and, if present, re-shows the spinner and resumes
+waiting — the last result stays visible underneath until the new one lands.
+`analyticsLoadLatest()` shows the spinner (with a "Loading the last analysis…"
+message) while it fetches/renders the stored result.
+
+Changes:
+
+1. src/front/templates/partials/dtwin/_query_analytics.html
+   - `analyticsResume()` reordered: render last stored run first, resume any
+     in-flight task afterwards.
+   - `analyticsLoadLatest()` toggles `#analyticsSpinner` (temporary "Loading the
+     last analysis…" message) around the fetch/render.
+
+Modified files:
+- src/front/templates/partials/dtwin/_query_analytics.html
+
+Tests: not run — frontend-only change (no Python touched); no unit tests cover
+this inline template script.
+
+
+## Analytics — add a "History" tab listing every analysis run
+
+Context: With analytics now persisting only the LAST result per
+`(domain, version)`, there was no way to see how many analyses had been run, when,
+with what scope, or whether any failed. Requested a new tab (after AI Insights)
+that lists all analyses ran (history).
+
+Design: added an append-only `graph_analytics_runs` trace (one immutable,
+lightweight row per launch — success or failure) alongside the existing
+`graph_analytics` cache. The cache still backs the result tabs and the cockpit;
+the new trace backs the History tab only. Capped server-side at 100 rows per
+`(domain, version)` (oldest pruned on insert) to stay bounded. Mirrors the
+`build_runs` store conventions (lazy `_ensure_*` self-heal DDL, best-effort
+writes, `_KNOWN_TABLES`).
+
+Changes:
+
+1. src/back/objects/registry/store/lakebase/schema.sql
+   New `graph_analytics_runs` table DDL + `(domain_id, version, computed_at DESC)`
+   index.
+2. scripts/upgrade_lakebase_0.6_add_graph_analytics.sql,
+   scripts/bootstrap-lakebase-perms.sh
+   Added the `graph_analytics_runs` table (+ index) to the migration and the
+   deploy-time inline migrations block.
+3. src/back/objects/registry/store/base.py
+   New `GraphAnalyticsRun` TypedDict + default-no-op `record_graph_analytics_run`
+   / empty-list `load_graph_analytics_runs` on the `RegistryStore` ABC.
+4. src/back/objects/registry/store/lakebase/store.py
+   `_graph_analytics_runs_ready` guard, `_ensure_graph_analytics_runs_table`,
+   `record_graph_analytics_run` (INSERT … SELECT from domains + cap prune),
+   `load_graph_analytics_runs`, `_graph_analytics_run_row_to_entry`; added
+   `graph_analytics_runs` to `_KNOWN_TABLES`.
+5. src/back/objects/registry/RegistryService.py
+   `record_graph_analytics_run` / `load_graph_analytics_runs` delegation
+   (best-effort).
+6. src/back/objects/digitaltwin/DigitalTwin.py
+   `run_metrics_task` now records a history row on success AND on failure (the
+   failed-run row is best-effort and leaves the last good cached result intact).
+7. src/api/routers/internal/dtwin.py
+   New `GET /dtwin/metrics/history` returns the newest-first run list.
+8. src/front/templates/partials/dtwin/_query_analytics.html
+   New "History" tab + pane (table: When / Scope / Status / Nodes / Edges /
+   Components / Avg Degree / Density / Duration); `analyticsLoadHistory()` fetches
+   `/dtwin/metrics/history` and renders rows (failed runs shown with an error
+   tooltip); `_renderAnalyticsData()` refreshes the tab whenever a result renders.
+9. tests/units/registry/test_registry_store.py
+   In-memory `record/load_graph_analytics_runs` + empty / newest-first / limit /
+   version-scoping tests.
+10. docs/architecture.md, docs/user-guide.md
+    Documented the `graph_analytics_runs` table and the History tab.
+
+Modified files:
+- src/back/objects/registry/store/lakebase/schema.sql
+- scripts/upgrade_lakebase_0.6_add_graph_analytics.sql
+- scripts/bootstrap-lakebase-perms.sh
+- src/back/objects/registry/store/base.py
+- src/back/objects/registry/store/lakebase/store.py
+- src/back/objects/registry/RegistryService.py
+- src/back/objects/digitaltwin/DigitalTwin.py
+- src/api/routers/internal/dtwin.py
+- src/front/templates/partials/dtwin/_query_analytics.html
+- tests/units/registry/test_registry_store.py
+- docs/architecture.md
+- docs/user-guide.md
+
+Tests: `uv run pytest -q -m "not scenario" tests/units/registry
+tests/units/core/test_graph_metrics.py` → 300 passed.
+
+
+## Analytics — resume the running spinner when returning to the page
+
+Context: With the analysis now running in a background TaskManager task, leaving
+the Analytics page (to Ontology or another section/page) and coming back while a
+computation was still running showed no progress indicator — the spinner state
+lived only in the `analyticsCompute()` call that started it. Users had no signal
+the analysis was still in flight.
+
+Fix: on section open, query the global task list for an in-flight
+`graph_analytics` task; if one exists, re-show the spinner, disable the button,
+and resume waiting (`waitForTask`) before loading the stored result. Otherwise
+just render the last stored result as before.
+
+Changes:
+
+1. src/front/templates/partials/dtwin/_query_analytics.html
+   - New `_setAnalysisBusy()` (single spinner/button toggle), `_findRunningAnalyticsTask()`
+     (scans `GET /tasks/?include_completed=false` for a running/pending
+     `graph_analytics` task), `_waitAndLoad()`, and `analyticsResume()`.
+   - `analyticsLoadTypes()` now calls `analyticsResume()` instead of
+     `analyticsLoadLatest()` directly, so a re-opened page rejoins an in-progress
+     run.
+   - `analyticsCompute()` refactored to use `_setAnalysisBusy()`.
+
+Modified files:
+- src/front/templates/partials/dtwin/_query_analytics.html
+
+Tests: not run — frontend-only change (no Python touched); no unit tests cover
+this inline template script.
+
+
+## Analytics — enable "Run Analysis" immediately when a graph is configured
+
+Context: On first opening the KG → Analytics section, the **Run Analysis**
+button stayed disabled for a few seconds even though the graph existed. The
+button was only re-enabled after the `/dtwin/sync/stats` round-trip (which loads
+the optional entity-type filter) completed, so the network latency of that call
+was perceived as the button "taking a while to check" whether a graph exists.
+
+Fix: a configured `window.__TRIPLESTORE_CONFIG.graph_name` already tells us a
+graph exists, so enable the button (and hide the no-graph banner) immediately in
+`_loadEntityTypes()` before awaiting `/dtwin/sync/stats`. The stats call now only
+enriches the entity-type dropdown; if it reports no built graph (`success:false`)
+the button is re-disabled as before.
+
+Changes:
+
+1. src/front/templates/partials/dtwin/_query_analytics.html
+   `_loadEntityTypes()` — optimistically `_setComputeBtnState(true)` +
+   `_showNoGraphBanner(false)` as soon as `graph_name` is present, before the
+   stats fetch, so the button is no longer gated on that round-trip.
+
+Modified files:
+- src/front/templates/partials/dtwin/_query_analytics.html
+
+Tests: not run — single frontend-only change (no Python touched); no unit tests
+cover this inline template script.
+
+
+## Async Graph Analytics — background compute + persisted last result
+
+Context: The Knowledge Graph Analytics computation (NetworkX centrality /
+structure) ran synchronously, blocking the browser until it finished, and the
+Domain Validation cockpit even re-ran a full compute on every page load. On
+large graphs this is slow and wasteful. Made the analysis asynchronous (a
+background `TaskManager` task), persisted **only the last** result per
+`(domain, version)` in a new Lakebase `graph_analytics` cache, and switched the
+Analytics page and the cockpit to render from that stored result.
+
+Key design decisions:
+- One row per `(domain_id, version)`, UPSERTed on every successful recompute —
+  literally "only the last one persists". The full `compute_graph_metrics`
+  payload is stored in a `result` JSONB column so the page tabs and the AI
+  Interpret agent rebuild everything from storage; `stats` / `top_pagerank` are
+  denormalised for the cheap cockpit summary read.
+- Reused the existing KG-build async convention: `POST /dtwin/metrics/compute`
+  now returns a `task_id`, the frontend polls `/tasks/{id}` via the global
+  `waitForTask()` then reads `/dtwin/metrics/latest`. Mirrored the `build_runs`
+  store pattern (lazy `_ensure_*` self-heal DDL, best-effort writes).
+- Failures leave the previous good cached row intact (the error surfaces via the
+  global task tracker, not the cache).
+
+Changes:
+
+1. src/back/objects/registry/store/lakebase/schema.sql
+   New `graph_analytics` table DDL (PK `(domain_id, version)`).
+2. scripts/upgrade_lakebase_0.6_add_graph_analytics.sql (new)
+   Idempotent migration for registries provisioned before the table existed;
+   also added to the `bootstrap-lakebase-perms.sh` inline migrations block.
+3. src/back/objects/registry/store/lakebase/store.py
+   `_graph_analytics_ready` guard, `_ensure_graph_analytics_table`,
+   `save_graph_analytics` (INSERT … ON CONFLICT DO UPDATE), `load_graph_analytics`,
+   `_graph_analytics_row_to_entry`; added `graph_analytics` to `_KNOWN_TABLES`.
+4. src/back/objects/registry/store/base.py
+   New `GraphAnalyticsResult` TypedDict + default-no-op `save/load_graph_analytics`
+   on the `RegistryStore` ABC.
+5. src/back/objects/registry/RegistryService.py
+   `save_graph_analytics` / `load_graph_analytics` delegation (best-effort).
+6. src/back/objects/digitaltwin/DigitalTwin.py
+   New `run_metrics_task`: compute in a worker thread, UPSERT the result on
+   success (via `RegistryService.from_context`), `fail_task` on error.
+7. src/api/routers/internal/dtwin.py
+   `/metrics/compute` now starts a background task and returns `task_id`; new
+   `GET /metrics/latest` reads the cached row; `GET /metrics/summary` reads the
+   cache instead of recomputing; shared `_load_stored_metrics` helper.
+8. src/front/templates/partials/dtwin/_query_analytics.html
+   Extracted `_renderAnalyticsData`; new `analyticsLoadLatest` (hydrates from the
+   cache on section open and after a run, restores the entity-type filter, shows a
+   "Last computed …" line); `analyticsCompute` now starts the task, waits via
+   `waitForTask`, then reloads from storage.
+9. src/front/static/global/js/task-tracker.js
+   Registered `graph_analytics` → `/dtwin#analytics` in `TASK_TYPE_URLS`.
+10. src/front/static/domain/js/domain-validation.js + _domain_validation.html
+   Cockpit "Graph Structure" card handles `has_result:false` with a
+   "Run Analysis in KG → Analytics" prompt instead of a blocking recompute.
+11. tests/units/registry/test_registry_store.py
+   In-memory `save/load_graph_analytics` + round-trip / UPSERT / version-scoping
+   / missing-row tests.
+12. tests/e2e/scenarios/test_scenario_3_rules_analysis.py
+   Updated the (opt-in) analysis step to the async flow (compute → poll task →
+   read `/metrics/latest`).
+13. docs/architecture.md, docs/user-guide.md
+   Documented the `graph_analytics` table and the async / persisted-last-result
+   behaviour.
+
+Modified files:
+- src/back/objects/registry/store/lakebase/schema.sql
+- scripts/upgrade_lakebase_0.6_add_graph_analytics.sql (new)
+- scripts/bootstrap-lakebase-perms.sh
+- src/back/objects/registry/store/lakebase/store.py
+- src/back/objects/registry/store/base.py
+- src/back/objects/registry/RegistryService.py
+- src/back/objects/digitaltwin/DigitalTwin.py
+- src/api/routers/internal/dtwin.py
+- src/front/templates/partials/dtwin/_query_analytics.html
+- src/front/static/global/js/task-tracker.js
+- src/front/static/domain/js/domain-validation.js
+- src/front/templates/partials/domain/_domain_validation.html
+- tests/units/registry/test_registry_store.py
+- tests/e2e/scenarios/test_scenario_3_rules_analysis.py
+- docs/architecture.md
+- docs/user-guide.md
+
+Tests: `uv run pytest -q -m "not scenario"
+tests/units/registry/test_registry_store.py tests/units/core/test_graph_metrics.py`
+→ 92 passed. Full `uv run pytest -q -m "not scenario"` → 3017 passed, 58 failed,
+17 skipped. The 58 failures are the pre-existing full-suite event-loop/
+test-isolation flakes in the API/MCP suites — confirmed unrelated by stashing
+this work and re-running the full suite on the clean tree (identical 58 failures,
+3013 passed), and by the affected files passing in isolation/together.
+
+
 ## Add scenario 3 — rules → data quality → reasoning → analysis → audit trail
 
 Context: New live, gated journey that runs **after scenarios 1 and 2** and

@@ -180,6 +180,62 @@ CREATE INDEX IF NOT EXISTS idx_build_runs_domain_version
     ON build_runs(domain_id, version, started_at DESC);
 
 -- ----------------------------------------------------------------
+-- Graph analytics cache — the LAST computed knowledge-graph metrics
+-- result per (domain_id, version). Unlike build_runs this is a cache,
+-- not a trace: a single row per tuple, replaced on every successful
+-- recompute (UPSERT). Powers the asynchronous KG Analytics page and
+-- the Domain Validation "Graph Structure" cockpit card, which both
+-- render from this row instead of recomputing on request. The full
+-- ``compute_graph_metrics`` payload lives in ``result`` so the page
+-- and the AI Interpret agent can rebuild every tab from storage.
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS graph_analytics (
+    domain_id    uuid NOT NULL
+                 REFERENCES domains(id) ON DELETE CASCADE,
+    version      text NOT NULL,
+    status       text NOT NULL DEFAULT 'completed',  -- completed|failed
+    graph_name   text NOT NULL DEFAULT '',
+    class_filter jsonb NOT NULL DEFAULT '[]'::jsonb,  -- entity types used ([]=all)
+    stats        jsonb NOT NULL DEFAULT '{}'::jsonb,
+    top_pagerank jsonb NOT NULL DEFAULT '[]'::jsonb,
+    result       jsonb NOT NULL DEFAULT '{}'::jsonb,  -- full compute payload
+    error        text NOT NULL DEFAULT '',
+    task_id      text NOT NULL DEFAULT '',
+    duration_ms  bigint NOT NULL DEFAULT 0,
+    computed_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain_id, version)
+);
+
+-- ----------------------------------------------------------------
+-- Graph analytics run history (append-only). One immutable row per
+-- analysis launched (success or failure), keyed by (domain_id,
+-- version). Unlike ``graph_analytics`` (which caches only the LAST
+-- full result) this keeps the lightweight metadata of every run so
+-- the Analytics page can show a "History" list. Capped server-side
+-- per (domain, version) to avoid unbounded growth.
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS graph_analytics_runs (
+    id                  bigserial PRIMARY KEY,
+    domain_id           uuid NOT NULL
+                        REFERENCES domains(id) ON DELETE CASCADE,
+    version             text NOT NULL,
+    status              text NOT NULL DEFAULT 'completed',  -- completed|failed
+    class_filter        jsonb NOT NULL DEFAULT '[]'::jsonb,
+    node_count          bigint NOT NULL DEFAULT 0,
+    edge_count          bigint NOT NULL DEFAULT 0,
+    connected_components integer NOT NULL DEFAULT 0,
+    avg_degree          double precision NOT NULL DEFAULT 0,
+    density             double precision NOT NULL DEFAULT 0,
+    duration_ms         bigint NOT NULL DEFAULT 0,
+    task_id             text NOT NULL DEFAULT '',
+    error               text NOT NULL DEFAULT '',
+    computed_at         timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_graph_analytics_runs_domain_version
+    ON graph_analytics_runs(domain_id, version, computed_at DESC);
+
+-- ----------------------------------------------------------------
 -- Domain-version review / validation audit log (append-only).
 -- One immutable row per workflow decision or lifecycle change:
 -- submit-for-review, business-user sign-off (approve), request

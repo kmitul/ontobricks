@@ -800,6 +800,56 @@ class RegistryService:
         """Aggregate build statistics for *folder* (optionally one version)."""
         return self._store.build_analytics(folder, version=version)
 
+    # -- graph analytics cache (last result per folder/version) ------
+
+    def save_graph_analytics(
+        self, folder: str, version: str, entry: dict
+    ) -> None:
+        """UPSERT the latest KG analytics result for *folder*/*version*.
+
+        Never raises — a failed cache write must not break the background
+        analytics task. See :meth:`RegistryStore.save_graph_analytics`.
+        """
+        try:
+            self._store.save_graph_analytics(folder, version, entry)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("save_graph_analytics(%s) raised: %s", folder, exc)
+
+    def load_graph_analytics(self, folder: str, version: str) -> Optional[dict]:
+        """Return the stored KG analytics result for *folder*/*version*
+        (or ``None`` when none exists). Never raises.
+        """
+        try:
+            return self._store.load_graph_analytics(folder, version)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("load_graph_analytics(%s) raised: %s", folder, exc)
+            return None
+
+    def record_graph_analytics_run(
+        self, folder: str, version: str, entry: dict
+    ) -> None:
+        """Append an analytics run-history row for *folder*/*version*.
+
+        Never raises — history is best-effort. See
+        :meth:`RegistryStore.record_graph_analytics_run`.
+        """
+        try:
+            self._store.record_graph_analytics_run(folder, version, entry)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("record_graph_analytics_run(%s) raised: %s", folder, exc)
+
+    def load_graph_analytics_runs(
+        self, folder: str, version: str, *, limit: int = 100
+    ) -> list:
+        """Newest-first analytics run history for *folder*/*version*."""
+        try:
+            return self._store.load_graph_analytics_runs(
+                folder, version, limit=limit
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("load_graph_analytics_runs(%s) raised: %s", folder, exc)
+            return []
+
     # -- load domain from registry (stateless) -----------------------
 
     def load_latest_domain_data(self, folder: str) -> Tuple[bool, dict, str, str]:

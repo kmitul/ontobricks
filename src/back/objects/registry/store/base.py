@@ -90,6 +90,55 @@ class BuildRunEntry(TypedDict, total=False):
     stats: Dict[str, Any]
 
 
+class GraphAnalyticsResult(TypedDict, total=False):
+    """The LAST computed knowledge-graph metrics for ``(folder, version)``.
+
+    Unlike :class:`BuildRunEntry` this is a *cache*, not a trace: exactly
+    one row per tuple, replaced on every successful recompute (UPSERT).
+    ``result`` carries the full ``DigitalTwin.compute_graph_metrics``
+    payload (nodes, entity_type_profiles, node_types/labels) so the
+    Analytics page and the AI Interpret agent can rebuild every tab from
+    storage. ``stats`` / ``top_pagerank`` are denormalised for the cheap
+    Domain Validation cockpit summary read.
+    """
+
+    version: str
+    status: str                  # 'completed' | 'failed'
+    graph_name: str
+    class_filter: List[str]      # entity-type URIs used ([] = all)
+    stats: Dict[str, Any]
+    top_pagerank: List[Any]
+    result: Dict[str, Any]       # full compute payload
+    error: str
+    task_id: str
+    duration_ms: int
+    computed_at: str             # ISO timestamp
+
+
+class GraphAnalyticsRun(TypedDict, total=False):
+    """One row in the analytics run history (``graph_analytics_runs``).
+
+    Lightweight metadata captured for *every* analysis launched (success
+    or failure) on ``(folder, version)`` — unlike
+    :class:`GraphAnalyticsResult`, which caches only the last full result.
+    Backs the Analytics page "History" tab. Append-only; capped per tuple.
+    """
+
+    id: int                      # row id (0 for stores without a serial PK)
+    version: str
+    status: str                  # 'completed' | 'failed'
+    class_filter: List[str]      # entity-type URIs used ([] = all)
+    node_count: int
+    edge_count: int
+    connected_components: int
+    avg_degree: float
+    density: float
+    duration_ms: int
+    task_id: str
+    error: str
+    computed_at: str             # ISO timestamp
+
+
 class ReviewEvent(TypedDict, total=False):
     """One row in the domain-version review / validation audit log.
 
@@ -375,6 +424,55 @@ class RegistryStore(ABC):
 
         Empty/zeroed dict on any error.
         """
+
+    # ------------------------------------------------------------------
+    # Graph analytics cache
+    #
+    # The LAST computed knowledge-graph metrics per (folder, version) —
+    # a single row replaced on every successful recompute (UPSERT), not
+    # an append-only trace. Powers the asynchronous KG Analytics page
+    # and the Domain Validation cockpit, which render from this row
+    # instead of recomputing NetworkX metrics on request. Best-effort:
+    # a failed write must never break the background analytics task.
+    # Default implementations are no-ops so stores that do not support
+    # the cache degrade gracefully (the page simply shows "no result").
+    # ------------------------------------------------------------------
+
+    def save_graph_analytics(
+        self, folder: str, version: str, entry: GraphAnalyticsResult
+    ) -> None:
+        """UPSERT the latest analytics result for ``(folder, version)``.
+
+        Best-effort; must NOT raise (log + swallow on failure). Default
+        is a no-op for stores without a graph-analytics cache.
+        """
+
+    def load_graph_analytics(
+        self, folder: str, version: str
+    ) -> Optional[GraphAnalyticsResult]:
+        """Return the stored analytics result for ``(folder, version)``,
+        or ``None`` when none exists. Never raises (returns ``None`` on
+        any error). Default is ``None`` for stores without a cache.
+        """
+        return None
+
+    def record_graph_analytics_run(
+        self, folder: str, version: str, entry: GraphAnalyticsRun
+    ) -> None:
+        """Append a run-history row for ``(folder, version)``.
+
+        Best-effort; must NOT raise. Default is a no-op for stores without
+        a run-history table.
+        """
+
+    def load_graph_analytics_runs(
+        self, folder: str, version: str, *, limit: int = 100
+    ) -> List[GraphAnalyticsRun]:
+        """Newest-first analytics run history for ``(folder, version)``,
+        capped at *limit* rows. Empty list on any error. Default is an
+        empty list for stores without a run-history table.
+        """
+        return []
 
     # ------------------------------------------------------------------
     # Review / validation audit log

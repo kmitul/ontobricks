@@ -76,7 +76,8 @@ _BUILD_TIMEOUT_S = int(os.environ.get("ONTOBRICKS_SCENARIO_BUILD_TIMEOUT", "420"
 _RULES_TIMEOUT_S = int(os.environ.get("ONTOBRICKS_SCENARIO_RULES_TIMEOUT", "600"))
 _DQ_TIMEOUT_S = int(os.environ.get("ONTOBRICKS_SCENARIO_DQ_TIMEOUT", "300"))
 _REASONING_TIMEOUT_S = int(os.environ.get("ONTOBRICKS_SCENARIO_REASONING_TIMEOUT", "420"))
-_ANALYSIS_TIMEOUT_MS = int(os.environ.get("ONTOBRICKS_SCENARIO_ANALYSIS_TIMEOUT", "300")) * 1000
+_ANALYSIS_TIMEOUT_S = int(os.environ.get("ONTOBRICKS_SCENARIO_ANALYSIS_TIMEOUT", "300"))
+_ANALYSIS_TIMEOUT_MS = _ANALYSIS_TIMEOUT_S * 1000
 
 
 def _base_url() -> str:
@@ -478,7 +479,10 @@ class TestScenario3RulesAnalysis:
             _step(f"no inferred triples to materialise (status={resp.status})")
 
         # ── 10. Run the Analysis on the knowledge graph, then interpret it ──
-        _step("running the graph analysis (POST /dtwin/metrics/compute)")
+        # The analysis runs asynchronously: POST returns a task id, we poll
+        # /tasks/<id> to completion, then read the persisted result from
+        # /dtwin/metrics/latest.
+        _step("starting the graph analysis (POST /dtwin/metrics/compute)")
         resp = page.context.request.post(
             f"{base}/dtwin/metrics/compute",
             headers=headers(),
@@ -486,8 +490,28 @@ class TestScenario3RulesAnalysis:
             timeout=_ANALYSIS_TIMEOUT_MS,
         )
         assert resp.status == 200, resp.text()
+        analysis_start = _json(resp)
+        assert analysis_start.get("success") is True, analysis_start
+        analysis_task_id = analysis_start.get("task_id")
+        assert analysis_task_id, "analysis task was not created"
+        _poll_task(
+            page,
+            base,
+            analysis_task_id,
+            _ANALYSIS_TIMEOUT_S,
+            label="graph analysis",
+        )
+
+        _step("loading the stored analysis result (GET /dtwin/metrics/latest)")
+        resp = page.context.request.get(
+            f"{base}/dtwin/metrics/latest",
+            headers=headers(),
+            timeout=_ANALYSIS_TIMEOUT_MS,
+        )
+        assert resp.status == 200, resp.text()
         metrics = _json(resp)
         assert metrics.get("success") is True, metrics
+        assert metrics.get("has_result") is True, metrics
         m_stats = metrics.get("stats", {}) or {}
         top_pr = metrics.get("top_pagerank", []) or []
         _step(

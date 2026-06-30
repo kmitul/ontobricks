@@ -707,6 +707,8 @@ relational tables:
 | `schedules` | Active scheduled-build configuration |
 | `schedule_runs` | Ring-buffered run history per domain |
 | `build_runs` | Append-only build-run trace (all paths) keyed by `(domain_id, version)` for analytics; active build = latest successful run |
+| `graph_analytics` | Cache of the LAST knowledge-graph metrics result (centrality/structure) keyed by `(domain_id, version)`; one row, replaced on every successful async recompute (UPSERT). Backs the KG Analytics page and the Domain Validation cockpit |
+| `graph_analytics_runs` | Append-only history of every analytics run launched (success or failure) keyed by `(domain_id, version)`; lightweight per-run metadata (node/edge counts, components, avg degree, density, duration, scope, status). Capped per tuple. Backs the KG Analytics "History" tab |
 | `domain_review_events` | Append-only review/validation audit log (submit / sign-off / publish / reopen / comment) keyed by `(domain_id, version)` |
 | `domain_comments` | Domain-wide threaded discussion keyed by `(domain_id, version)`; `parent_id` links replies, `resolved` closes a thread |
 | `domain_tasks` | Personalised work items assigned to a teammate (usually born from a comment); `status` walks `open → in_progress → done` (or `cancelled`), surfaced in the assignee's "My Tasks" worklist |

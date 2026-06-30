@@ -526,10 +526,16 @@ The cluster panel also displays:
 
 Click **Analytics** in the sidebar to compute and visualise centrality and structural metrics for the entities in your knowledge graph. Analytics runs a server-side NetworkX computation — no sampling is needed for typical graphs.
 
+Because this computation can take a while on large graphs, it runs **asynchronously** in the background. The **last** result is persisted in the registry (the `graph_analytics` table), so re-opening the Analytics page (or the Domain Validation cockpit) shows the previously computed result immediately without recomputing — a "Last computed …" line marks when it was produced.
+
 #### Running an Analysis
 
 1. (Optional) Select an **entity type** from the dropdown to restrict the analysis to one class (e.g. "Customer"). Selecting a type shows only instances of that type in the charts while still computing metrics on the full connected subgraph for accuracy. "All types (full graph)" includes every entity.
-2. Click **Run Analysis**. A spinner shows while the computation runs. Once complete, six stat cards appear (Nodes, Edges, Components, Avg Degree, Density, Elapsed) and five interactive charts render below.
+2. Click **Run Analysis**. The analysis starts as a background task (tracked in the global task bell, top-right) and a spinner shows while it runs — you can keep working elsewhere in the meantime. When it completes, the stored result loads automatically: six stat cards appear (Nodes, Edges, Components, Avg Degree, Density, Elapsed) and five interactive charts render below. Each new run replaces the previous stored result for that domain version.
+
+#### History
+
+The **History** tab (after *AI Insights*) lists every analysis launched for the current domain version — newest first — including failed runs. Each row shows when it ran, the scope (a single entity type or *All types*), its status, and the headline metrics (nodes, edges, components, average degree, density) plus the run duration. While the **last** full result is what the other tabs render, this tab keeps a lightweight audit trail of past runs so you can see how the graph evolved over time. The history is capped server-side per domain version.
 
 #### Reading the Charts
 
