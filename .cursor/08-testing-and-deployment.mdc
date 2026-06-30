@@ -13,7 +13,7 @@ scope:
   - All scenarios: `uv run pytest -m scenario`
   - The live, billable scenario (`test_scenario_1_generate_live.py`) additionally needs a running app + warehouse + LLM and is gated behind `ONTOBRICKS_SCENARIO_LIVE=1`. It writes a durable domain to the registry.
 - Ensure proper input validation and error handling.
-- **Deployment**: Deployed as a Databricks App via `databricks bundle deploy` using `app.yaml` (Databricks Asset Bundle format).
+- **Deployment**: Deployed as a Databricks App via `databricks bundle deploy` using `app.yaml` (Databricks Asset Bundle format). The container runs `uv run --frozen`, so `uv.lock` must stay pinned to the public CDN and in sync with `pyproject.toml` — see the **"`uv.lock` is deployment-critical"** section in `.cursor/09-package-management.mdc` before deploying or re-locking.
 - **Development Server**: Run via `run.py` which imports `create_app` from `shared.fastapi.main`. Uvicorn with auto-reload for local development.
 - **Changelog**: After any code change, update `/changelogs/YYYY-MM-DD.log` with a section including title, context, numbered changes with file paths, modified files list, and test results.
 

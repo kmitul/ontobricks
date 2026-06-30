@@ -99,3 +99,74 @@ Full `uv run pytest -q -m "not scenario"` → 3013 passed, 58 failed (the same
 pre-existing full-suite event-loop/test-isolation flakes documented above;
 confirmed unrelated — the affected API files pass in isolation and alongside the
 mapping tests, 64/64).
+
+
+## Document `uv.lock` deploy guardrails in rules + deploy skill
+
+Context: The Databricks Apps deploy runs `uv run --frozen` and installs verbatim
+from `uv.lock`. Two recurring failure modes have broken deploys before: (1) the
+lock's wheel URLs getting rewritten from the public CDN
+(`files.pythonhosted.org`) to the internal proxy
+(`pypi-proxy.dev.databricks.com`, which cold-caches fresh wheels and times out),
+and (2) the lock drifting out of sync with `pyproject.toml`. The dev shell
+defaults `UV_INDEX_URL`/`PIP_INDEX_URL` to the proxy, so any bare `uv lock` /
+`uv sync` silently churns the lock to proxy URLs. Verified the current lock is
+clean (3653 URLs, all `files.pythonhosted.org`, zero proxy; `uv lock --check`
+against the public index → exit 0) and captured the checks/rules so the issue
+can't recur.
+
+Changes:
+
+1. .cursor/09-package-management.mdc
+   New "`uv.lock` is deployment-critical — DO NOT let it churn" section: the two
+   failure modes, the day-to-day `--frozen` rule, the public-index re-lock
+   command, the read-only pre-deploy verification commands (URL host check +
+   `UV_INDEX_URL=https://pypi.org/simple uv lock --check`), and the
+   `git checkout -- uv.lock` recovery for accidental churn.
+2. .claude/skills/deploy/SKILL.md
+   Added pre-flight step 5 (verify lock is on the public CDN and in sync via the
+   public index) and two new "Don't" entries (no bare `uv lock`/`uv sync`; never
+   commit proxy URLs).
+3. .cursor/08-testing-and-deployment.mdc
+   Cross-referenced the new lockfile section from the Deployment bullet.
+
+Modified files:
+- .cursor/09-package-management.mdc
+- .claude/skills/deploy/SKILL.md
+- .cursor/08-testing-and-deployment.mdc
+
+Tests: not run — documentation/rules only, no Python touched. Verified the
+documented commands against the live lock: `rg -c 'pypi-proxy\.dev\.databricks\.com' uv.lock`
+→ no matches; `rg -o 'url = "https?://[^/"]+' uv.lock | sort -u` → only
+`https://files.pythonhosted.org`; `UV_INDEX_URL=https://pypi.org/simple uv lock --check`
+→ exit 0 (in sync).
+
+
+## Wire 12-ai-feature-lifecycle.mdc into CLAUDE.md + .cursorrules
+
+Context: `.cursor/12-ai-feature-lifecycle.mdc` (the CNS §3.5 eval gate for AI/LLM
+agent features) existed but was orphaned — `.cursorrules` only listed rules 1–11
+and `CLAUDE.md` only `@`-imported 01–11, so neither Cursor's contract nor Claude
+Code's session context referenced it. Wired it in so the gate is actually
+leveraged by both entry points.
+
+Changes:
+
+1. .cursorrules
+   - Added rule 12 (`12-ai-feature-lifecycle.mdc`) to the modular-rules list.
+   - New "When working on an AI / LLM agent feature" workflow block: scopes the
+     trigger (`src/agents/**`, `src/back/core/agents/**`, `src/mcp-server/**`,
+     new MLflow-traced LLM call, MCP tool wrapping an agent) and points at the
+     gate + the `ai-feature` skill, restating the hard rules (SPEC.md entry
+     ticket, eval delta, mandatory tracing).
+2. CLAUDE.md
+   - Added `@./.cursor/12-ai-feature-lifecycle.mdc` to the imported canonical
+     rules so Claude Code inlines it.
+   - Added the `ai-feature` skill row to the auto-invoked Skills table (the
+     orchestrator for the rule-12 gate).
+
+Modified files:
+- .cursorrules
+- CLAUDE.md
+
+Tests: not run — documentation/rules only, no Python touched.
