@@ -93,6 +93,31 @@ class TestSaveDomainInfo:
         Domain(domain).save_domain_info({"base_uri": "http://new.org#"})
         assert domain.ontology["base_uri"] == "http://new.org#"
 
+    def test_auto_base_uri_generated_from_name(self):
+        """Auto mode (no custom URI) generates {default}/{Name}# — never empty."""
+        domain = _mock_domain()
+        result = Domain(domain).save_domain_info({"name": "AcmeSales"})
+        assert result["base_uri"].endswith("/AcmeSales#")
+        assert result["base_uri"] != "Unknown"
+        assert result["base_uri_auto"] is True
+
+    def test_custom_base_uri_preserved_over_auto(self):
+        """A custom URI with base_uri_auto=False is kept verbatim."""
+        domain = _mock_domain()
+        Domain(domain).save_domain_info(
+            {"name": "AcmeSales", "base_uri": "http://acme.example/#", "base_uri_auto": False}
+        )
+        assert domain.ontology["base_uri"] == "http://acme.example/#"
+        assert domain.ontology["base_uri_auto"] is False
+
+    def test_empty_custom_base_uri_falls_back_to_generated(self):
+        """A blank custom URI is never stored — it regenerates from the name."""
+        domain = _mock_domain()
+        Domain(domain).save_domain_info(
+            {"name": "AcmeSales", "base_uri": "", "base_uri_auto": False}
+        )
+        assert domain.ontology["base_uri"].endswith("/AcmeSales#")
+
     def test_save_review_quorum(self):
         domain = _mock_domain()
         result = Domain(domain).save_domain_info({"review_quorum": 3})

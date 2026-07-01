@@ -39,6 +39,7 @@ from back.core.databricks import (
 )
 from back.core.helpers import (
     get_databricks_host_and_token,
+    resolve_default_base_uri,
     resolve_warehouse_id,
     run_blocking,
 )
@@ -288,13 +289,17 @@ class Domain:
 
         self._s.ontology["name"] = domain_name.lower()
 
-        # Update ontology base_uri if provided
-        base_uri = data.get("base_uri") or data.get("uri")
-        if base_uri:
-            self._s.ontology["base_uri"] = base_uri
-
-        if "base_uri_auto" in data:
-            self._s.ontology["base_uri_auto"] = bool(data["base_uri_auto"])
+        # Resolve the ontology base URI. In auto mode (the default for a new
+        # domain) it is generated server-side from the configured default base
+        # URI domain + the domain name, so the URI is always created correctly
+        # even if the browser never computed it. A custom URI is preserved; an
+        # empty custom URI falls back to the generated one (never stored empty).
+        provided = (data.get("base_uri") or data.get("uri") or "").strip()
+        auto = bool(data.get("base_uri_auto", not provided))
+        self._s.ontology["base_uri"] = self._resolve_base_uri(
+            domain_name, provided, auto=auto
+        )
+        self._s.ontology["base_uri_auto"] = auto
 
         # Update version separately
         if data.get("version"):
@@ -321,6 +326,28 @@ class Domain:
             return max(1, int(raw))
         except (TypeError, ValueError):
             return 1
+
+    def _resolve_base_uri(
+        self, domain_name: str, provided: str = "", *, auto: bool = True
+    ) -> str:
+        """Return the effective ontology base URI for ``domain_name``.
+
+        Mirrors the frontend ``updateAutoBaseUri`` (``{default}/{Name}#``):
+        a custom (non-auto) value is kept as-is, while auto mode — or an empty
+        custom value — is generated from the globally configured default base
+        URI domain and the domain name. Guarantees a non-empty, well-formed URI
+        so a new domain never persists an empty or sentinel base_uri.
+        """
+        if not auto and provided:
+            return provided
+        try:
+            default_domain = resolve_default_base_uri(self._s, self._settings)
+        except Exception as exc:  # noqa: BLE001 — never fail a save on URI gen
+            logger.debug("default base URI resolve failed: %s", exc)
+            default_domain = ""
+        default_domain = (default_domain or DEFAULT_BASE_URI).rstrip("/#")
+        safe_name = (domain_name or "").strip() or "MyDomain"
+        return f"{default_domain}/{safe_name}#"
 
     def get_domain_template_data(self) -> Dict[str, Any]:
         """Get project data for template rendering.
@@ -757,6 +784,13 @@ class Domain:
                                 "have read-only access. Take over editing "
                                 "to make changes."
                             )
+            # Guarantee a well-formed base URI at persist time even if Domain
+            # Information was never saved (auto-generate from the domain name),
+            # so the Registry Browse "URI" column is never empty/"Unknown".
+            if not (self._s.ontology.get("base_uri") or "").strip():
+                self._s.ontology["base_uri"] = self._resolve_base_uri(
+                    self._s.info.get("name", ""), auto=True
+                )
             export_data = self._s.export_for_save()
             # A brand-new domain always starts as DRAFT; an overwrite of an
             # existing version preserves whatever status the session carries.

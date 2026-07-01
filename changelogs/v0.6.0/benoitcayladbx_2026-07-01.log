@@ -570,3 +570,134 @@ so it must not run in routine/agent runs.
 0 failed in ~23s** (previously 58 failed / 3132 passed / 265s). e2e still runs
 when explicitly targeted (`uv run pytest tests/e2e`). No product code changed —
 this is a test-collection fix only.
+
+
+## Fix: OWL import stored base_uri "Unknown" (Registry Browse URI column)
+
+### Context
+
+A domain imported from an OWL file with **no `owl:Ontology` declaration**
+showed its URI as literally **"Unknown"** on the Registry → Browse page (seen on
+`ratptraction`). Root cause: `OntologyParser.get_ontology_info()` returned the
+sentinel `{"uri": "Unknown", "namespace": DEFAULT_BASE_URI}` when no ontology
+header was found, and the OWL import path (`Ontology.apply_parsed_owl_to_domain`)
+persisted `base_uri = ontology_info["uri"]` — i.e. the "Unknown" sentinel. The
+RDFS import path already correctly preferred `namespace`; only the OWL path was
+wrong. `base_uri` then flows to the Lakebase `domains.base_uri` column, which the
+Browse table renders verbatim.
+
+### Changes
+
+1. `src/back/core/w3c/owl/OntologyParser.py`
+   - `get_ontology_info()` no-declaration fallback now returns
+     `uri = DEFAULT_BASE_URI` (was `"Unknown"`), so the sentinel can never leak
+     into a stored URI. Human label stays "Unknown Ontology".
+
+2. `src/back/objects/ontology/Ontology.py`
+   - `apply_parsed_owl_to_domain()` now sets
+     `base_uri = namespace or uri or DEFAULT_BASE_URI` (prefers the normalized,
+     `#`/`/`-terminated namespace), mirroring the RDFS import path.
+   - `build_parse_owl_success_payload()` preview `namespace` now prefers
+     `ontology_info["namespace"]` so the import preview matches the stored value.
+
+3. `tests/units/ontology/test_owl_parser.py`
+   - Regression test: an OWL file with no `owl:Ontology` header yields
+     `DEFAULT_BASE_URI`, never `"Unknown"`.
+
+### Modified files
+
+- `src/back/core/w3c/owl/OntologyParser.py`
+- `src/back/objects/ontology/Ontology.py`
+- `tests/units/ontology/test_owl_parser.py`
+
+### Test result
+
+`uv run pytest -q tests/units/ontology` — all pass (new regression test
+included). Note: this fixes *future* imports; the already-stored `ratptraction`
+domain must be repaired once (open it → Domain Information → set the base URI →
+Save to registry, or re-import the OWL file).
+
+
+## Server-side base_uri generation for new domains
+
+### Context
+
+Follow-up to the OWL-import fix: the base URI was only ever *computed in the
+browser* (`domain.js` auto mode: `{default}/{Name}#`). Any code path that
+persisted a domain without the browser having computed it — a brand-new domain
+saved before Domain Information was touched, or a programmatic caller — could
+still store an empty `base_uri` (shown as "—" on Registry Browse). This adds an
+authoritative server-side generator so a correct URI is **always** created when
+a new domain is saved, mirroring the frontend format.
+
+### Changes
+
+1. `src/back/objects/domain/Domain.py`
+   - New `_resolve_base_uri(name, provided, *, auto)` helper — returns a custom
+     URI as-is, otherwise generates `{default_base_uri_domain}/{Name}#` from the
+     globally configured default (via `resolve_default_base_uri`, fallback
+     `DEFAULT_BASE_URI`). Fail-safe: URI generation never raises into a save.
+   - `save_domain_info()` now resolves `base_uri` through the helper (auto mode
+     is the default when no custom URI is supplied) instead of only writing a
+     provided value — so a name-only save yields a correct auto URI and a blank
+     custom value never persists empty.
+   - `save_domain_to_uc()` gained a persist-time guard: if `base_uri` is still
+     empty it is generated from the domain name before writing the version.
+
+2. `tests/units/domain/test_domain_service.py`
+   - Tests for auto-generation from the name, custom-URI preservation, and the
+     empty-custom fallback.
+
+### Modified files
+
+- `src/back/objects/domain/Domain.py`
+- `tests/units/domain/test_domain_service.py`
+
+### Test result
+
+`uv run pytest -q -m "not scenario"` → **2936 passed, 275 skipped, 0 failed**.
+
+## New Domain: streamlined creation (close loaded domain, no Save popup)
+
+### Context
+
+Two issues with **New Domain** creation from another domain's *Information*
+page:
+
+1. It raised `A domain named "cust360auto" already exists in the registry.` —
+   where `cust360auto` was the *loaded* domain, not the new one. `domainNew()`
+   cleared the session and POSTed the new name, but `doDomainSave()`'s pre-save
+   duplicate-name guard reads the on-page `#domainName` field, which still held
+   the previously-loaded domain's name (the Information form was never
+   refreshed). The guard therefore validated — and rejected — the old name.
+2. After the New Domain popup it opened a second *Save* popup, and it did not
+   release the currently loaded domain's edit lock.
+
+Requested behavior: after the New Domain popup, create the domain directly (no
+Save popup); if a domain is loaded, close it (release its edit lock) and open
+the newly created one.
+
+### Changes
+
+1. `src/front/static/global/js/navbar.js` — `domainNew()`:
+   - Step 1 now calls `/domain/close` instead of `/domain/clear`, so a loaded
+     domain's edit lock is released (no-op when nothing is loaded / not the
+     holder) before the session is reset.
+   - Syncs the stale Information form with the new domain values after
+     persisting them to the session: sets `#domainName` (clearing any
+     `is-invalid` state and the duplicate hint), `#domainDescription`,
+     `#domainLlmEndpoint`, and re-runs `updateAutoBaseUri()` so the pre-save
+     guard validates the NEW name. Guarded so it is a no-op when the form is not
+     on the current page.
+   - Step 3 now calls `doDomainSave({ afterSave: '/domain/#information' })`
+     directly instead of `showDomainSaveDialog(...)` — the domain is registered
+     without the intermediate Save popup and the new domain opens on success.
+
+### Modified files
+
+- `src/front/static/global/js/navbar.js`
+
+### Test result
+
+Frontend-only change (no Python touched); covered by manual verification.
+`uv run pytest -q -m "not scenario"` unchanged → **2936 passed, 275 skipped, 0 failed**.

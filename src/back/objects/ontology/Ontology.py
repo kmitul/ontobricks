@@ -1902,7 +1902,15 @@ class Ontology:
         self._domain.ontology.update(
             {
                 "name": resolved_name,
-                "base_uri": ontology_info.get("uri", ""),
+                # Prefer the (normalized, #/-terminated) namespace over the raw
+                # ontology IRI, and never persist an empty/sentinel value — mirror
+                # the RDFS import path so a file without an owl:Ontology header
+                # gets DEFAULT_BASE_URI instead of "Unknown".
+                "base_uri": (
+                    ontology_info.get("namespace")
+                    or ontology_info.get("uri")
+                    or DEFAULT_BASE_URI
+                ),
                 "classes": classes,
                 "properties": properties,
                 "constraints": constraints,
@@ -1949,7 +1957,8 @@ class Ontology:
             "ontology": {
                 "info": {
                     "label": resolved_name,
-                    "namespace": ontology_info.get("uri", ""),
+                    "namespace": ontology_info.get("namespace")
+                    or ontology_info.get("uri", ""),
                     "uri": ontology_info.get("uri", ""),
                 },
                 "classes": classes,

@@ -364,17 +364,20 @@ window.refreshDigitalTwinStatus = refreshNavbarIndicators;
 // ==========================================
 
 /**
- * Start a new domain — collects name/description/LLM via popup, clears
- * existing data, persists session info, then immediately opens the UC
- * save dialog so the domain is registered before navigating away.
+ * Start a new domain — collects name/description/LLM via popup, closes any
+ * currently loaded domain (releasing its edit lock), persists session info,
+ * then registers the new domain in the registry directly (no Save popup) and
+ * opens it.
  */
 async function domainNew() {
     const input = await showNewDomainDialog();
     if (!input) return;
 
     try {
-        // 1. Clear existing domain data
-        const clearResp = await fetch('/domain/clear', {
+        // 1. Close any loaded domain first: /domain/close releases the current
+        // domain's edit lock (no-op when nothing is loaded / not the holder)
+        // and resets the session to an empty state.
+        const clearResp = await fetch('/domain/close', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin'
@@ -398,8 +401,32 @@ async function domainNew() {
 
         invalidateDomainCaches();
 
-        // 3. Open UC save dialog; navigate to domain page after a successful save
-        showDomainSaveDialog({ afterSave: '/domain/#information' });
+        // 2b. Sync any stale Information form on the current page with the NEW
+        // domain values. When "New Domain" is triggered from another domain's
+        // Information page, #domainName still holds the previously-loaded
+        // domain's name. doDomainSave()'s pre-save duplicate-name guard reads
+        // that field, so without this it would validate (and reject) the OLD
+        // name — e.g. "A domain named \"cust360auto\" already exists" — instead
+        // of the new one.
+        try {
+            const nameEl = document.getElementById('domainName');
+            if (nameEl) {
+                nameEl.value = input.name;
+                nameEl.classList.remove('is-invalid');
+            }
+            const dupHint = document.getElementById('domainNameDuplicateHint');
+            if (dupHint) dupHint.remove();
+            const descEl = document.getElementById('domainDescription');
+            if (descEl) descEl.value = input.description || '';
+            const llmEl = document.getElementById('domainLlmEndpoint');
+            if (llmEl && input.llm_endpoint) llmEl.value = input.llm_endpoint;
+            if (typeof updateAutoBaseUri === 'function') updateAutoBaseUri();
+        } catch (e) { /* Information form not on this page — nothing to sync */ }
+
+        // 3. Register the new domain in the registry directly (no Save popup)
+        // and open it on success.
+        const ok = await doDomainSave({ afterSave: '/domain/#information' });
+        if (!ok) return;
     } catch (error) {
         console.error('Error creating new domain:', error);
         showNotification('Failed to create new domain: ' + error.message, 'error');
