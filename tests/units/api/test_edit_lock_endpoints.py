@@ -13,6 +13,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 _domain = importlib.import_module("api.routers.internal.domain")
+_settings = importlib.import_module("api.routers.internal.settings")
 _svc = importlib.import_module("back.objects.registry.EditLockService")
 
 
@@ -133,6 +134,43 @@ def test_load_from_uc_attaches_lock_block_on_success():
     assert res["success"] is True
     assert res["lock"]["mode"] == "edit"
     assert odl.called
+
+
+def test_settings_locks_list_delegates_to_service():
+    with patch.object(
+        _svc.EditLockService, "list_all",
+        return_value={"success": True, "locks": [{"folder": "acme", "version": "1"}]},
+    ) as la:
+        res = _run(_settings.list_edit_locks(
+            session_mgr=MagicMock(), settings=MagicMock()
+        ))
+    assert res["success"] is True
+    assert res["locks"][0]["folder"] == "acme"
+    assert la.called
+
+
+def test_settings_locks_release_forwards_folder_version():
+    with patch.object(
+        _svc.EditLockService, "admin_release",
+        return_value={"success": True, "released": True},
+    ) as ar:
+        res = _run(_settings.release_edit_lock_admin(
+            _request({"folder": "acme", "version": "2"}),
+            session_mgr=MagicMock(), settings=MagicMock(),
+        ))
+    assert res["released"] is True
+    assert ar.call_args.args[-2:] == ("acme", "2")
+
+
+def test_settings_locks_release_rejects_missing_fields():
+    import pytest
+    from back.core.errors import ValidationError
+
+    with pytest.raises(ValidationError):
+        _run(_settings.release_edit_lock_admin(
+            _request({"folder": "", "version": ""}),
+            session_mgr=MagicMock(), settings=MagicMock(),
+        ))
 
 
 def test_load_from_uc_no_lock_block_on_failure():

@@ -3352,6 +3352,47 @@ class LakebaseRegistryStore(RegistryStore):
         )
         return cur.fetchone()
 
+    def list_all_edit_locks(self) -> List[Dict[str, Any]]:
+        """List every active edit lock across the registry (admin overview).
+
+        Joins ``domains`` for the folder and ``domain_versions`` for the
+        current lifecycle status, newest lock first. Returns ``[]`` when the
+        lock backend is unavailable so the admin UI degrades to "no locks".
+        """
+        if not self._ensure_domain_edit_locks_table():
+            return []
+        try:
+            psycopg, dict_row = _require_psycopg()
+            sch = self._q(self._schema)
+            with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    SELECT d.folder, l.version,
+                           l.holder_email, l.holder_name, l.holder_session,
+                           l.acquired_at, v.status
+                    FROM {sch}.domain_edit_locks l
+                    JOIN {sch}.domains d ON d.id = l.domain_id
+                    LEFT JOIN {sch}.domain_versions v
+                           ON v.domain_id = l.domain_id AND v.version = l.version
+                    WHERE d.registry_id = %s
+                    ORDER BY l.acquired_at DESC
+                    """,
+                    (self._registry(),),
+                )
+                rows = cur.fetchall()
+            return [
+                {
+                    "folder": r.get("folder") or "",
+                    "version": r.get("version") or "",
+                    "status": (r.get("status") or "DRAFT"),
+                    **self._edit_lock_row_to_dict(r),
+                }
+                for r in rows
+            ]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("list_all_edit_locks failed: %s", exc)
+            return []
+
     # ------------------------------------------------------------------
     # Global config
     # ------------------------------------------------------------------

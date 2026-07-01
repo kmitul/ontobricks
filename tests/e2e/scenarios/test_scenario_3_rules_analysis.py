@@ -198,11 +198,14 @@ class TestScenario3RulesAnalysis:
         # that version must also have a built graph.
         #
         # A freshly branched version (scenario 2's create-version) has the
-        # ontology + mappings but no graph data, and rebuilding it is expensive
-        # (managed-synced Lakebase triggers a Lakeflow pipeline). So we prefer
-        # to **reuse an existing built graph**: pick a DRAFT version that
-        # already has data; failing that, reopen an already-built version to
-        # DRAFT; only as a last resort do we build.
+        # ontology + mappings but no graph data. This scenario always targets
+        # that **DRAFT branch** (the highest DRAFT version, e.g. V2) and builds
+        # its graph when missing — it never reopens or enriches the published
+        # base version (V1). That keeps V1 exactly as scenario 2 published it
+        # and guarantees the graph ends up built on the version *after* V1.
+        # Building is expensive (managed-synced Lakebase triggers a Lakeflow
+        # pipeline), so if the DRAFT branch already has a graph (a previous
+        # scenario-3 run) we reuse it instead of rebuilding.
         #
         # ``/domain/versions-list`` reports versions for the *loaded* session
         # domain, so load the canonical base version (V1) first to enumerate.
@@ -241,44 +244,31 @@ class TestScenario3RulesAnalysis:
         _step(f"registry versions: {statuses}")
 
         drafts = [str(v) for v in version_ids if statuses.get(str(v)) == "DRAFT"]
-        non_drafts = [str(v) for v in version_ids if statuses.get(str(v)) != "DRAFT"]
 
-        work_version: str | None = None
+        # Always work on the freshly branched DRAFT (the highest DRAFT version,
+        # e.g. V2). scenario 2 leaves V1 PUBLISHED + V2 DRAFT, so the published
+        # base version is never reopened or mutated here — the graph build and
+        # all enrichment land on the version *after* V1.
+        if not drafts:
+            pytest.skip(
+                f"'{_DOMAIN_NAME}' has no DRAFT version (versions={statuses}) — "
+                "run scenarios 1 & 2 first (scenario 2 branches the DRAFT this "
+                "scenario needs)."
+            )
+        work_version = drafts[0]
         need_reopen = False
 
-        # (a) Fast path — a DRAFT version that is already built.
-        for v in drafts:
-            if v != "1":
-                _load_version(v)
-            if _graph_built():
-                work_version = v
-                _step(f"selected V{v}: DRAFT and already built — reusing its graph")
-                break
+        # Load the chosen DRAFT so /dtwin/sync/status reports its graph.
+        if work_version != "1":
+            _load_version(work_version)
 
-        # (b) Reuse an already-built non-DRAFT version by reopening it to DRAFT.
-        if work_version is None:
-            for v in non_drafts:
-                _load_version(v)
-                if _graph_built():
-                    work_version = v
-                    need_reopen = True
-                    _step(f"selected V{v}: built {statuses.get(v)} — will reopen to DRAFT")
-                    break
-
-        # (c) Last resort — build the highest DRAFT version.
-        build_required = False
-        if work_version is None:
-            if not drafts:
-                pytest.skip(
-                    f"'{_DOMAIN_NAME}' has no DRAFT version and none is built "
-                    f"(versions={statuses}) — run scenarios 1 & 2 first."
-                )
-            work_version = drafts[0]
-            build_required = True
-            _step(f"no built version available — will build V{work_version} (this is slow)")
-
-        # Ensure the chosen version is the one loaded in the session.
-        _load_version(work_version)
+        # Reuse the graph if this DRAFT was already built on a previous run;
+        # otherwise build it (a freshly branched version has no graph yet).
+        build_required = not _graph_built()
+        if build_required:
+            _step(f"selected DRAFT V{work_version}: no graph yet — will build it (slow)")
+        else:
+            _step(f"selected DRAFT V{work_version}: already built — reusing its graph")
         _step(f"working version: V{work_version}")
 
         # ── 4. Make sure the working version is a built DRAFT ───────────────

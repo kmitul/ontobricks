@@ -18,6 +18,8 @@
 --   * new table   domain_change_events — append-only ontology/mapping change
 --                 audit ("who changed what, and when"); ``source`` tags human
 --                 vs AI-assistant edits, ``occurred_at`` is the real edit time.
+--   * new table   domain_edit_locks — single-editor DRAFT lock (owner-created
+--                 here; the app cannot self-heal its FK to ``domains``).
 --   * indexes     idx_domain_comments_lookup, idx_domain_tasks_assignee,
 --                 idx_domain_tasks_domain, idx_graph_analytics_runs_domain_version,
 --                 idx_change_events_domain_version.
@@ -193,6 +195,23 @@ CREATE TABLE IF NOT EXISTS domain_change_events (
 CREATE INDEX IF NOT EXISTS idx_change_events_domain_version
     ON domain_change_events(domain_id, version, occurred_at);
 
+-- domain_edit_locks — single-editor DRAFT lock. The app's lazy self-heal
+-- cannot create it (the FK to domains needs a privilege the app service
+-- principal lacks), so provision it here as the schema owner. Without it,
+-- every opener is falsely shown as a read-only viewer and admin take-over
+-- fails.
+CREATE TABLE IF NOT EXISTS domain_edit_locks (
+    domain_id      uuid NOT NULL
+                   REFERENCES domains(id) ON DELETE CASCADE,
+    version        text NOT NULL,
+    holder_email   text NOT NULL,
+    holder_name    text NOT NULL DEFAULT '',
+    holder_session text NOT NULL DEFAULT '',
+    acquired_at    timestamptz NOT NULL DEFAULT now(),
+    heartbeat_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain_id, version)
+);
+
 COMMIT;
 
 -- Summary -------------------------------------------------------------------
@@ -202,7 +221,7 @@ FROM information_schema.tables
 WHERE table_schema = :'reg_schema'
   AND table_name IN ('domain_comments', 'domain_tasks',
                      'graph_analytics', 'graph_analytics_runs',
-                     'domain_change_events')
+                     'domain_change_events', 'domain_edit_locks')
 ORDER BY table_name;
 
 -- ============================================================================

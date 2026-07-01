@@ -1168,6 +1168,49 @@ async def run_schedule_now(
 
 
 # ===========================================
+# Domain edit locks (admin overview)
+# ===========================================
+
+
+@router.get(
+    "/locks",
+    dependencies=[Depends(require(ROLE_ADMIN))],
+)
+async def list_edit_locks(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """List all active domain edit-locks across the registry (admin only)."""
+    from back.objects.registry.EditLockService import EditLockService
+
+    with map_route_errors("list edit locks", logger):
+        return EditLockService.list_all(session_mgr, settings)
+
+
+@router.post(
+    "/locks/release",
+    dependencies=[Depends(require(ROLE_ADMIN))],
+)
+async def release_edit_lock_admin(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Force-unlock a ``(folder, version)`` edit-lock (admin only)."""
+    from back.objects.registry.EditLockService import EditLockService
+
+    data = await request.json()
+    folder = (data.get("folder") or "").strip()
+    version = (data.get("version") or "").strip()
+    if not folder or not version:
+        raise ValidationError("folder and version are required")
+    with map_route_errors("force release edit lock", logger):
+        return EditLockService.admin_release(
+            session_mgr, settings, folder, version
+        )
+
+
+# ===========================================
 # Application Logs
 # ===========================================
 

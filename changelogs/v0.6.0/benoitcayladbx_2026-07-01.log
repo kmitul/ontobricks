@@ -701,3 +701,246 @@ the newly created one.
 
 Frontend-only change (no Python touched); covered by manual verification.
 `uv run pytest -q -m "not scenario"` unchanged → **2936 passed, 275 skipped, 0 failed**.
+
+## Fix: phantom edit-lock ("edited by another user") on deployed app
+
+### Context
+
+On the deployed app, opening any DRAFT domain flipped the user to read-only
+with *"being edited by another user"* — even when nobody else had it open — and
+the admin **Take over editing** action did nothing. Root cause was two-fold:
+
+1. **Missing table.** `domain_edit_locks` is defined in the canonical
+   `schema.sql` but was absent from every *operator-run* migration
+   (`bootstrap-lakebase-perms.sh`, `upgrade_lakebase_0.5_To_0.6.sql`). On an
+   in-place update the app's lazy `CREATE TABLE` self-heal fails because its FK
+   `REFERENCES domains(id)` needs a privilege the app service principal lacks
+   (`REFERENCES` on the owner-held `domains`), so the table never existed.
+2. **Phantom-lock shaping.** With the table missing, `acquire_edit_lock`
+   returns `{acquired: False, holder_email: ""}`. `EditLockService._shape`
+   mapped *any* non-self result to `mode="view"`, so a broken/absent backend
+   presented a lock held by a non-existent "another user" — and take-over ran
+   the same failing acquire path, so it could never succeed.
+
+The same migration gap affected `domain_change_events` (audit trail) — created
+lazily with the same FK, so it was silently empty on deploy too.
+
+### Changes
+
+1. `src/back/objects/registry/EditLockService.py`
+   - `_shape()` now only reports `mode="view"` when a **real** holder e-mail
+     comes back. `acquired=False` with no holder degrades to `mode="none"`
+     (permissive) instead of a phantom viewer lock, and `can_take_over` is gated
+     on a genuine `view`. A missing/unavailable lock backend can no longer lock
+     everyone out.
+
+2. `scripts/bootstrap-lakebase-perms.sh`
+   - The operator-run migration block now provisions `domain_edit_locks` **and**
+     `domain_change_events` as the schema owner (mirrors `schema.sql`), so
+     `make deploy` creates them with the FK the app SP cannot. Applied-tables
+     summary updated.
+
+3. `scripts/upgrade_lakebase_0.5_To_0.6.sql`
+   - Adds `domain_edit_locks` to the manual 0.5→0.6 upgrade and the post-run
+     verification `SELECT`; header table list updated.
+
+4. `tests/units/registry/test_edit_lock_service.py`
+   - Regression test: a failed acquire with no holder degrades to `none`
+     (not phantom `view`) and `can_take_over` is `False`.
+
+### Live remediation
+
+Ran the updated `scripts/bootstrap-lakebase-perms.sh` against the deployed
+Lakebase (`ontobricks-demo2` / `ontobricks_demo`): `domain_edit_locks` and
+`domain_change_events` created as owner, DML granted to both app SPs
+(`ontobricks-060`, `mcp-ontobricks-060`) via default privileges. Verified the
+tables exist, both SPs have INSERT/DELETE, and 0 stale lock rows — so opening a
+domain now grants edit mode without an app restart.
+
+### Modified files
+
+- `src/back/objects/registry/EditLockService.py`
+- `scripts/bootstrap-lakebase-perms.sh`
+- `scripts/upgrade_lakebase_0.5_To_0.6.sql`
+- `tests/units/registry/test_edit_lock_service.py`
+
+### Test result
+
+`uv run pytest -q -m "not scenario"` → **2937 passed, 275 skipped, 0 failed**.
+
+## Edit-lock read-only UI now names the locking user
+
+### Context
+
+Follow-up to the phantom-lock fix: the read-only nav-badge tooltip still said
+"edited by someone else". The banner already interpolated the holder
+(`holder_name` → `holder_email`), but the tooltip was generic. With the lock
+backend now returning a real holder, both should name the user.
+
+### Changes
+
+1. `src/front/static/global/js/edit-lock.js`
+   - `enterReadOnly(data)` now names the holder in the nav-badge tooltip via the
+     shared `holderLabel(data)` (holder name, else e-mail), matching the banner
+     ("This version is being edited by <name> …"). The generic "another user" /
+     "someone else" text only remains as a last-resort fallback when no holder
+     identity is available (which no longer occurs for a genuine lock).
+
+### Modified files
+
+- `src/front/static/global/js/edit-lock.js`
+
+### Test result
+
+Frontend-only change; covered by the edit-lock service/endpoint suites
+(`18 passed`) and manual verification.
+
+## Scenario 3 always builds the graph on the branched DRAFT (V2), never reopens V1
+
+### Context
+
+Running the live journey scenarios 1 → 2 → 3 left the branched V2 **without a
+knowledge graph** (`Graph test_scenario_1_V2 does not exist. Run Build first.`)
+and, worse, reopened + enriched the *published* V1 instead. Scenario 3's
+version resolver preferred to **reuse an already-built graph**: since V1 (built
+by scenario 1, then published by scenario 2) still had its graph, resolver
+branch `(b)` reopened V1 to DRAFT and ran all the DQ/reasoning/analysis there —
+so the freshly branched V2 was never built. This directly contradicted the
+scenario's own docstring, which states it targets the DRAFT V2 and *"leaves the
+published V1 untouched."*
+
+### Changes
+
+1. `tests/e2e/scenarios/test_scenario_3_rules_analysis.py`
+   - Replaced the three-branch version resolver — `(a)` reuse a built DRAFT,
+     `(b)` reopen a built non-DRAFT to DRAFT, `(c)` last-resort build — with a
+     single rule: **always target the highest DRAFT version** (the branch after
+     V1). Load it, reuse its graph if already present, otherwise build it. The
+     branch that reopened/mutated a PUBLISHED version is gone, so V1 is left
+     exactly as scenario 2 published it and the graph always ends up built on
+     the version after V1.
+   - Dropped the now-unused `non_drafts` list and updated the step-3 comment to
+     describe the "target the DRAFT branch, build if missing" behaviour.
+
+### Modified files
+
+- `tests/e2e/scenarios/test_scenario_3_rules_analysis.py`
+
+### Test result
+
+`uv run pytest -q -m "not scenario"` → **2937 passed, 275 skipped, 4 deselected
+(scenario), 0 failed**. Scenario suites are opt-in and were not run live.
+
+## New scenario validation — end-to-end validation + report over scenarios 1-3
+
+> Renamed from `test_scenario_4_validation.py` to `test_scenario_validation.py`
+> so future `test_scenario_N_*` suites can slot between scenario 3 and the
+> validation gate; the validation filename sorts after any digit-suffixed
+> scenario, so it stays last in default collection order.
+
+### Context
+
+The live journey scenarios 1 → 2 → 3 create a lot of state (an ontology +
+mappings, a built graph, comments, tasks, a review lifecycle, SHACL shapes,
+business rules, and an analysis audit entry) but nothing asserted the whole set
+survived end-to-end. Requested: a final scenario that validates every
+asset/comment/action the prior scenarios produce and prints a test report like
+the others.
+
+### Changes
+
+1. `tests/e2e/scenarios/test_scenario_validation.py` (new)
+   - Read-only validation journey (safe to re-run). Enumerates the versions of
+     `test_scenario_1`, then checks, grouped by originating scenario:
+     - **[Scenario 1] V1** — domain in registry; V1 exists; ontology has
+       classes/properties (`/ontology/load`); mappings carry SQL
+       (`/mapping/load`); V1 graph built (`/dtwin/sync/status`).
+     - **[Scenario 2] V1** — comments ≥ 3 and tasks ≥ 2
+       (`/comments/<d>/1` + `/tasks`); review lifecycle ran (`submitted` →
+       `published` in `/review/<d>/1` events); V1 is PUBLISHED; a DRAFT branch
+       (V2) exists.
+     - **[Scenario 3] V2** — branch graph built; SHACL shapes ≥ 1
+       (`/ontology/dataquality/list`); business rules present (INFO — the agent
+       may propose none); analysis recorded in `/domain/audit-trail`; analysis
+       write-up comment present (INFO).
+   - Collects each check into a `_Report` helper that renders a compact
+     PASS/FAIL/INFO report to stdout and then fails the test if any hard check
+     did not pass. Skips cleanly (with run-order hints) when the domain or the
+     branched version is missing. Gated behind `ONTOBRICKS_SCENARIO_LIVE=1` and
+     auto-marked `scenario` by the suite `conftest`.
+
+### Modified files
+
+- `tests/e2e/scenarios/test_scenario_validation.py` (new)
+
+### Test result
+
+`uv run pytest -q -m "not scenario"` → **2937 passed, 275 skipped, 5 deselected
+(scenario), 0 failed**. The validation scenario collects as exactly one
+`scenario`-marked test and is deselected from the default run; it was not
+executed live (needs a running app + a completed scenarios 1-3 run).
+
+## Feature: Settings › Locks — admin domain edit-lock overview + force-unlock
+
+### Context
+
+Admins had no way to see or clear domain edit-locks: a stuck DRAFT lock (crashed
+browser, an editor who never closed the domain) could only be recovered by the
+per-domain "Take over" banner, which requires opening that exact domain. This
+adds an admin-only **Settings › Locks** panel listing every active edit-lock
+across the registry, with a force-unlock action.
+
+### Changes
+
+1. `src/back/objects/registry/store/lakebase/store.py`
+   - New `list_all_edit_locks()` — joins `domain_edit_locks` → `domains`
+     (folder) and `domain_versions` (lifecycle status), newest-first; degrades
+     to `[]` when the lock backend is unavailable.
+
+2. `src/back/objects/registry/EditLockService.py`
+   - `list_all()` → `{success, locks}` admin overview (empty-but-success when
+     the backend is down).
+   - `admin_release(folder, version)` → unconditional force-unlock returning
+     `{success, released}`.
+
+3. `src/api/routers/internal/settings.py`
+   - `GET /settings/locks` and `POST /settings/locks/release`, both gated by
+     `require(ROLE_ADMIN)` (and the `/settings` admin-only middleware prefix).
+
+4. Frontend
+   - `src/front/config/menu_config.json` — new `admin_only` "Locks" item under
+     the Admin group.
+   - `src/front/templates/settings.html` — `#locks-section` pane (inside the
+     `{% if user_role == 'admin' %}` gate) + `settings-locks.js` include.
+   - `src/front/templates/partials/settings/_settings_locks.html` — table
+     container + force-unlock confirmation modal.
+   - `src/front/static/config/js/settings-locks.js` — lazy-loads on first visit
+     to the Locks section, renders domain/version/status/holder/acquired, and
+     force-unlocks via a confirm modal (event-delegated buttons).
+
+5. Tests
+   - `tests/units/registry/test_edit_lock_service.py` — `list_all` /
+     `admin_release` (success, empty-backend, validation).
+   - `tests/units/registry/test_edit_lock_store.py` — `list_all_edit_locks`
+     row-mapping + JOIN shape (`fetchall` added to the fake cursor).
+   - `tests/units/api/test_edit_lock_endpoints.py` — settings endpoint wiring
+     (delegation, folder/version forwarding, missing-field rejection).
+
+### Modified files
+
+- `src/back/objects/registry/store/lakebase/store.py`
+- `src/back/objects/registry/EditLockService.py`
+- `src/api/routers/internal/settings.py`
+- `src/front/config/menu_config.json`
+- `src/front/templates/settings.html`
+- `src/front/templates/partials/settings/_settings_locks.html` (new)
+- `src/front/static/config/js/settings-locks.js` (new)
+- `tests/units/registry/test_edit_lock_service.py`
+- `tests/units/registry/test_edit_lock_store.py`
+- `tests/units/api/test_edit_lock_endpoints.py`
+
+### Test result
+
+`uv run pytest -q -m "not scenario"` → **2946 passed, 275 skipped, 0 failed**.
+Smoke-tested `GET /settings/locks` on the local dev server → `{"success": true,
+"locks": []}`.

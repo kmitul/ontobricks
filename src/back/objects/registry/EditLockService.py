@@ -250,6 +250,49 @@ class EditLockService:
             logger.debug("force_release edit-lock skipped: %s", exc)
 
     # ------------------------------------------------------------------
+    # Admin overview (Settings › Locks)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def list_all(session_mgr: SessionManager, settings) -> Dict[str, Any]:
+        """All active edit locks across the registry (admin Locks panel).
+
+        Returns ``{"success": True, "locks": [...]}``. Degrades to an empty
+        list (still ``success``) when the lock backend is unavailable so the
+        admin UI shows "no locks" rather than an error.
+        """
+        store = EditLockService._store(session_mgr, settings)
+        if store is None:
+            return {"success": True, "locks": []}
+        try:
+            locks = store.list_all_edit_locks()
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("list_all edit-locks failed: %s", exc)
+            locks = []
+        return {"success": True, "locks": locks}
+
+    @staticmethod
+    def admin_release(
+        session_mgr: SessionManager, settings, folder: str, version: str
+    ) -> Dict[str, Any]:
+        """Admin force-unlock of a specific ``(folder, version)``.
+
+        Unconditional (unlike :meth:`release`, which only drops the caller's
+        own lock). Returns ``{"success": True, "released": bool}``.
+        """
+        if not folder or not version:
+            return {"success": False, "released": False}
+        store = EditLockService._store(session_mgr, settings)
+        if store is None:
+            return {"success": False, "released": False}
+        try:
+            released = store.force_release_edit_lock(folder, version)
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("admin_release edit-lock failed: %s", exc)
+            return {"success": False, "released": False}
+        return {"success": True, "released": bool(released)}
+
+    # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
@@ -322,17 +365,30 @@ class EditLockService:
     @staticmethod
     def _shape(res: Dict[str, Any], *, is_admin: bool) -> Dict[str, Any]:
         """Map a store ``acquire_edit_lock`` result to the API lock block."""
+        holder_email = res.get("holder_email") or ""
         is_self = bool(res.get("is_self") or res.get("acquired"))
-        mode = MODE_EDIT if is_self else MODE_VIEW
+        # Only report a read-only VIEW when the lock is genuinely held by
+        # *someone else* — i.e. we did not acquire it AND a real holder
+        # e-mail came back. When the store returns "not acquired, no holder"
+        # the lock backend is effectively unavailable (e.g. the
+        # ``domain_edit_locks`` table is missing on an old deployment): degrade
+        # to permissive rather than presenting a phantom "another user" lock
+        # that also makes take-over impossible.
+        if is_self:
+            mode = MODE_EDIT
+        elif holder_email:
+            mode = MODE_VIEW
+        else:
+            mode = MODE_NONE
         return {
             "success": True,
             "mode": mode,
-            "holder_email": res.get("holder_email") or "",
+            "holder_email": holder_email,
             "holder_name": res.get("holder_name") or "",
             "acquired_at": res.get("acquired_at") or "",
             "is_self": is_self,
             "is_admin": is_admin,
-            # Only a viewer (held by someone else) can take over, and only
-            # an admin is allowed to.
-            "can_take_over": bool(is_admin and not is_self),
+            # Only a viewer of a lock held by someone else can take over, and
+            # only an admin is allowed to.
+            "can_take_over": bool(is_admin and mode == MODE_VIEW),
         }

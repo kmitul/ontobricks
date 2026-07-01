@@ -25,8 +25,9 @@ _NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
 
 class _FakeCursor:
-    def __init__(self, fetchone_results=None, rowcount=0):
+    def __init__(self, fetchone_results=None, rowcount=0, fetchall_result=None):
         self._fetchone = list(fetchone_results or [])
+        self._fetchall = list(fetchall_result or [])
         self.rowcount = rowcount
         self.executed = []
 
@@ -41,6 +42,9 @@ class _FakeCursor:
 
     def fetchone(self):
         return self._fetchone.pop(0) if self._fetchone else None
+
+    def fetchall(self):
+        return list(self._fetchall)
 
 
 class _FakeConn:
@@ -192,3 +196,37 @@ def test_get_edit_lock_none_when_absent():
     cur = _FakeCursor(fetchone_results=[None])
     with _bind(st, cur):
         assert st.get_edit_lock("acme", "1") is None
+
+
+# ----------------------------------------------------------------------
+# list_all_edit_locks (admin overview)
+# ----------------------------------------------------------------------
+
+
+def test_list_all_edit_locks_maps_rows():
+    st = _store()
+    rows = [
+        {**_live_row(email="bob@acme.com", name="Bob"), "folder": "acme",
+         "version": "1", "status": "DRAFT"},
+        {**_live_row(), "folder": "beta", "version": "2", "status": "IN-REVIEW"},
+    ]
+    cur = _FakeCursor(fetchall_result=rows)
+    with _bind(st, cur):
+        locks = st.list_all_edit_locks()
+    assert len(locks) == 2
+    assert locks[0]["folder"] == "acme"
+    assert locks[0]["version"] == "1"
+    assert locks[0]["status"] == "DRAFT"
+    assert locks[0]["holder_email"] == "bob@acme.com"
+    # JOINs domains + domain_versions for folder + status.
+    sql, params = cur.executed[0]
+    assert "domain_edit_locks" in sql
+    assert "domain_versions" in sql
+    assert params == ("reg-1",)
+
+
+def test_list_all_edit_locks_empty():
+    st = _store()
+    cur = _FakeCursor(fetchall_result=[])
+    with _bind(st, cur):
+        assert st.list_all_edit_locks() == []

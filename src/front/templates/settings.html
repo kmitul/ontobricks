@@ -671,6 +671,22 @@
                 </div>
             </div>
 
+            <!-- ==================== LOCKS SECTION (admin only) ==================== -->
+            <div id="locks-section" class="sidebar-section">
+                <div class="content-section">
+                    <div class="section-header d-flex justify-content-between align-items-center mb-4">
+                        <div>
+                            <h4 class="mb-1"><i class="bi bi-lock me-2"></i>Locks</h4>
+                            <p class="text-muted mb-0 small">Active domain edit-locks (single-editor concurrency) — force-unlock a stuck lock</p>
+                        </div>
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="btnRefreshLocks" title="Refresh">
+                            <i class="bi bi-arrow-clockwise"></i>
+                        </button>
+                    </div>
+                    {% include "partials/settings/_settings_locks.html" %}
+                </div>
+            </div>
+
             <!-- ==================== REGISTRY SECTION (admin only) ==================== -->
             <div id="registry-section" class="sidebar-section">
                 <div class="content-section">
@@ -726,6 +742,7 @@
 <script src="{{ url_for('static', filename='config/js/settings.js') }}?v={{ asset_version }}"></script>
 {% if user_role == 'admin' %}
 <script src="{{ url_for('static', filename='config/js/permissions.js') }}?v={{ asset_version }}"></script>
+<script src="{{ url_for('static', filename='config/js/settings-locks.js') }}?v={{ asset_version }}"></script>
 <script src="{{ url_for('static', filename='registry/js/registry.js') }}?v={{ asset_version }}"></script>
 <script src="{{ url_for('static', filename='config/js/settings-health.js') }}?v={{ asset_version }}"></script>
 <script src="{{ url_for('static', filename='config/js/settings-logs.js') }}?v={{ asset_version }}"></script>

@@ -59,7 +59,7 @@
 
     // ----- read-only (viewer) presentation --------------------------
 
-    function enterReadOnly() {
+    function enterReadOnly(data) {
         window.editLockMode = 'view';
         document.body.classList.add('read-only-locked');
         if (window.OB && typeof window.OB.installReadOnlyContextMenuBlocker === 'function') {
@@ -67,7 +67,7 @@
         }
         if (window.OB && typeof window.OB.annotateRoleNavBadge === 'function') {
             window.OB.annotateRoleNavBadge(
-                'This version is being edited by someone else (read-only).'
+                'This version is being edited by ' + holderLabel(data) + ' (read-only).'
             );
         }
     }
@@ -153,7 +153,7 @@
         window.editLockMode = mode;
 
         if (mode === 'view') {
-            enterReadOnly();
+            enterReadOnly(data);
             renderBanner(data);
         }
         // mode === 'edit' → this browser holds the lock; nothing to do.

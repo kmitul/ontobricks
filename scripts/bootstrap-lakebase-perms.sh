@@ -400,9 +400,49 @@ CREATE INDEX IF NOT EXISTS idx_domain_tasks_assignee
     ON "${SCHEMA}".domain_tasks(lower(assignee), status);
 CREATE INDEX IF NOT EXISTS idx_domain_tasks_domain
     ON "${SCHEMA}".domain_tasks(domain_id, version);
+
+-- domain_edit_locks (single-editor DRAFT lock, v0.6 — mirrors schema.sql).
+-- Created here as the schema owner because the app's lazy self-heal cannot:
+-- the FK REFERENCES domains(id) needs a privilege the app service principal
+-- lacks, so without this migration the table never exists on an in-place
+-- update and every opener is falsely shown as a read-only viewer.
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_edit_locks (
+    domain_id      uuid NOT NULL
+                   REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version        text NOT NULL,
+    holder_email   text NOT NULL,
+    holder_name    text NOT NULL DEFAULT '',
+    holder_session text NOT NULL DEFAULT '',
+    acquired_at    timestamptz NOT NULL DEFAULT now(),
+    heartbeat_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain_id, version)
+);
+
+-- domain_change_events (ontology/mapping audit trail, v0.6 — mirrors
+-- schema.sql). Same owner-provisioning rationale as domain_edit_locks: the
+-- app's lazy self-heal cannot create the FK to domains, so without this the
+-- audit trail is silently empty on an in-place update.
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_change_events (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id       uuid NOT NULL
+                    REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version         text NOT NULL,
+    actor           text NOT NULL DEFAULT '',
+    source          text NOT NULL DEFAULT 'user'
+                    CHECK (source IN ('user', 'agent')),
+    action          text NOT NULL,
+    entity_type     text NOT NULL DEFAULT '',
+    entity_ref      text NOT NULL DEFAULT '',
+    summary         text NOT NULL DEFAULT '',
+    meta            jsonb NOT NULL DEFAULT '{}'::jsonb,
+    occurred_at     timestamptz NOT NULL DEFAULT now(),
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_change_events_domain_version
+    ON "${SCHEMA}".domain_change_events(domain_id, version, occurred_at);
 SQL
     then
-        echo "  ✓ schema migrations applied (domain_versions.status, domains.review_quorum, build_runs, graph_analytics, graph_analytics_runs, domain_review_events, domain_comments, domain_tasks)"
+        echo "  ✓ schema migrations applied (domain_versions.status, domains.review_quorum, build_runs, graph_analytics, graph_analytics_runs, domain_review_events, domain_comments, domain_tasks, domain_edit_locks, domain_change_events)"
     else
         echo "  ⚠ schema migration failed — continuing (SP grants below may partially succeed)"
     fi

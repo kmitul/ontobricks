@@ -549,6 +549,14 @@
                             "admin_only": true
                         },
                         {
+                            "id": "locks",
+                            "label": "Locks",
+                            "icon": "bi-lock",
+                            "default": false,
+                            "requires": null,
+                            "admin_only": true
+                        },
+                        {
                             "id": "health",
                             "label": "Health",
                             "icon": "bi-heart-pulse",

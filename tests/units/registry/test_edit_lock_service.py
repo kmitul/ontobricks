@@ -107,6 +107,23 @@ def test_status_viewer_admin_can_take_over():
     assert res["can_take_over"] is True
 
 
+def test_status_unavailable_backend_degrades_to_none_not_phantom_view():
+    """A failed acquire with no holder (e.g. the domain_edit_locks table is
+    missing) must degrade to permissive ``none`` — never a phantom ``view``
+    that falsely claims "another user" is editing and breaks take-over."""
+    store = _store(
+        acquire={"acquired": False, "is_self": False, "holder_email": ""}
+    )
+    p1, p2 = _patches(store, _domain())
+    with p1, p2:
+        res = EditLockService.status(
+            _request(email="admin@acme.com", role="admin"), MagicMock(), MagicMock()
+        )
+    assert res["mode"] == "none"
+    assert res["holder_email"] == ""
+    assert res["can_take_over"] is False
+
+
 def test_status_non_draft_is_none_and_skips_store():
     store = _store()
     p1, p2 = _patches(store, _domain(status="PUBLISHED"))
@@ -153,6 +170,53 @@ def test_release_calls_store_with_email():
         res = EditLockService.release(_request(), MagicMock(), MagicMock())
     assert res["released"] is True
     assert store.release_edit_lock.call_args.kwargs["holder_email"] == "alice@acme.com"
+
+
+# ----------------------------------------------------------------------
+# admin overview — list_all / admin_release
+# ----------------------------------------------------------------------
+
+
+def test_list_all_returns_store_locks():
+    store = MagicMock()
+    store.list_all_edit_locks.return_value = [
+        {
+            "folder": "acme",
+            "version": "1",
+            "status": "DRAFT",
+            "holder_email": "bob@acme.com",
+            "holder_name": "Bob",
+            "acquired_at": "2026-01-01T00:00:00",
+        }
+    ]
+    with patch.object(_mod.EditLockService, "_store", MagicMock(return_value=store)):
+        res = EditLockService.list_all(MagicMock(), MagicMock())
+    assert res["success"] is True
+    assert res["locks"][0]["folder"] == "acme"
+    assert res["locks"][0]["holder_name"] == "Bob"
+
+
+def test_list_all_degrades_to_empty_when_backend_unavailable():
+    with patch.object(_mod.EditLockService, "_store", MagicMock(return_value=None)):
+        res = EditLockService.list_all(MagicMock(), MagicMock())
+    assert res == {"success": True, "locks": []}
+
+
+def test_admin_release_force_releases_and_reports_result():
+    store = MagicMock()
+    store.force_release_edit_lock.return_value = True
+    with patch.object(_mod.EditLockService, "_store", MagicMock(return_value=store)):
+        res = EditLockService.admin_release(MagicMock(), MagicMock(), "acme", "1")
+    assert res == {"success": True, "released": True}
+    store.force_release_edit_lock.assert_called_once_with("acme", "1")
+
+
+def test_admin_release_requires_folder_and_version():
+    store = MagicMock()
+    with patch.object(_mod.EditLockService, "_store", MagicMock(return_value=store)):
+        res = EditLockService.admin_release(MagicMock(), MagicMock(), "", "1")
+    assert res["success"] is False
+    store.force_release_edit_lock.assert_not_called()
 
 
 # ----------------------------------------------------------------------
