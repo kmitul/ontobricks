@@ -1,6 +1,6 @@
 """
 E2E (LIVE) — ``test_scenario_2``: collaboration + review lifecycle on the
-domain produced by :mod:`test_scenario_1_generate_live`.
+domain produced by :mod:`test_scenario_01_generate_live`.
 
 This journey **reuses the durable ``test_scenario_1`` domain** (built and
 persisted by scenario 1) instead of regenerating one, then exercises the
@@ -32,7 +32,7 @@ it never runs in the default matrix.
 Run (against the local dev server, after scenario 1):
 
     ONTOBRICKS_SCENARIO_LIVE=1 \\
-    uv run pytest tests/e2e/scenarios/test_scenario_2_collab_lifecycle.py \\
+    uv run pytest tests/e2e/scenarios/test_scenario_02_collab_lifecycle.py \\
         -m scenario -v -s --no-cov
 
 Override the target via env:
@@ -47,73 +47,37 @@ import os
 
 import pytest
 
+from tests.e2e.scenarios._harness import (
+    base_url,
+    chain_marker,
+    csrf_headers,
+    json_body,
+    make_step,
+)
+
 
 # ── Gate: live, mutating journey against a real registry ─────────────────────
-pytestmark = pytest.mark.skipif(
-    os.environ.get("ONTOBRICKS_SCENARIO_LIVE") != "1",
-    reason="live scenario — set ONTOBRICKS_SCENARIO_LIVE=1 to run "
-    "(needs a running app + the test_scenario_1 domain from scenario 1)",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("ONTOBRICKS_SCENARIO_LIVE") != "1",
+        reason="live scenario — set ONTOBRICKS_SCENARIO_LIVE=1 to run "
+        "(needs a running app + the test_scenario_1 domain from scenario 1)",
+    ),
+    *chain_marker("scenario_2", depends=("scenario_1",)),
+]
 
 
 _DOMAIN_NAME = os.environ.get("ONTOBRICKS_SCENARIO_DOMAIN", "test_scenario_1")
 _BASE_VERSION = "1"
 
 
-def _base_url() -> str:
-    return (
-        os.environ.get("ONTOBRICKS_LIVE_BASE")
-        or os.environ.get("ONTOBRICKS_SCENARIO_BASE")
-        or "http://localhost:8000"
-    ).rstrip("/")
-
-
-def _csrf_headers(context) -> dict:
-    """JSON headers carrying the double-submit CSRF token from the cookie."""
-    cookies = {c["name"]: c["value"] for c in context.cookies()}
-    headers = {"Content-Type": "application/json"}
-    if token := cookies.get("csrf_token"):
-        headers["X-CSRF-Token"] = token
-    return headers
-
-
-def _json(resp) -> dict:
-    return json.loads(resp.body())
-
-
-def _step(msg: str) -> None:
-    print(f"\n[scenario_2] {msg}", flush=True)
-
-
-@pytest.fixture(scope="module")
-def scenario_base() -> str:
-    """Resolve and smoke-check the target app before the browser spins up."""
-    import httpx
-
-    base = _base_url()
-    last_exc: Exception | None = None
-    for probe in ("/health", "/healthz"):  # local serves /health; deployed /healthz
-        try:
-            resp = httpx.get(f"{base}{probe}", timeout=20.0)
-            if resp.status_code == 200:
-                return base
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-    pytest.skip(
-        f"No OntoBricks app reachable at {base} ({last_exc or 'non-200 health'}). "
-        f"Start it with `scripts/start.sh` or set ONTOBRICKS_LIVE_BASE."
-    )
-
-
-@pytest.fixture
-def scenario_page(browser_instance, scenario_base):
-    """A fresh browser page on a clean context pointed at the running app."""
-    ctx = browser_instance.new_context()
-    pg = ctx.new_page()
-    pg.base_url = scenario_base
-    yield pg
-    pg.close()
-    ctx.close()
+# URL / CSRF / JSON helpers and the ``scenario_base`` / ``scenario_page``
+# fixtures are shared — see ``_harness.py`` + ``conftest.py``. The short local
+# names are kept so the journey below reads identically across every scenario.
+_base_url = base_url
+_csrf_headers = csrf_headers
+_json = json_body
+_step = make_step("scenario_2")
 
 
 class TestScenario2CollabLifecycle:
@@ -148,7 +112,7 @@ class TestScenario2CollabLifecycle:
         if _DOMAIN_NAME.lower() not in names:
             pytest.skip(
                 f"'{_DOMAIN_NAME}' not in the registry — run scenario 1 first "
-                "(test_scenario_1_generate_live.py) to build and persist it."
+                "(test_scenario_01_generate_live.py) to build and persist it."
             )
 
         # ── 3. Load V1 and require the canonical clean state (single version) ─

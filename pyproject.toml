@@ -86,20 +86,22 @@ dev = [
     "myst-parser>=3.0.0",
     "pip-audit>=2.7.0",
     # Test foundations (T-M0 onwards under CNS)
-    "hypothesis>=6.100.0",        # property-based tests (T-M6)
-    "syrupy>=4.6.0",              # snapshot tests for templates + MCP schemas
-    "testcontainers[postgres]>=4.0.0",  # ephemeral Postgres for Lakebase tests (db marker)
-    "fastmcp>=2.3.1",             # in-process MCP server tests (T-M3, mcp marker)
-    "pyyaml>=6.0",                # consumed by scripts/check_coverage.py
+    "hypothesis>=6.100.0", # property-based tests (T-M6)
+    "syrupy>=4.6.0", # snapshot tests for templates + MCP schemas
+    "testcontainers[postgres]>=4.0.0", # ephemeral Postgres for Lakebase tests (db marker)
+    "fastmcp>=2.3.1", # in-process MCP server tests (T-M3, mcp marker)
+    "pyyaml>=6.0", # consumed by scripts/check_coverage.py
     # M3.P1 quality enforcement
-    "ruff>=0.7.4",                # supersedes flake8 once the baseline is clean
-    "mypy>=1.13.0",               # type checker; runs against `mypy_baseline.txt`
+    "ruff>=0.7.4", # supersedes flake8 once the baseline is clean
+    "mypy>=1.13.0", # type checker; runs against `mypy_baseline.txt`
     # Lakebase backend is the production registry path since v0.4.0; the
     # tests that exercise the registry-config gate need psycopg present so
     # the import-time short-circuit in SettingsService doesn't fire.
     # Mirrors `[project.optional-dependencies].lakebase` — kept in sync.
     "psycopg[binary]>=3.2.0",
     "psycopg-pool>=3.2.0",
+    "pytest-html>=4.1.0",
+    "pytest-dependency>=0.6.0",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -159,6 +161,7 @@ markers = [
     "external: Hits a real Databricks workspace (nightly only — fevm-ontobricks-int)",
     "live_integration: Probes a deployed OntoBricks instance (requires ONTOBRICKS_LIVE_BASE)",
     "scenario: End-to-end journey suites under tests/e2e/scenarios/ — excluded from routine/agent runs; only run on explicit request via -m scenario",
+    "dependency: Cross-scenario ordering/dependency (pytest-dependency); only active in the campaign when ONTOBRICKS_SCENARIO_CHAIN=1",
     "property: Hypothesis property-based tests",
     "slow: >2s wall clock",
     "asyncio: anyio/asyncio coroutine",

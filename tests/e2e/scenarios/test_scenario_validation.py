@@ -54,16 +54,31 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 
 import pytest
 
+from tests.e2e.scenarios._harness import (
+    base_url,
+    chain_marker,
+    csrf_headers,
+    json_body,
+    make_step,
+)
+
 
 # ── Gate: live journey against a real registry (read-only) ───────────────────
-pytestmark = pytest.mark.skipif(
-    os.environ.get("ONTOBRICKS_SCENARIO_LIVE") != "1",
-    reason="live scenario — set ONTOBRICKS_SCENARIO_LIVE=1 to run "
-    "(needs a running app + the test_scenario_1 domain from scenarios 1-3)",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("ONTOBRICKS_SCENARIO_LIVE") != "1",
+        reason="live scenario — set ONTOBRICKS_SCENARIO_LIVE=1 to run "
+        "(needs a running app + the test_scenario_1 domain from scenarios 1-3)",
+    ),
+    *chain_marker(
+        "scenario_validation",
+        depends=("scenario_1", "scenario_2", "scenario_3"),
+    ),
+]
 
 
 _DOMAIN_NAME = os.environ.get("ONTOBRICKS_SCENARIO_DOMAIN", "test_scenario_1")
@@ -75,32 +90,12 @@ _MIN_TASKS = 2      # scenario 2 turns both comments into tasks
 _MIN_SHACL = 1      # scenario 3 accepts at least one SHACL shape
 
 
-def _base_url() -> str:
-    return (
-        os.environ.get("ONTOBRICKS_LIVE_BASE")
-        or os.environ.get("ONTOBRICKS_SCENARIO_BASE")
-        or "http://localhost:8000"
-    ).rstrip("/")
-
-
-def _csrf_headers(context) -> dict:
-    """JSON headers carrying the double-submit CSRF token from the cookie."""
-    cookies = {c["name"]: c["value"] for c in context.cookies()}
-    headers = {"Content-Type": "application/json"}
-    if token := cookies.get("csrf_token"):
-        headers["X-CSRF-Token"] = token
-    return headers
-
-
-def _json(resp) -> dict:
-    try:
-        return json.loads(resp.body())
-    except Exception:  # noqa: BLE001 — non-JSON / empty body
-        return {}
-
-
-def _step(msg: str) -> None:
-    print(f"\n[scenario_validation] {msg}", flush=True)
+# URL / CSRF / JSON helpers and the ``scenario_base`` / ``scenario_page``
+# fixtures are shared — see ``_harness.py`` + ``conftest.py``.
+_base_url = base_url
+_csrf_headers = csrf_headers
+_json = json_body
+_step = make_step("scenario_validation")
 
 
 def _first_list_len(data: dict) -> int:
@@ -111,37 +106,6 @@ def _first_list_len(data: dict) -> int:
         if isinstance(value, list):
             return len(value)
     return 0
-
-
-@pytest.fixture(scope="module")
-def scenario_base() -> str:
-    """Resolve and smoke-check the target app before the browser spins up."""
-    import httpx
-
-    base = _base_url()
-    last_exc: Exception | None = None
-    for probe in ("/health", "/healthz"):  # local serves /health; deployed /healthz
-        try:
-            resp = httpx.get(f"{base}{probe}", timeout=20.0)
-            if resp.status_code == 200:
-                return base
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-    pytest.skip(
-        f"No OntoBricks app reachable at {base} ({last_exc or 'non-200 health'}). "
-        f"Start it with `scripts/start.sh` or set ONTOBRICKS_LIVE_BASE."
-    )
-
-
-@pytest.fixture
-def scenario_page(browser_instance, scenario_base):
-    """A fresh browser page on a clean context pointed at the running app."""
-    ctx = browser_instance.new_context()
-    pg = ctx.new_page()
-    pg.base_url = scenario_base
-    yield pg
-    pg.close()
-    ctx.close()
 
 
 class _Report:
@@ -189,6 +153,50 @@ class _Report:
         lines.append(f" RESULT: {passed} passed, {failed} failed, {info} info")
         lines.append("=" * width)
         return "\n".join(lines)
+
+    def render_markdown(self) -> str:
+        """Human-readable Markdown mirror of :meth:`render` for artifacts/."""
+        passed = sum(1 for r in self.rows if r["ok"] and not r["info"])
+        failed = sum(1 for r in self.rows if not r["ok"])
+        info = sum(1 for r in self.rows if r["info"])
+        verdict = "PASS" if failed == 0 else "FAIL"
+        lines = [
+            f"# Scenario validation report — `{self.domain}`",
+            "",
+            f"**Result: {verdict}** — {passed} passed, {failed} failed, {info} info",
+            "",
+        ]
+        groups: list[str] = []
+        for r in self.rows:
+            if r["group"] not in groups:
+                groups.append(r["group"])
+        for group in groups:
+            lines += [f"## {group}", "", "| Status | Check | Detail |", "| --- | --- | --- |"]
+            for r in (x for x in self.rows if x["group"] == group):
+                tag = "INFO" if r["info"] else ("PASS" if r["ok"] else "FAIL")
+                detail = str(r["detail"]).replace("|", "\\|") if r["detail"] else ""
+                lines.append(f"| {tag} | {r['name']} | {detail} |")
+            lines.append("")
+        return "\n".join(lines)
+
+
+def _write_report(report: "_Report") -> str | None:
+    """Write the Markdown report to ``ONTOBRICKS_SCENARIO_REPORT`` (best-effort).
+
+    Defaults to ``artifacts/scenarios/campaign_report.md`` so ``make
+    scenario-campaign`` collects it alongside the JUnit + HTML reports.
+    """
+    dest = os.environ.get(
+        "ONTOBRICKS_SCENARIO_REPORT", "artifacts/scenarios/campaign_report.md"
+    )
+    try:
+        path = pathlib.Path(dest)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(report.render_markdown(), encoding="utf-8")
+        return str(path)
+    except OSError as exc:  # noqa: BLE001 — reporting must never fail the suite
+        _step(f"could not write campaign report to {dest}: {exc}")
+        return None
 
 
 class TestScenarioValidation:
@@ -375,6 +383,9 @@ class TestScenarioValidation:
 
         # ── Final report ────────────────────────────────────────────────────
         print(report.render(), flush=True)
+        report_path = _write_report(report)
+        if report_path:
+            _step(f"campaign report written → {report_path}")
 
         assert not report.failures, (
             f"{len(report.failures)} validation check(s) failed: "

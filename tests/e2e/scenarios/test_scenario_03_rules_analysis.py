@@ -1,7 +1,7 @@
 """
 E2E (LIVE) — ``test_scenario_3``: rules → quality → reasoning → analysis on the
-domain produced by :mod:`test_scenario_1_generate_live` and versioned by
-:mod:`test_scenario_2_collab_lifecycle`.
+domain produced by :mod:`test_scenario_01_generate_live` and versioned by
+:mod:`test_scenario_02_collab_lifecycle`.
 
 This journey **reuses the durable ``test_scenario_1`` domain** and operates on
 the fresh DRAFT version scenario 2 branched off (V2). It exercises the
@@ -41,7 +41,7 @@ registry).
 Run (against the local dev server, after scenarios 1 and 2):
 
     ONTOBRICKS_SCENARIO_LIVE=1 \\
-    uv run pytest tests/e2e/scenarios/test_scenario_3_rules_analysis.py \\
+    uv run pytest tests/e2e/scenarios/test_scenario_03_rules_analysis.py \\
         -m scenario -v -s --no-cov
 
 Override the target / timeouts via env:
@@ -58,17 +58,28 @@ from __future__ import annotations
 
 import json
 import os
-import time
 
 import pytest
 
+from tests.e2e.scenarios._harness import (
+    base_url,
+    chain_marker,
+    csrf_headers,
+    json_body,
+    make_step,
+    poll_task,
+)
+
 
 # ── Gate: live, mutating, billable journey against a real registry ───────────
-pytestmark = pytest.mark.skipif(
-    os.environ.get("ONTOBRICKS_SCENARIO_LIVE") != "1",
-    reason="live scenario — set ONTOBRICKS_SCENARIO_LIVE=1 to run "
-    "(needs a running app + the test_scenario_1 domain from scenarios 1 & 2)",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        os.environ.get("ONTOBRICKS_SCENARIO_LIVE") != "1",
+        reason="live scenario — set ONTOBRICKS_SCENARIO_LIVE=1 to run "
+        "(needs a running app + the test_scenario_1 domain from scenarios 1 & 2)",
+    ),
+    *chain_marker("scenario_3", depends=("scenario_2",)),
+]
 
 
 _DOMAIN_NAME = os.environ.get("ONTOBRICKS_SCENARIO_DOMAIN", "test_scenario_1")
@@ -80,84 +91,18 @@ _ANALYSIS_TIMEOUT_S = int(os.environ.get("ONTOBRICKS_SCENARIO_ANALYSIS_TIMEOUT",
 _ANALYSIS_TIMEOUT_MS = _ANALYSIS_TIMEOUT_S * 1000
 
 
-def _base_url() -> str:
-    return (
-        os.environ.get("ONTOBRICKS_LIVE_BASE")
-        or os.environ.get("ONTOBRICKS_SCENARIO_BASE")
-        or "http://localhost:8000"
-    ).rstrip("/")
-
-
-def _csrf_headers(context) -> dict:
-    """JSON headers carrying the double-submit CSRF token from the cookie."""
-    cookies = {c["name"]: c["value"] for c in context.cookies()}
-    headers = {"Content-Type": "application/json"}
-    if token := cookies.get("csrf_token"):
-        headers["X-CSRF-Token"] = token
-    return headers
-
-
-def _json(resp) -> dict:
-    return json.loads(resp.body())
-
-
-def _step(msg: str) -> None:
-    print(f"\n[scenario_3] {msg}", flush=True)
+# URL / CSRF / JSON / task-poll helpers and the ``scenario_base`` /
+# ``scenario_page`` fixtures are shared — see ``_harness.py`` + ``conftest.py``.
+# The short local names are kept so the journey below reads identically across
+# every scenario suite.
+_base_url = base_url
+_csrf_headers = csrf_headers
+_json = json_body
+_step = make_step("scenario_3")
 
 
 def _poll_task(page, base: str, task_id: str, timeout_s: int, label: str) -> dict:
-    """Poll ``GET /tasks/<id>`` until it reaches a terminal state or times out."""
-    deadline = time.monotonic() + timeout_s
-    last_log = 0.0
-    while time.monotonic() < deadline:
-        page.wait_for_timeout(3000)
-        try:
-            data = _json(page.request.get(f"{base}/tasks/{task_id}"))
-        except Exception:  # noqa: BLE001 — transient while the task runs
-            continue
-        task = data.get("task") or {}
-        status = task.get("status")
-        if status in ("completed", "failed", "cancelled"):
-            return task
-        now = time.monotonic()
-        if now - last_log > 20:
-            last_log = now
-            _step(
-                f"  …{label}: {status or 'pending'} "
-                f"({task.get('progress', 0)}%, {int(deadline - now)}s left)"
-            )
-    raise AssertionError(f"{label} did not finish within {timeout_s}s")
-
-
-@pytest.fixture(scope="module")
-def scenario_base() -> str:
-    """Resolve and smoke-check the target app before the browser spins up."""
-    import httpx
-
-    base = _base_url()
-    last_exc: Exception | None = None
-    for probe in ("/health", "/healthz"):  # local serves /health; deployed /healthz
-        try:
-            resp = httpx.get(f"{base}{probe}", timeout=20.0)
-            if resp.status_code == 200:
-                return base
-        except Exception as exc:  # noqa: BLE001
-            last_exc = exc
-    pytest.skip(
-        f"No OntoBricks app reachable at {base} ({last_exc or 'non-200 health'}). "
-        f"Start it with `scripts/start.sh` or set ONTOBRICKS_LIVE_BASE."
-    )
-
-
-@pytest.fixture
-def scenario_page(browser_instance, scenario_base):
-    """A fresh browser page on a clean context pointed at the running app."""
-    ctx = browser_instance.new_context()
-    pg = ctx.new_page()
-    pg.base_url = scenario_base
-    yield pg
-    pg.close()
-    ctx.close()
+    return poll_task(page, base, task_id, timeout_s, label, step=_step)
 
 
 class TestScenario3RulesAnalysis:
