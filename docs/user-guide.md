@@ -786,10 +786,18 @@ version to **switch** to it. A *"Save my changes before switching"* box is ticke
 leave it on to persist your work first, or untick it to discard unsaved changes.
 
 **Stuck lock?** Because there is no auto-expiry, a lock left behind (e.g. a browser that
-crashed without closing) stays until it is cleared. An **app-admin** viewing the locked
-version gets a **Take over editing** button that reclaims the lock; the previous editor
-becomes read-only on their next page load. A version also releases its lock automatically
-when it leaves DRAFT (submitted for review / published).
+crashed without closing) stays until it is cleared. There are two ways to clear it:
+
+- An **app-admin** viewing the locked version gets a **Take over editing** button that
+  reclaims the lock; the previous editor becomes read-only on their next page load.
+- From **Settings → Admin → Locks** (admin only), an admin sees *every* active edit-lock
+  across the registry — domain, version, lifecycle status, who holds it, and when it was
+  acquired — and can **force-unlock** any of them without opening that domain first
+  (a confirmation dialog names the domain, version, and holder).
+
+A version also releases its lock automatically when it leaves DRAFT (submitted for review /
+published). The read-only banner and the sidebar role badge both name the current holder,
+so viewers know exactly who to ask to close the domain.
 
 > The same user opening the domain in two tabs shares one lock (it is keyed by e-mail), so
 > a reload or a second tab never locks you out of your own domain.

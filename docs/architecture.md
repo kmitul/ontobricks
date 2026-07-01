@@ -1351,6 +1351,17 @@ OntoBricks provides a stateless REST API at `/api/v1/` for external applications
 > (`force_release`). `PermissionMiddleware` is authoritative — it 403s a
 > non-holder's mutating request on a DRAFT version (admins are not exempt).
 >
+> Admins get a registry-wide view of every active lock via **Settings › Locks**
+> (`GET /settings/locks` → `EditLockService.list_all` →
+> `store.list_all_edit_locks`) and can force-unlock any `(folder, version)`
+> without opening that domain (`POST /settings/locks/release` →
+> `EditLockService.admin_release`); both endpoints are admin-only. When the lock
+> backend is unavailable (e.g. the table is missing) `EditLockService._shape`
+> degrades to permissive rather than presenting a phantom "another user" lock.
+> `domain_edit_locks` is provisioned as the schema owner by the deploy
+> migration (`scripts/bootstrap-lakebase-perms.sh`), because the app service
+> principal cannot self-heal the table's FK to `domains`.
+>
 > The lifecycle replaces the old per-version "Active"/`mcp_enabled` toggle.
 
 ### Available Endpoints

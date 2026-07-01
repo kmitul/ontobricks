@@ -944,3 +944,180 @@ across the registry, with a force-unlock action.
 `uv run pytest -q -m "not scenario"` → **2946 passed, 275 skipped, 0 failed**.
 Smoke-tested `GET /settings/locks` on the local dev server → `{"success": true,
 "locks": []}`.
+
+---
+
+## Review + docs: Settings › Locks / edit-lock hardening
+
+### Context
+
+Post-implementation review/refactor cycle for the edit-lock work (phantom-lock
+fix, holder-named read-only UI, and the admin **Settings › Locks** panel).
+Reviewed the changed code against `src/.coding_rules.md` / `.cursor/*`, scanned
+for duplication and dead code, then updated the documentation — the Locks admin
+surface was previously undocumented.
+
+### Review outcome
+
+- **Rule compliance** — clean. `%s`-style logging (no f-strings in `logger.*`),
+  `ValidationError` for bad request bodies (no bare `HTTPException`), routes
+  delegate to `EditLockService` (no business logic in routes), no HTTP types in
+  `back/core`/`back/objects`, external JS with event delegation (no inline
+  JS/CSS), class-first static-method service.
+- **Duplication** — `list_all_edit_locks` mirrors the existing
+  `list_all_review_events` store shape; no new duplication. The per-module
+  `escapeHtml` helper in `settings-locks.js` follows the codebase-wide
+  convention (~40 modules define their own) — noted as a pre-existing,
+  out-of-scope consolidation candidate, not changed.
+- **Dead code / session-data** — none introduced; edit-locks are persisted in
+  Lakebase, so no new `DomainSession` fields.
+
+### Changes
+
+1. `docs/user-guide.md`
+   - Expanded the "Stuck lock?" paragraph to document both clearing paths:
+     admin in-page **Take over editing** and the registry-wide **Settings →
+     Admin → Locks** force-unlock, and noted the read-only banner/role badge
+     name the holder.
+2. `docs/architecture.md`
+   - Documented the admin lock endpoints (`GET /settings/locks`,
+     `POST /settings/locks/release`), the `_shape` permissive degradation for a
+     missing backend, and that `domain_edit_locks` is provisioned as schema
+     owner by `bootstrap-lakebase-perms.sh`.
+3. `README.md`
+   - Added the **Settings → Locks** admin panel to the single-editor
+     concurrency bullet.
+
+### Modified files
+
+- `docs/user-guide.md`
+- `docs/architecture.md`
+- `README.md`
+
+### Test result
+
+`uv run pytest -q -m "not scenario"` → **2946 passed, 275 skipped, 0 failed**
+(docs-only change; suite re-run for the review gate).
+
+## `make scenario-campaign` — one entrypoint for the live scenario campaign
+
+### Context
+
+The live E2E scenarios (1 → 2 → 3 → validation) are the start of a larger
+integration-test campaign. They need a single, safe orchestration entrypoint
+that runs them in order against a running app and produces durable reports
+(machine-readable for CI + human-readable to open), rather than each engineer
+remembering the exact `ONTOBRICKS_SCENARIO_LIVE=1 pytest …` invocation.
+
+### Changes
+
+1. `Makefile`
+   - New `scenario-campaign` target: preflights the target app's `/health`
+     (fails fast if nothing is reachable), then runs every `scenario`-marked
+     suite under `tests/e2e/scenarios/` in filename order with
+     `ONTOBRICKS_SCENARIO_LIVE=1`, writing `artifacts/scenarios/campaign.xml`
+     (JUnit) and a self-contained `campaign.html`. Target app is overridable
+     via `ONTOBRICKS_LIVE_BASE=<url>` (defaults to `http://localhost:8000`).
+   - Added the target to `.PHONY`, the `help` output (Testing section), and
+     `clean` (removes `artifacts/`). Introduced `SCENARIO_ARTIFACTS` and a
+     `ONTOBRICKS_LIVE_BASE ?=` default.
+2. `pyproject.toml` / `uv.lock`
+   - Added `pytest-html>=4.1.0` (pulls `pytest-metadata`) to the `dev`
+     dependency group for the campaign's HTML report.
+3. `.gitignore`
+   - Ignore `artifacts/` (campaign reports are build output, not source).
+
+### Modified files
+
+- `Makefile`
+- `pyproject.toml`
+- `uv.lock`
+- `.gitignore`
+
+### Test result
+
+`make -n scenario-campaign` renders the expected command sequence. Report
+plumbing smoke-tested by running the **read-only** validation suite alone with
+`--junitxml`/`--html` against the local app → `1 skipped` (registry currently
+has only V2, so the "≥ 2 versions" prerequisite skips cleanly) and both
+`campaign.xml` + `campaign.html` were generated. The billable full campaign
+(scenarios 1-3) was **not** run. Unit suite unaffected:
+`uv run pytest -q -m "not scenario"` → **2946 passed, 275 skipped, 0 failed**.
+
+## Scenario campaign hardening — shared harness, ordering, chaining, MD report, docs
+
+### Context
+
+Following the `make scenario-campaign` entrypoint, the campaign needed the
+remaining "manage a growing integration suite" pieces: kill the per-file
+helper/fixture duplication, guarantee a stable run order past scenario 9, add
+opt-in cross-scenario dependency chaining (so an upstream failure skips instead
+of cascading), a human-readable Markdown report artifact, and a doc covering
+how to run/extend/isolate the campaign.
+
+### Changes
+
+1. `tests/e2e/scenarios/_harness.py` (new)
+   - Single home for the shared, importable helpers previously copy-pasted
+     across every scenario: `base_url`, `csrf_headers`, `json_body`,
+     `make_step`, `poll_task`, plus the env-gated `chain_marker`.
+2. `tests/e2e/scenarios/conftest.py`
+   - Hoisted the duplicated `scenario_base` (module-scoped health-checked base)
+     and `scenario_page` (clean, no-bearer Playwright page) fixtures here so all
+     suites share one definition; imports `base_url` from `_harness`. Added a
+     `dependency` marker note.
+3. `tests/e2e/scenarios/test_scenario_01_generate_live.py`,
+   `…_02_collab_lifecycle.py`, `…_03_rules_analysis.py`,
+   `test_scenario_validation.py`
+   - Zero-padded filenames (`_1_`→`_01_`, etc.) so lexical collection order ==
+     run order beyond 9 (validation stays last); fixed internal/cross-file
+     module references and run-command docstrings.
+   - Replaced each file's private helpers/fixtures with thin aliases over the
+     shared `_harness` implementations (test bodies unchanged).
+   - `pytestmark` is now a list combining the `ONTOBRICKS_SCENARIO_LIVE` skipif
+     with `chain_marker(...)`: `pytest-dependency` chaining
+     (1←2←3←validation) that only activates under `ONTOBRICKS_SCENARIO_CHAIN=1`,
+     so isolated single-suite runs are unaffected.
+4. `tests/e2e/scenarios/test_scenario_validation.py`
+   - Added `_Report.render_markdown()` + `_write_report()`: the validation suite
+     now also writes `artifacts/scenarios/campaign_report.md` (path overridable
+     via `ONTOBRICKS_SCENARIO_REPORT`), best-effort (never fails the suite).
+5. `tests/e2e/scenarios/README.md` (new)
+   - Campaign guide: journey table, run commands, env-var reference, chaining
+     semantics, registry-isolation guidance, and an "adding a new scenario"
+     checklist.
+6. `Makefile`
+   - `scenario-campaign` now exports `ONTOBRICKS_SCENARIO_CHAIN=1`, adds
+     `-p no:randomly` (defensive ordering), and echoes the `campaign_report.md`
+     artifact.
+7. `pyproject.toml` / `uv.lock`
+   - Added `pytest-dependency>=0.6.0` (dev). Registered the `dependency` marker
+     in `pyproject.toml` and `pytest.ini` (both use `--strict-markers`).
+8. `.cursor/08-testing-and-deployment.mdc`
+   - Updated the scenario note to the zero-padded names + `make scenario-campaign`.
+
+### Modified files
+
+- `tests/e2e/scenarios/_harness.py` (new)
+- `tests/e2e/scenarios/README.md` (new)
+- `tests/e2e/scenarios/conftest.py`
+- `tests/e2e/scenarios/test_scenario_01_generate_live.py` (renamed from `_1_`)
+- `tests/e2e/scenarios/test_scenario_02_collab_lifecycle.py` (renamed from `_2_`)
+- `tests/e2e/scenarios/test_scenario_03_rules_analysis.py` (renamed from `_3_`)
+- `tests/e2e/scenarios/test_scenario_validation.py`
+- `Makefile`
+- `pyproject.toml`
+- `uv.lock`
+- `pytest.ini`
+- `.cursor/08-testing-and-deployment.mdc`
+
+### Test result
+
+- Scenario collection (`-m scenario --collect-only`) with chaining **on** and
+  **off** → 5 tests, filename order, clean under `--strict-markers`.
+- Markdown report path smoke-tested standalone → renders + writes correctly
+  (incl. `|` escaping).
+- `make -n scenario-campaign` renders the expected command sequence.
+- Unit suite: `uv run pytest -q -m "not scenario"` → **2946 passed, 275
+  skipped, 0 failed** (5 scenarios deselected). The billable live campaign was
+  **not** run.
