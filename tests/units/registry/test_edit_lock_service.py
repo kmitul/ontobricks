@@ -38,7 +38,7 @@ def _patches(store, domain):
     )
 
 
-def _store(acquire=None, heartbeat=None, get=None):
+def _store(acquire=None, get=None):
     st = MagicMock()
     st.acquire_edit_lock.return_value = acquire or {
         "acquired": True,
@@ -46,9 +46,7 @@ def _store(acquire=None, heartbeat=None, get=None):
         "holder_email": "alice@acme.com",
         "holder_name": "Alice",
         "acquired_at": "2026-01-01T00:00:00",
-        "stale": False,
     }
-    st.heartbeat_edit_lock.return_value = heartbeat or {"held": True}
     st.get_edit_lock.return_value = get
     st.release_edit_lock.return_value = True
     return st
@@ -79,7 +77,6 @@ def test_status_viewer_gets_view_mode_no_takeover_for_non_admin():
             "holder_email": "bob@acme.com",
             "holder_name": "Bob",
             "acquired_at": "2026-01-01T00:00:00",
-            "stale": False,
         }
     )
     p1, p2 = _patches(store, _domain())
@@ -99,7 +96,6 @@ def test_status_viewer_admin_can_take_over():
             "is_self": False,
             "holder_email": "bob@acme.com",
             "holder_name": "Bob",
-            "stale": False,
         }
     )
     p1, p2 = _patches(store, _domain())
@@ -118,27 +114,6 @@ def test_status_non_draft_is_none_and_skips_store():
         res = EditLockService.status(_request(), MagicMock(), MagicMock())
     assert res["mode"] == "none"
     store.acquire_edit_lock.assert_not_called()
-
-
-# ----------------------------------------------------------------------
-# heartbeat
-# ----------------------------------------------------------------------
-
-
-def test_heartbeat_held():
-    store = _store(heartbeat={"held": True, "holder_email": "alice@acme.com"})
-    p1, p2 = _patches(store, _domain())
-    with p1, p2:
-        res = EditLockService.heartbeat(_request(), MagicMock(), MagicMock())
-    assert res["held"] is True
-
-
-def test_heartbeat_lost_when_taken_over():
-    store = _store(heartbeat={"held": False})
-    p1, p2 = _patches(store, _domain())
-    with p1, p2:
-        res = EditLockService.heartbeat(_request(), MagicMock(), MagicMock())
-    assert res["held"] is False
 
 
 # ----------------------------------------------------------------------
@@ -187,7 +162,7 @@ def test_release_calls_store_with_email():
 
 def test_blocking_holder_returns_name_when_held_by_other():
     store = _store(
-        get={"holder_email": "bob@acme.com", "holder_name": "Bob", "stale": False}
+        get={"holder_email": "bob@acme.com", "holder_name": "Bob"}
     )
     p1, p2 = _patches(store, _domain())
     with p1, p2:
@@ -199,7 +174,7 @@ def test_blocking_holder_returns_name_when_held_by_other():
 
 def test_blocking_holder_empty_when_self():
     store = _store(
-        get={"holder_email": "alice@acme.com", "holder_name": "Alice", "stale": False}
+        get={"holder_email": "alice@acme.com", "holder_name": "Alice"}
     )
     p1, p2 = _patches(store, _domain())
     with p1, p2:
@@ -209,21 +184,9 @@ def test_blocking_holder_empty_when_self():
     assert holder == ""
 
 
-def test_blocking_holder_empty_when_stale():
-    store = _store(
-        get={"holder_email": "bob@acme.com", "holder_name": "Bob", "stale": True}
-    )
-    p1, p2 = _patches(store, _domain())
-    with p1, p2:
-        holder = EditLockService.blocking_holder(
-            _request(email="carol@acme.com"), MagicMock(), MagicMock()
-        )
-    assert holder == ""
-
-
 def test_blocking_holder_empty_on_non_draft():
     store = _store(
-        get={"holder_email": "bob@acme.com", "holder_name": "Bob", "stale": False}
+        get={"holder_email": "bob@acme.com", "holder_name": "Bob"}
     )
     p1, p2 = _patches(store, _domain(status="IN-REVIEW"))
     with p1, p2:

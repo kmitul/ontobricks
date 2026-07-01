@@ -1,8 +1,9 @@
 -- ============================================================================
 -- OntoBricks Lakebase registry upgrade: 0.5.x  ->  0.6
 -- ----------------------------------------------------------------------------
--- Single, clean, one-shot migration to the FINAL 0.6 schema. Adds the
--- collaborative *comments & tasks* (the "Discussions" feature):
+-- Single, clean, one-shot migration to the FINAL 0.6 schema. This is the ONE
+-- script to run to bring a 0.5.x (or partially-migrated 0.6) registry up to
+-- the complete 0.6 shape — it folds in every 0.6-cycle addition:
 --
 --   * new table   domain_comments  — domain-wide threaded discussion: every
 --                 comment belongs to the single per-(domain, version) thread.
@@ -11,28 +12,36 @@
 --   * new table   domain_tasks     — personalised work items, usually born
 --                 from a comment (``comment_id``), surfaced in the assignee's
 --                 "My Tasks" worklist.
+--   * new table   graph_analytics  — per-(domain, version) cache of the LAST
+--                 async Knowledge-Graph Analytics result (UPSERT, one row).
+--   * new table   graph_analytics_runs — append-only per-run analytics history.
+--   * new table   domain_change_events — append-only ontology/mapping change
+--                 audit ("who changed what, and when"); ``source`` tags human
+--                 vs AI-assistant edits, ``occurred_at`` is the real edit time.
 --   * indexes     idx_domain_comments_lookup, idx_domain_tasks_assignee,
---                 idx_domain_tasks_domain.
+--                 idx_domain_tasks_domain, idx_graph_analytics_runs_domain_version,
+--                 idx_change_events_domain_version.
 --
 -- These tables mirror the canonical
 -- ``src/back/objects/registry/store/lakebase/schema.sql``, so the registry
--- stays fully constrained (task status CHECK).
+-- stays fully constrained (task status + change-source CHECKs).
 --
--- NOTE — supersedes the two-step path. Discussions became domain-wide during
--- the 0.6 cycle, so the early per-anchor columns (``anchor_type`` /
--- ``anchor_ref``) were dropped. This script lands the final shape directly:
--- if it finds those columns (left by an earlier draft of this script, the
+-- NOTE — supersedes the piecemeal 0.6.x patch scripts. Discussions became
+-- domain-wide during the 0.6 cycle, so the early per-anchor columns
+-- (``anchor_type`` / ``anchor_ref``) were dropped. This script lands the final
+-- shape directly: if it finds those columns (left by an earlier draft, the
 -- app's lazy self-heal, or ``make bootstrap-lakebase``), it drops them and the
--- stale ``idx_domain_comments_anchor`` index. You therefore do NOT also need
--- ``scripts/upgrade_lakebase_0.6_drop_comment_anchor.sql`` — it remains only
--- for installs already migrated to the intermediate (anchored) 0.6 shape.
+-- stale ``idx_domain_comments_anchor`` index. It therefore fully replaces the
+-- earlier standalone 0.6.x scripts (comment-anchor drop, graph_analytics,
+-- change_events) — you only need this one.
 --
--- The app self-heals these tables lazily on first comment/task write
--- (``_ensure_collab_tables``), and ``make bootstrap-lakebase`` provisions them
--- as the schema owner. Run this script when you prefer an explicit, auditable
--- one-shot migration (e.g. a DBA applying it out-of-band). The only data
--- discarded is the dead ``anchor_type`` / ``anchor_ref`` values (if present);
--- no comment bodies, authors, threading or resolved state are touched.
+-- The app self-heals these tables lazily on first use
+-- (``_ensure_collab_tables`` / ``_ensure_graph_analytics_table`` /
+-- ``_ensure_change_events_table``), and ``make bootstrap-lakebase`` provisions
+-- them as the schema owner. Run this script when you prefer an explicit,
+-- auditable one-shot migration (e.g. a DBA applying it out-of-band). The only
+-- data discarded is the dead ``anchor_type`` / ``anchor_ref`` values (if
+-- present); no comment bodies, authors, threading or resolved state are touched.
 --
 -- Idempotent: safe to run multiple times.
 -- ----------------------------------------------------------------------------
@@ -121,14 +130,79 @@ BEGIN
     END IF;
 END$$;
 
+-- 3. Graph Analytics cache + append-only run history -------------------------
+--    The Analytics page and the Domain Validation "Graph Structure" card
+--    render from ``graph_analytics`` (one UPSERT row per (domain, version))
+--    instead of recomputing NetworkX metrics on every request.
+CREATE TABLE IF NOT EXISTS graph_analytics (
+    domain_id    uuid NOT NULL
+                 REFERENCES domains(id) ON DELETE CASCADE,
+    version      text NOT NULL,
+    status       text NOT NULL DEFAULT 'completed',  -- completed|failed
+    graph_name   text NOT NULL DEFAULT '',
+    class_filter jsonb NOT NULL DEFAULT '[]'::jsonb,  -- entity types used ([]=all)
+    stats        jsonb NOT NULL DEFAULT '{}'::jsonb,
+    top_pagerank jsonb NOT NULL DEFAULT '[]'::jsonb,
+    result       jsonb NOT NULL DEFAULT '{}'::jsonb,  -- full compute payload
+    error        text NOT NULL DEFAULT '',
+    task_id      text NOT NULL DEFAULT '',
+    duration_ms  bigint NOT NULL DEFAULT 0,
+    computed_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS graph_analytics_runs (
+    id                  bigserial PRIMARY KEY,
+    domain_id           uuid NOT NULL
+                        REFERENCES domains(id) ON DELETE CASCADE,
+    version             text NOT NULL,
+    status              text NOT NULL DEFAULT 'completed',
+    class_filter        jsonb NOT NULL DEFAULT '[]'::jsonb,
+    node_count          bigint NOT NULL DEFAULT 0,
+    edge_count          bigint NOT NULL DEFAULT 0,
+    connected_components integer NOT NULL DEFAULT 0,
+    avg_degree          double precision NOT NULL DEFAULT 0,
+    density             double precision NOT NULL DEFAULT 0,
+    duration_ms         bigint NOT NULL DEFAULT 0,
+    task_id             text NOT NULL DEFAULT '',
+    error               text NOT NULL DEFAULT '',
+    computed_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_graph_analytics_runs_domain_version
+    ON graph_analytics_runs(domain_id, version, computed_at DESC);
+
+-- 4. Ontology / mapping change audit (append-only "who changed what, when") --
+--    Flushed from the editing session's buffered change_log on "Save to
+--    registry". ``source`` distinguishes human vs AI-assistant edits.
+CREATE TABLE IF NOT EXISTS domain_change_events (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id       uuid NOT NULL
+                    REFERENCES domains(id) ON DELETE CASCADE,
+    version         text NOT NULL,
+    actor           text NOT NULL DEFAULT '',
+    source          text NOT NULL DEFAULT 'user'
+                    CHECK (source IN ('user', 'agent')),
+    action          text NOT NULL,
+    entity_type     text NOT NULL DEFAULT '',
+    entity_ref      text NOT NULL DEFAULT '',
+    summary         text NOT NULL DEFAULT '',
+    meta            jsonb NOT NULL DEFAULT '{}'::jsonb,
+    occurred_at     timestamptz NOT NULL DEFAULT now(),
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_change_events_domain_version
+    ON domain_change_events(domain_id, version, occurred_at);
+
 COMMIT;
 
 -- Summary -------------------------------------------------------------------
-\echo 'Done. Collaboration tables present:'
+\echo 'Done. Registry tables present:'
 SELECT table_name
 FROM information_schema.tables
 WHERE table_schema = :'reg_schema'
-  AND table_name IN ('domain_comments', 'domain_tasks')
+  AND table_name IN ('domain_comments', 'domain_tasks',
+                     'graph_analytics', 'graph_analytics_runs',
+                     'domain_change_events')
 ORDER BY table_name;
 
 -- ============================================================================
@@ -169,7 +243,7 @@ SET search_path TO :"graph_schema";
 
 BEGIN;
 
--- 3. Backfill datatype + lang on every *_sync table that is missing them -----
+-- 5. Backfill datatype + lang on every *_sync table that is missing them -----
 --    (tables created by the app before v0.6 only had subject/predicate/object)
 DO $$
 DECLARE
@@ -191,7 +265,7 @@ BEGIN
     END LOOP;
 END$$;
 
--- 4. Same for *__app companion tables ----------------------------------------
+-- 6. Same for *__app companion tables ----------------------------------------
 DO $$
 DECLARE
     tbl text;
@@ -212,7 +286,7 @@ BEGIN
     END LOOP;
 END$$;
 
--- 5. Drop stale *_sync tables not owned by the current role ------------------
+-- 7. Drop stale *_sync tables not owned by the current role ------------------
 --    Use this block when the previous owner was a Lakeflow service principal
 --    or a different session user. Requires superuser or explicit ownership.
 --    Review the table list below before running!

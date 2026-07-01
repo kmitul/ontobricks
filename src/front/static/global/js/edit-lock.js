@@ -3,24 +3,31 @@
 //
 // Only one browser may *edit* a given DRAFT (domain, version) at a time.
 // The first opener acquires the lock (server-side, in ``load-from-uc``);
-// later openers land read-only. This module, loaded on every page:
+// later openers land read-only. There is NO timeout / heartbeat: the lock
+// is held until the editor explicitly *closes* the domain (the "Close"
+// button → ``POST /domain/close``), an app-admin takes it over, or the
+// version leaves DRAFT.
+//
+// This module, loaded on every page:
 //
 //   1. on load, asks the backend for the lock status of the session's
 //      loaded version (``GET /domain/edit-lock``). The backend performs a
-//      non-forcing acquire so the editor keeps the lock across reloads;
-//   2. when this browser is the EDITOR (``mode == "edit"``) it runs a
-//      ~30s heartbeat (``POST /domain/edit-lock/heartbeat``). If the lock
-//      is taken over (``held == false``) the page flips to read-only;
-//   3. when this browser is a VIEWER (``mode == "view"``) it stamps
+//      non-forcing acquire so the editor keeps the lock across reloads /
+//      in-app navigation (the lock is keyed by e-mail, so a plain page
+//      change never hands it to someone else);
+//   2. when this browser is a VIEWER (``mode == "view"``) it stamps
 //      ``body.read-only-locked`` — re-using every gate in
 //      ``permissions.css`` — and shows a dismissible banner naming the
 //      current editor. App-admins additionally get a "Take over editing"
-//      button (``POST /domain/edit-lock/acquire`` with ``force``);
-//   4. on tab close it best-effort releases the lock (the server TTL is
-//      the real safety net, so a missed release self-heals in ~90s).
+//      button (``POST /domain/edit-lock/acquire`` with ``force``).
 //
 // ``window.editLockMode`` ('edit' | 'view' | 'none') is exposed so
 // ``permissions.js`` → ``canEditOntology()`` respects the lock too.
+//
+// Note: the lock is deliberately NOT released on tab close / navigation.
+// Because this is a multi-page app, every navigation is a full unload;
+// releasing there would briefly free the lock and let another user steal
+// it mid-session. The lock is only freed by an explicit Close.
 // =====================================================
 
 (function () {
@@ -30,12 +37,6 @@
     // ``window.isActiveVersion`` in version-check.js). ``permissions.js``
     // only blocks on an explicit 'view'.
     window.editLockMode = window.editLockMode || 'edit';
-
-    // Must be a third of the server TTL (_EDIT_LOCK_TTL_S = 90s) so two
-    // missed beats still leave slack before the lock is declared stale.
-    var HEARTBEAT_MS = 30000;
-    var heartbeatTimer = null;
-    var lockReleased = false;
 
     function notify(msg, kind) {
         if (typeof window.showNotification === 'function') {
@@ -71,8 +72,7 @@
         }
     }
 
-    function renderBanner(data, opts) {
-        opts = opts || {};
+    function renderBanner(data) {
         if (document.getElementById('editLockBanner')) return;
         var banner = document.createElement('div');
         banner.id = 'editLockBanner';
@@ -81,11 +81,9 @@
         msg.className = 'edit-lock-msg';
         msg.innerHTML =
             '<i class="bi bi-lock-fill me-1"></i>' +
-            (opts.takenOver
-                ? 'Your editing session was taken over by <strong>' +
-                  escapeHtml(holderLabel(data)) + '</strong> — this page is now read-only.'
-                : 'This version is being edited by <strong>' +
-                  escapeHtml(holderLabel(data)) + '</strong> — you have read-only access.');
+            'This version is being edited by <strong>' +
+            escapeHtml(holderLabel(data)) +
+            '</strong> — you have read-only access until they close the domain.';
         banner.appendChild(msg);
 
         var actions = document.createElement('span');
@@ -114,47 +112,6 @@
         document.body.insertBefore(banner, document.body.firstChild);
     }
 
-    // ----- editor (heartbeat) flow ----------------------------------
-
-    function startHeartbeat() {
-        if (heartbeatTimer) return;
-        heartbeatTimer = setInterval(sendHeartbeat, HEARTBEAT_MS);
-    }
-
-    function stopHeartbeat() {
-        if (heartbeatTimer) {
-            clearInterval(heartbeatTimer);
-            heartbeatTimer = null;
-        }
-    }
-
-    async function sendHeartbeat() {
-        try {
-            var res = await fetch('/domain/edit-lock/heartbeat', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-            });
-            var data = await res.json();
-            if (data && data.held === false) {
-                // Lost the lock — someone took over (or it expired and was
-                // reclaimed). Flip to read-only and stop beating.
-                stopHeartbeat();
-                lockReleased = true; // nothing of ours to release anymore
-                enterReadOnly();
-                renderBanner(data, { takenOver: true });
-                notify(
-                    'Your editing session was taken over by ' +
-                    holderLabel(data) + '. The page is now read-only.',
-                    'warning'
-                );
-            }
-        } catch (e) {
-            // Transient network error — keep the lock optimistically; the
-            // next beat (or the server TTL) reconciles state.
-        }
-    }
-
     // ----- admin take-over ------------------------------------------
 
     async function takeOver() {
@@ -177,27 +134,6 @@
         }
     }
 
-    // ----- tab-close release ----------------------------------------
-
-    function releaseOnUnload() {
-        if (lockReleased) return;
-        lockReleased = true;
-        try {
-            // ``keepalive`` lets the request outlive the unload while still
-            // carrying cookies + the CSRF header (window.fetch is patched
-            // to attach it). sendBeacon can't set the CSRF header, so it
-            // would be rejected by the CSRF middleware.
-            fetch('/domain/edit-lock/release', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'same-origin',
-                keepalive: true,
-            });
-        } catch (e) {
-            // Best-effort: the server TTL (~90s) frees the lock anyway.
-        }
-    }
-
     // ----- bootstrap -------------------------------------------------
 
     async function initEditLock() {
@@ -216,14 +152,11 @@
         var mode = data.mode || 'none';
         window.editLockMode = mode;
 
-        if (mode === 'edit') {
-            startHeartbeat();
-            window.addEventListener('pagehide', releaseOnUnload);
-            window.addEventListener('beforeunload', releaseOnUnload);
-        } else if (mode === 'view') {
+        if (mode === 'view') {
             enterReadOnly();
-            renderBanner(data, { takenOver: false });
+            renderBanner(data);
         }
+        // mode === 'edit' → this browser holds the lock; nothing to do.
         // mode === 'none' → not a lockable DRAFT version; nothing to do.
     }
 

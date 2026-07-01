@@ -961,6 +961,24 @@ class RegistryService:
         """All review events across the registry (oldest-first)."""
         return self._store.list_all_review_events()
 
+    # -- ontology / mapping change audit log -------------------------
+
+    def record_change_events(
+        self,
+        folder: str,
+        version: str,
+        actor: str,
+        events: list,
+    ) -> Tuple[bool, str]:
+        """Append a batch of ontology/mapping change rows (best-effort)."""
+        return self._store.record_change_events(folder, version, actor, events)
+
+    def list_change_events(
+        self, folder: str, version: Optional[str] = None, limit: int = 500
+    ) -> list:
+        """Oldest-first change events for *folder* (optionally one version)."""
+        return self._store.list_change_events(folder, version, limit)
+
     # -- collaborative comments + tasks ------------------------------
 
     def insert_comment(

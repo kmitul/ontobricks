@@ -117,10 +117,22 @@
             "status_indicator": null,
             "navbar_actions": [
                 {
-                    "label": "Save Domain",
+                    "label": "Save",
                     "icon": "bi-cloud-upload",
                     "action": "domainSave",
                     "element_id": "menuSaveDomain"
+                },
+                {
+                    "label": "Switch",
+                    "icon": "bi-arrow-repeat",
+                    "action": "domainSwitch",
+                    "element_id": "menuSwitchDomain"
+                },
+                {
+                    "label": "Close",
+                    "icon": "bi-x-circle",
+                    "action": "domainClose",
+                    "element_id": "menuCloseDomain"
                 }
             ],
             "groups": [

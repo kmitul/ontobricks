@@ -102,6 +102,11 @@ def get_empty_domain() -> Dict[str, Any]:
         },
         "assignment": {"entities": [], "relationships": []},
         "design_layout": {"current_view": "default", "views": {}, "map": {}},
+        # Buffered ontology/mapping change-audit events (who/what/when).
+        # Appended as edits happen; flushed to the registry on save-to-uc.
+        # Kept out of _config_snapshot() and export_for_save() so it never
+        # affects change detection nor leaks into the persisted domain JSON.
+        "change_log": [],
         "settings": {
             "databricks": {
                 "host": "",
@@ -581,6 +586,49 @@ class DomainSession:
             ),
         )
 
+    def record_change(
+        self,
+        action: str,
+        *,
+        entity_type: str = "",
+        entity_ref: str = "",
+        summary: str = "",
+        source: str = "user",
+        meta: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Buffer a fine-grained ontology/mapping change-audit event.
+
+        Events accumulate in the session (surviving across requests via the
+        session file) and are flushed to the registry as one batch when the
+        domain version is saved to Unity Catalog. Captures the real edit time
+        in ``ts`` so the trail reflects *when* each change happened, not the
+        (later) save time. ``source`` is ``"agent"`` for AI-assistant edits.
+
+        Callers must still call :meth:`save` to persist the buffer.
+        """
+        log = self._data.setdefault("change_log", [])
+        log.append(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "action": action,
+                "entity_type": entity_type or "",
+                "entity_ref": entity_ref or "",
+                "summary": summary or "",
+                "source": source or "user",
+                "meta": meta or {},
+            }
+        )
+
+    def drain_change_log(self) -> list:
+        """Return the buffered change events and clear the buffer.
+
+        Called at save-to-registry time to flush the audit batch. The
+        cleared buffer is persisted by the subsequent :meth:`save`.
+        """
+        log = list(self._data.get("change_log", []) or [])
+        self._data["change_log"] = []
+        return log
+
     def save(self):
         """Save project data to session.
 
@@ -720,6 +768,10 @@ class DomainSession:
             }
         )
         self.clear_generated_content()
+        self.record_change(
+            "ontology_reset", entity_type="ontology",
+            summary="Ontology, mappings and layout reset",
+        )
         self.save()
 
     def clear_uc_metadata(self):

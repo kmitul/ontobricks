@@ -327,13 +327,31 @@
 
                 <li class="ob-subnav-item">
                     {% set save_action = namespace(v=none) %}
-                    {% if domain_m.v %}{% for a in domain_m.v.navbar_actions %}{% if a.action == 'domainSave' %}{% set save_action.v = a %}{% endif %}{% endfor %}{% endif %}
+                    {% set switch_action = namespace(v=none) %}
+                    {% set close_action = namespace(v=none) %}
+                    {% if domain_m.v %}{% for a in domain_m.v.navbar_actions %}{% if a.action == 'domainSave' %}{% set save_action.v = a %}{% elif a.action == 'domainSwitch' %}{% set switch_action.v = a %}{% elif a.action == 'domainClose' %}{% set close_action.v = a %}{% endif %}{% endfor %}{% endif %}
                     {% if save_action.v %}
                     <a class="ob-subnav-save-btn btn-requires-domain" href="#"
                        data-navbar-action="{{ save_action.v.action }}"
                        {% if save_action.v.element_id %}id="{{ save_action.v.element_id }}"{% endif %}
                        title="Save domain to Unity Catalog">
                         <i class="bi {{ save_action.v.icon }}"></i> {{ save_action.v.label }}
+                    </a>
+                    {% endif %}
+                    {% if switch_action.v %}
+                    <a class="ob-subnav-switch-btn btn-requires-domain" href="#"
+                       data-navbar-action="{{ switch_action.v.action }}"
+                       {% if switch_action.v.element_id %}id="{{ switch_action.v.element_id }}"{% endif %}
+                       title="Reload the current domain or switch to another version">
+                        <i class="bi {{ switch_action.v.icon }}"></i> {{ switch_action.v.label }}
+                    </a>
+                    {% endif %}
+                    {% if close_action.v %}
+                    <a class="ob-subnav-close-btn btn-requires-domain" href="#"
+                       data-navbar-action="{{ close_action.v.action }}"
+                       {% if close_action.v.element_id %}id="{{ close_action.v.element_id }}"{% endif %}
+                       title="Close the domain and release the edit lock">
+                        <i class="bi {{ close_action.v.icon }}"></i> {{ close_action.v.label }}
                     </a>
                     {% endif %}
                 </li>

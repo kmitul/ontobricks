@@ -62,6 +62,7 @@ from back.objects.registry.registry_cache import invalidate_registry_cache
 
 from ..base import (
     BuildRunEntry,
+    ChangeEvent,
     DomainComment,
     DomainSummary,
     DomainTask,
@@ -116,12 +117,11 @@ _KNOWN_TABLES = frozenset(
     }
 )
 
-# Single-editor lock TTL. A DRAFT (domain, version) edit lock is
-# considered stale once its last heartbeat ages past this window, so the
-# next opener can reclaim it without admin intervention (closed tab /
-# crash). The browser heartbeat interval (~30s, in edit-lock.js) is a
-# third of this, giving two missed beats of slack before expiry.
-_EDIT_LOCK_TTL_S = 90
+# Single-editor lock for DRAFT (domain, version) versions. The lock has
+# no TTL / heartbeat: it is held until the holder explicitly *closes* the
+# domain (release), an admin *takes over* (force), or the version leaves
+# DRAFT. There is deliberately no auto-expiry — a genuinely stuck lock is
+# recovered by admin take-over rather than a timeout.
 
 
 def _require_psycopg():
@@ -538,6 +538,10 @@ class LakebaseRegistryStore(RegistryStore):
         # used to self-heal deployments created before the review/validation
         # audit log existed (same pattern as ``_build_runs_ready``).
         self._review_events_ready = False
+        # Guards the lazy ``CREATE TABLE IF NOT EXISTS domain_change_events``
+        # used to self-heal deployments created before the ontology/mapping
+        # change audit log existed (same pattern as ``_review_events_ready``).
+        self._change_events_ready = False
         # Guards the lazy ``CREATE TABLE IF NOT EXISTS domain_comments /
         # domain_tasks`` used to self-heal deployments created before the
         # collaborative comments + tasks feature existed (same pattern as
@@ -2563,6 +2567,184 @@ class LakebaseRegistryStore(RegistryStore):
             return []
 
     # ------------------------------------------------------------------
+    # Ontology / mapping change audit
+    # ------------------------------------------------------------------
+
+    def _ensure_change_events_table(self) -> bool:
+        """Lazily create ``domain_change_events`` (+ index) if missing.
+
+        Self-heals deployments created before the ontology/mapping change
+        audit log existed — same ownership-safe pattern as
+        :meth:`_ensure_review_events_table`. Best-effort: on failure it
+        logs and returns ``False`` so callers no-op rather than breaking
+        a save.
+        """
+        if self._change_events_ready:
+            return True
+        try:
+            sch = self._q(self._schema)
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = %s "
+                    "AND table_name = 'domain_change_events'",
+                    (self._schema,),
+                )
+                if cur.fetchone():
+                    self._change_events_ready = True
+                    return True
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {sch}.domain_change_events (
+                        id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+                        domain_id       uuid NOT NULL
+                                        REFERENCES {sch}.domains(id)
+                                        ON DELETE CASCADE,
+                        version         text NOT NULL,
+                        actor           text NOT NULL DEFAULT '',
+                        source          text NOT NULL DEFAULT 'user',
+                        action          text NOT NULL,
+                        entity_type     text NOT NULL DEFAULT '',
+                        entity_ref      text NOT NULL DEFAULT '',
+                        summary         text NOT NULL DEFAULT '',
+                        meta            jsonb NOT NULL DEFAULT '{{}}'::jsonb,
+                        occurred_at     timestamptz NOT NULL DEFAULT now(),
+                        created_at      timestamptz NOT NULL DEFAULT now()
+                    )
+                    """
+                )
+                cur.execute(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS idx_change_events_domain_version
+                        ON {sch}.domain_change_events
+                           (domain_id, version, occurred_at)
+                    """
+                )
+            self._change_events_ready = True
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "could not create domain_change_events table — "
+                "run `make bootstrap-lakebase` as the schema owner to "
+                "apply the migration: %s",
+                exc,
+            )
+            return False
+
+    def record_change_events(
+        self,
+        folder: str,
+        version: str,
+        actor: str,
+        events: List[Dict[str, Any]],
+    ) -> Tuple[bool, str]:
+        if not events:
+            return True, ""
+        if not self._ensure_change_events_table():
+            return False, "change audit log unavailable"
+        try:
+            sch = self._q(self._schema)
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT id FROM {sch}.domains
+                    WHERE registry_id = %s AND folder = %s
+                    """,
+                    (self._registry(), folder),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return False, f"Domain '{folder}' not found"
+                domain_id = row[0]
+                params = [
+                    (
+                        domain_id,
+                        version,
+                        actor or "",
+                        (e.get("source") or "user"),
+                        (e.get("action") or ""),
+                        (e.get("entity_type") or ""),
+                        (e.get("entity_ref") or ""),
+                        (e.get("summary") or ""),
+                        json.dumps(e.get("meta") or {}),
+                        (e.get("ts") or e.get("occurred_at") or None),
+                    )
+                    for e in events
+                ]
+                cur.executemany(
+                    f"""
+                    INSERT INTO {sch}.domain_change_events
+                        (domain_id, version, actor, source, action,
+                         entity_type, entity_ref, summary, meta, occurred_at)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s::jsonb,
+                            COALESCE(%s::timestamptz, now()))
+                    """,
+                    params,
+                )
+            return True, ""
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "record_change_events(%s/%s) failed: %s", folder, version, exc
+            )
+            return False, str(exc)
+
+    @staticmethod
+    def _change_row_to_event(r: Dict[str, Any]) -> ChangeEvent:
+        return {
+            "id": str(r.get("id") or ""),
+            "folder": r.get("folder", "") or "",
+            "version": r["version"],
+            "actor": r.get("actor") or "",
+            "source": r.get("source") or "user",
+            "action": r.get("action") or "",
+            "entity_type": r.get("entity_type") or "",
+            "entity_ref": r.get("entity_ref") or "",
+            "summary": r.get("summary") or "",
+            "meta": dict(r.get("meta") or {}),
+            "occurred_at": (
+                r["occurred_at"].isoformat() if r.get("occurred_at") else ""
+            ),
+            "created_at": (
+                r["created_at"].isoformat() if r.get("created_at") else ""
+            ),
+        }
+
+    def list_change_events(
+        self, folder: str, version: Optional[str] = None, limit: int = 500
+    ) -> List[ChangeEvent]:
+        if not self._ensure_change_events_table():
+            return []
+        try:
+            psycopg, dict_row = _require_psycopg()
+            sch = self._q(self._schema)
+            clauses = ["d.registry_id = %s", "d.folder = %s"]
+            params: List[Any] = [self._registry(), folder]
+            if version:
+                clauses.append("e.version = %s")
+                params.append(version)
+            where = " AND ".join(clauses)
+            params.append(int(limit) if limit else 500)
+            with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    SELECT e.id, d.folder, e.version, e.actor, e.source,
+                           e.action, e.entity_type, e.entity_ref, e.summary,
+                           e.meta, e.occurred_at, e.created_at
+                    FROM {sch}.domain_change_events e
+                    JOIN {sch}.domains d ON d.id = e.domain_id
+                    WHERE {where}
+                    ORDER BY e.occurred_at ASC, e.id ASC
+                    LIMIT %s
+                    """,
+                    tuple(params),
+                )
+                rows = cur.fetchall()
+            return [self._change_row_to_event(r) for r in rows]
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("list_change_events(%s) failed: %s", folder, exc)
+            return []
+
+    # ------------------------------------------------------------------
     # Collaborative comments + tasks
     # ------------------------------------------------------------------
 
@@ -3005,10 +3187,6 @@ class LakebaseRegistryStore(RegistryStore):
             "acquired_at": (
                 r["acquired_at"].isoformat() if r.get("acquired_at") else ""
             ),
-            "heartbeat_at": (
-                r["heartbeat_at"].isoformat() if r.get("heartbeat_at") else ""
-            ),
-            "stale": bool(r.get("stale")),
         }
 
     def acquire_edit_lock(
@@ -3023,12 +3201,12 @@ class LakebaseRegistryStore(RegistryStore):
     ) -> Dict[str, Any]:
         """Atomically take the (domain, version) edit lock when available.
 
-        The lock is granted when it is free, **stale** (last heartbeat
-        older than :data:`_EDIT_LOCK_TTL_S`), already held by the **same**
-        ``holder_email`` (refresh), or ``force`` (admin take-over).
+        The lock is granted when it is free, already held by the **same**
+        ``holder_email`` (refresh), or ``force`` (admin take-over). There is
+        no TTL: a lock held by another user is *never* reclaimed implicitly.
 
         Returns ``{acquired, is_self, holder_email, holder_name,
-        acquired_at, stale}`` describing the *live* lock after the attempt.
+        acquired_at}`` describing the *live* lock after the attempt.
         ``acquired`` is ``True`` only when the caller now holds it.
         """
         if not self._ensure_domain_edit_locks_table():
@@ -3049,12 +3227,9 @@ class LakebaseRegistryStore(RegistryStore):
                         holder_email   = EXCLUDED.holder_email,
                         holder_name    = EXCLUDED.holder_name,
                         holder_session = EXCLUDED.holder_session,
-                        acquired_at    = now(),
-                        heartbeat_at   = now()
+                        acquired_at    = now()
                     WHERE {sch}.domain_edit_locks.holder_email
                               = EXCLUDED.holder_email
-                       OR {sch}.domain_edit_locks.heartbeat_at
-                              < now() - make_interval(secs => %s)
                        OR %s
                     RETURNING holder_email
                     """,
@@ -3065,7 +3240,6 @@ class LakebaseRegistryStore(RegistryStore):
                         holder_session or "",
                         self._registry(),
                         folder,
-                        _EDIT_LOCK_TTL_S,
                         bool(force),
                     ),
                 )
@@ -3083,55 +3257,12 @@ class LakebaseRegistryStore(RegistryStore):
                 "holder_email": d["holder_email"],
                 "holder_name": d["holder_name"],
                 "acquired_at": d["acquired_at"],
-                "stale": d["stale"],
             }
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "acquire_edit_lock(%s/%s) failed: %s", folder, version, exc
             )
             return {"acquired": False, "is_self": False, "holder_email": ""}
-
-    def heartbeat_edit_lock(
-        self, folder: str, version: str, *, holder_email: str
-    ) -> Dict[str, Any]:
-        """Refresh ``heartbeat_at`` iff the caller still holds the lock.
-
-        Returns ``{held: bool, ...holder}``. ``held`` is ``False`` when the
-        lock was taken over (0 rows updated) — the caller should flip to
-        read-only.
-        """
-        if not self._ensure_domain_edit_locks_table():
-            return {"held": False}
-        try:
-            psycopg, dict_row = _require_psycopg()
-            sch = self._q(self._schema)
-            with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
-                cur.execute(
-                    f"""
-                    UPDATE {sch}.domain_edit_locks l
-                    SET heartbeat_at = now()
-                    FROM {sch}.domains d
-                    WHERE l.domain_id = d.id
-                      AND d.registry_id = %s AND d.folder = %s
-                      AND l.version = %s
-                      AND lower(l.holder_email) = lower(%s)
-                    RETURNING l.holder_email, l.holder_name,
-                              l.acquired_at, l.heartbeat_at,
-                              false AS stale
-                    """,
-                    (self._registry(), folder, version, holder_email or ""),
-                )
-                row = cur.fetchone()
-            if not row:
-                return {"held": False}
-            d = self._edit_lock_row_to_dict(row)
-            d["held"] = True
-            return d
-        except Exception as exc:  # noqa: BLE001
-            logger.debug(
-                "heartbeat_edit_lock(%s/%s) failed: %s", folder, version, exc
-            )
-            return {"held": False}
 
     def release_edit_lock(
         self, folder: str, version: str, *, holder_email: str
@@ -3190,7 +3321,7 @@ class LakebaseRegistryStore(RegistryStore):
     def get_edit_lock(
         self, folder: str, version: str
     ) -> Optional[Dict[str, Any]]:
-        """Return the live lock row (+ computed ``stale``) or ``None``."""
+        """Return the live lock row or ``None`` when the lock is free."""
         if not self._ensure_domain_edit_locks_table():
             return None
         try:
@@ -3212,14 +3343,12 @@ class LakebaseRegistryStore(RegistryStore):
         cur.execute(
             f"""
             SELECT l.holder_email, l.holder_name, l.holder_session,
-                   l.acquired_at, l.heartbeat_at,
-                   (l.heartbeat_at < now() - make_interval(secs => %s))
-                       AS stale
+                   l.acquired_at
             FROM {sch}.domain_edit_locks l
             JOIN {sch}.domains d ON d.id = l.domain_id
             WHERE d.registry_id = %s AND d.folder = %s AND l.version = %s
             """,
-            (_EDIT_LOCK_TTL_S, self._registry(), folder, version),
+            (self._registry(), folder, version),
         )
         return cur.fetchone()
 

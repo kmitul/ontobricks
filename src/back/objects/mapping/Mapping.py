@@ -564,6 +564,12 @@ class Mapping:
 
         domain.assignment["entities"] = mappings
         domain.clear_generated_content()
+        domain.record_change(
+            "mapping_entity_updated" if was_update else "mapping_entity_added",
+            entity_type="mapping_entity",
+            entity_ref=new_mapping.get("ontology_class", ""),
+            summary=new_mapping.get("ontology_class", ""),
+        )
         domain.save()
 
         return was_update, new_mapping
@@ -577,6 +583,10 @@ class Mapping:
         if len(mappings) < original_len:
             domain.assignment["entities"] = mappings
             domain.clear_generated_content()
+            domain.record_change(
+                "mapping_entity_removed", entity_type="mapping_entity",
+                entity_ref=ontology_class, summary=ontology_class,
+            )
             domain.save()
             return True
         return False
@@ -602,6 +612,13 @@ class Mapping:
 
         domain.assignment["relationships"] = mappings
         domain.clear_generated_content()
+        domain.record_change(
+            "mapping_relationship_updated" if was_update
+            else "mapping_relationship_added",
+            entity_type="mapping_relationship",
+            entity_ref=new_mapping.get("property", ""),
+            summary=new_mapping.get("property", ""),
+        )
         domain.save()
 
         return was_update, new_mapping
@@ -615,12 +632,19 @@ class Mapping:
         if len(mappings) < original_len:
             domain.assignment["relationships"] = mappings
             domain.clear_generated_content()
+            domain.record_change(
+                "mapping_relationship_removed",
+                entity_type="mapping_relationship",
+                entity_ref=property_uri, summary=property_uri,
+            )
             domain.save()
             return True
         return False
 
     def save_mapping_config(self, mapping_config: Dict[str, Any]) -> Dict[str, int]:
         domain = self._domain
+        old_entities = list(domain.get_entity_mappings())
+        old_rels = list(domain.get_relationship_mappings())
         domain.assignment["entities"] = mapping_config.get(
             "entities", mapping_config.get("data_source_mappings", [])
         )
@@ -631,6 +655,12 @@ class Mapping:
             domain.assignment["r2rml_output"] = mapping_config["r2rml_output"]
 
         domain.clear_generated_content()
+        self._record_mapping_diff(
+            old_entities,
+            domain.get_entity_mappings(),
+            old_rels,
+            domain.get_relationship_mappings(),
+        )
         domain.save()
 
         return {
@@ -638,12 +668,45 @@ class Mapping:
             "relationships": len(domain.get_relationship_mappings()),
         }
 
+    @staticmethod
+    def _diff_mappings(
+        old_list: list, new_list: list, key: str
+    ) -> Tuple[list, list, list]:
+        """Return (added, updated, removed) keys for mappings keyed by *key*."""
+        old_map = {m.get(key): m for m in (old_list or []) if m.get(key)}
+        new_map = {m.get(key): m for m in (new_list or []) if m.get(key)}
+        added = [k for k in new_map if k not in old_map]
+        removed = [k for k in old_map if k not in new_map]
+        updated = [k for k in new_map if k in old_map and new_map[k] != old_map[k]]
+        return added, updated, removed
+
+    def _record_mapping_diff(
+        self, old_entities: list, new_entities: list, old_rels: list, new_rels: list
+    ) -> None:
+        """Buffer per-mapping change events for a bulk mapping replacement."""
+        domain = self._domain
+        for entity_type, key, old, new in (
+            ("mapping_entity", "ontology_class", old_entities, new_entities),
+            ("mapping_relationship", "property", old_rels, new_rels),
+        ):
+            added, updated, removed = self._diff_mappings(old, new, key)
+            for verb, refs in (("added", added), ("updated", updated),
+                               ("removed", removed)):
+                for ref in refs:
+                    domain.record_change(f"{entity_type}_{verb}",
+                                         entity_type=entity_type,
+                                         entity_ref=ref, summary=ref)
+
     def reset_mapping(self) -> None:
         domain = self._domain
         domain.assignment["entities"] = []
         domain.assignment["relationships"] = []
         domain.assignment["r2rml_output"] = ""
         domain.clear_generated_content()
+        domain.record_change(
+            "mapping_reset", entity_type="mapping",
+            summary="All mappings reset",
+        )
         domain.save()
 
     def generate_r2rml(self) -> str:
@@ -1125,6 +1188,20 @@ class Mapping:
             for prop in domain.ontology.get("properties", []):
                 prop.pop("excluded", None)
 
+        if changed:
+            domain.record_change(
+                "mapping_excluded" if excluded else "mapping_included",
+                entity_type=(
+                    "mapping_entity" if item_type == "entity"
+                    else "mapping_relationship"
+                ),
+                entity_ref=", ".join(sorted(uri_set))[:500],
+                summary=(
+                    f"{'Excluded' if excluded else 'Included'} {changed} "
+                    f"{item_type} mapping(s)"
+                ),
+                meta={"uris": sorted(uri_set), "excluded": excluded},
+            )
         domain.save()
         return changed
 

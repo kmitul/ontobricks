@@ -3,19 +3,22 @@
 Only one browser may *edit* a given ``(domain, version)`` at a time; later
 openers land read-only with a banner naming the current editor. The lock
 lives in Lakebase (``domain_edit_locks``) so it is consistent across app
-replicas, with a heartbeat + TTL auto-expiry (see
-:data:`back.objects.registry.store.lakebase.store._EDIT_LOCK_TTL_S`) so a
-closed tab / crash frees the lock without admin help. An app-admin can
-*take over* a held lock (``force``), evicting the current editor on its
-next heartbeat.
+replicas.
+
+The lock has **no TTL / heartbeat**: it is held until the holder explicitly
+*closes* the domain (:meth:`release`, wired to the "Close" button), an
+app-admin *takes over* a held lock (``force``), or the version leaves DRAFT
+(:meth:`force_release`). A genuinely stuck lock (e.g. a crashed browser
+that never closed the domain) is recovered by admin take-over, not by a
+timeout.
 
 Only DRAFT versions are lockable — IN-REVIEW / PUBLISHED versions are
 already read-only for everyone via the lifecycle gate.
 
 This service is a thin orchestrator over the Lakebase store methods
-(``acquire_edit_lock`` / ``heartbeat_edit_lock`` / ``release_edit_lock`` /
-``get_edit_lock`` / ``force_release_edit_lock``). It resolves the Lakebase
-store directly via :class:`RegistryFactory` (same path as
+(``acquire_edit_lock`` / ``release_edit_lock`` / ``get_edit_lock`` /
+``force_release_edit_lock``). It resolves the Lakebase store directly via
+:class:`RegistryFactory` (same path as
 :meth:`SettingsService.check_lakebase_permissions`) and returns
 ``{"success": False, ...}`` when Lakebase / psycopg is unavailable so the
 UI degrades to "no lock" rather than breaking domain loads.
@@ -83,23 +86,6 @@ class EditLockService:
             force=False,
         )
         return EditLockService._shape(res, is_admin=is_admin)
-
-    @staticmethod
-    def heartbeat(
-        request, session_mgr: SessionManager, settings
-    ) -> Dict[str, Any]:
-        """Refresh the lock; ``{held: False}`` once taken over / expired."""
-        folder, version, lifecycle = EditLockService._loaded(session_mgr)
-        if not folder or not version or lifecycle != STATUS_DRAFT:
-            return {"success": True, "held": False, "mode": MODE_NONE}
-        store = EditLockService._store(session_mgr, settings)
-        if store is None:
-            return {"success": False, "held": False, "mode": MODE_NONE}
-        email, _, _ = EditLockService._identity(request)
-        res = store.heartbeat_edit_lock(folder, version, holder_email=email)
-        res["success"] = True
-        res.setdefault("held", False)
-        return res
 
     @staticmethod
     def acquire(
@@ -225,8 +211,8 @@ class EditLockService:
         """Display name of *another* user holding the loaded version's lock.
 
         Returns ``""`` when the request must **not** be blocked: the lock is
-        free, stale, held by the requesting user, the version is not DRAFT,
-        or the backend is unavailable. Used by the authoritative
+        free, held by the requesting user, the version is not DRAFT, or the
+        backend is unavailable. Used by the authoritative
         :class:`PermissionMiddleware` edit gate — admins are not exempt, so
         they must "take over" before editing (preserving single-writer).
         """
@@ -238,7 +224,7 @@ class EditLockService:
             if store is None:
                 return ""
             lock = store.get_edit_lock(folder, version)
-            if not lock or lock.get("stale"):
+            if not lock:
                 return ""
             email, _, _ = EditLockService._identity(request)
             holder_email = lock.get("holder_email") or ""
@@ -331,7 +317,6 @@ class EditLockService:
             "is_self": False,
             "is_admin": is_admin,
             "can_take_over": False,
-            "stale": False,
         }
 
     @staticmethod
@@ -350,5 +335,4 @@ class EditLockService:
             # Only a viewer (held by someone else) can take over, and only
             # an admin is allowed to.
             "can_take_over": bool(is_admin and not is_self),
-            "stale": bool(res.get("stale")),
         }

@@ -57,18 +57,6 @@ def test_get_edit_lock_delegates_to_service():
     assert st.called
 
 
-def test_heartbeat_delegates_to_service():
-    with patch.object(
-        _svc.EditLockService, "heartbeat",
-        return_value={"success": True, "held": True},
-    ) as hb:
-        res = _run(_domain.heartbeat_edit_lock(
-            _request(), session_mgr=MagicMock(), settings=MagicMock()
-        ))
-    assert res["held"] is True
-    assert hb.called
-
-
 def test_acquire_forwards_force_flag():
     with patch.object(
         _svc.EditLockService, "acquire",
@@ -102,6 +90,23 @@ def test_release_delegates_to_service():
         ))
     assert res["released"] is True
     assert rl.called
+
+
+def test_close_releases_lock_then_resets_session():
+    domain_obj = MagicMock()
+    with (
+        patch.object(_domain, "get_domain", return_value=domain_obj),
+        patch.object(
+            _svc.EditLockService, "release_for_session"
+        ) as rel,
+    ):
+        res = _run(_domain.close_domain(
+            _request(), session_mgr=MagicMock(), settings=MagicMock()
+        ))
+    assert res["success"] is True
+    assert rel.called
+    domain_obj.reset.assert_called_once()
+    domain_obj.clear_uc_metadata.assert_called_once()
 
 
 def test_load_from_uc_attaches_lock_block_on_success():

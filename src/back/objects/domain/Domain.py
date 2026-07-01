@@ -463,10 +463,11 @@ class Domain:
     ) -> Dict[str, Any]:
         """Unified activity feed for the loaded domain (all versions).
 
-        Merges two registry streams so the frontend can interleave them
+        Merges three registry streams so the frontend can interleave them
         into one timeline: review/validation decisions (status switches
-        with their comments) and the build-run history (runs + results).
-        Both streams (plus the available ``versions`` list) are returned
+        with their comments), the build-run history (runs + results), and
+        the ontology/mapping change audit (who changed what, and when).
+        All streams (plus the available ``versions`` list) are returned
         raw; the UI sorts and filters by version client-side, defaulting
         the version dropdown to ``current_version``.
         """
@@ -483,6 +484,7 @@ class Domain:
                 "versions": svc.list_versions_sorted(folder),
                 "events": svc.list_review_events(folder),
                 "runs": svc.load_build_runs(folder, limit=limit),
+                "changes": svc.list_change_events(folder, limit=limit),
             }
         except OntoBricksError:
             raise
@@ -743,7 +745,7 @@ class Domain:
                 if actor_email:
                     get_lock = getattr(svc.store, "get_edit_lock", None)
                     lock = get_lock(folder, version) if get_lock else None
-                    if lock and not lock.get("stale"):
+                    if lock:
                         holder = lock.get("holder_email") or ""
                         if (
                             holder
@@ -774,6 +776,23 @@ class Domain:
                     reg_settings["schema"] = c.schema
                 if not reg_settings.get("volume"):
                     reg_settings["volume"] = c.volume
+                # Flush the buffered ontology/mapping change-audit events
+                # (who / what / when) into the registry now that the domain
+                # row is guaranteed to exist. Best-effort: an audit-log
+                # failure must never roll back a successful save.
+                try:
+                    events = self._s.drain_change_log()
+                    if events:
+                        svc.record_change_events(
+                            folder, version, actor_email, events
+                        )
+                except Exception as audit_exc:  # noqa: BLE001
+                    logger.warning(
+                        "Change-audit flush failed for %s/%s: %s",
+                        folder,
+                        version,
+                        audit_exc,
+                    )
                 self._s.save()
                 clear_version_status_cache()
                 invalidate_registry_cache()

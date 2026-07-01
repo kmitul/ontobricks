@@ -77,14 +77,12 @@ def _bind(st, cur):
     return patch.object(st, "_connect", _cm)
 
 
-def _live_row(email="alice@acme.com", name="Alice", stale=False):
+def _live_row(email="alice@acme.com", name="Alice"):
     return {
         "holder_email": email,
         "holder_name": name,
         "holder_session": "sess",
         "acquired_at": _NOW,
-        "heartbeat_at": _NOW,
-        "stale": stale,
     }
 
 
@@ -104,10 +102,10 @@ def test_acquire_when_free_grants_to_caller():
     assert res["acquired"] is True
     assert res["is_self"] is True
     assert res["holder_email"] == "alice@acme.com"
-    # TTL + force params are passed to the upsert.
+    # The upsert is an ON CONFLICT with no TTL clause; force is the last param.
     upsert_sql, upsert_params = cur.executed[0]
     assert "ON CONFLICT" in upsert_sql
-    assert 90 in upsert_params  # _EDIT_LOCK_TTL_S
+    assert "make_interval" not in upsert_sql  # no TTL / stale reclamation
     assert upsert_params[-1] is False  # force
 
 
@@ -148,30 +146,6 @@ def test_acquire_no_domain_row_returns_empty():
 
 
 # ----------------------------------------------------------------------
-# heartbeat_edit_lock
-# ----------------------------------------------------------------------
-
-
-def test_heartbeat_held_when_row_updated():
-    st = _store()
-    row = _live_row()
-    row["stale"] = False
-    cur = _FakeCursor(fetchone_results=[row])
-    with _bind(st, cur):
-        res = st.heartbeat_edit_lock("acme", "1", holder_email="alice@acme.com")
-    assert res["held"] is True
-    assert res["holder_email"] == "alice@acme.com"
-
-
-def test_heartbeat_lost_when_no_row():
-    st = _store()
-    cur = _FakeCursor(fetchone_results=[None])
-    with _bind(st, cur):
-        res = st.heartbeat_edit_lock("acme", "1", holder_email="alice@acme.com")
-    assert res["held"] is False
-
-
-# ----------------------------------------------------------------------
 # release / force_release
 # ----------------------------------------------------------------------
 
@@ -202,14 +176,15 @@ def test_force_release_true_when_row_deleted():
 # ----------------------------------------------------------------------
 
 
-def test_get_edit_lock_reports_stale():
+def test_get_edit_lock_returns_holder():
     st = _store()
-    cur = _FakeCursor(fetchone_results=[_live_row(stale=True)])
+    cur = _FakeCursor(fetchone_results=[_live_row(email="bob@acme.com", name="Bob")])
     with _bind(st, cur):
         lock = st.get_edit_lock("acme", "1")
     assert lock is not None
-    assert lock["stale"] is True
-    assert lock["holder_email"] == "alice@acme.com"
+    assert lock["holder_email"] == "bob@acme.com"
+    assert lock["holder_name"] == "Bob"
+    assert "stale" not in lock  # no TTL / stale concept anymore
 
 
 def test_get_edit_lock_none_when_absent():

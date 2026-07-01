@@ -7,7 +7,7 @@ operations that persist to the session; use static methods for pure transforms.
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Set
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Literal, Optional, Set, Tuple
 
 from back.core.logging import get_logger
 from back.core.errors import (
@@ -415,11 +415,56 @@ class Ontology:
             "relationship_mappings_removed": removed_rel,
         }
 
+    @staticmethod
+    def _diff_by_uri(
+        old_list: Optional[List[Dict[str, Any]]],
+        new_list: Optional[List[Dict[str, Any]]],
+    ) -> Tuple[list, list, list]:
+        """Return (added, updated, removed) ``(uri, name)`` for URI-keyed items."""
+        old_map = {i.get("uri"): i for i in (old_list or []) if i.get("uri")}
+        new_map = {i.get("uri"): i for i in (new_list or []) if i.get("uri")}
+        added = [
+            (u, n.get("name") or u) for u, n in new_map.items() if u not in old_map
+        ]
+        removed = [
+            (u, o.get("name") or u) for u, o in old_map.items() if u not in new_map
+        ]
+        updated = [
+            (u, new_map[u].get("name") or u)
+            for u in new_map
+            if u in old_map and new_map[u] != old_map[u]
+        ]
+        return added, updated, removed
+
+    def _record_ontology_diff(
+        self,
+        old_classes: Optional[List[Dict[str, Any]]],
+        new_classes: Optional[List[Dict[str, Any]]],
+        old_props: Optional[List[Dict[str, Any]]],
+        new_props: Optional[List[Dict[str, Any]]],
+        *,
+        source: str = "user",
+    ) -> None:
+        """Buffer per-entity change events for a bulk ontology replacement."""
+        s = self._domain
+        for entity_type, old, new in (
+            ("class", old_classes, new_classes),
+            ("property", old_props, new_props),
+        ):
+            added, updated, removed = self._diff_by_uri(old, new)
+            for verb, items in (("added", added), ("updated", updated),
+                                ("removed", removed)):
+                for uri, name in items:
+                    s.record_change(f"{entity_type}_{verb}", entity_type=entity_type,
+                                    entity_ref=uri, summary=name, source=source)
+
     def save_ontology_config_from_editor(
         self, raw_body: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Persist ontology from the visual editor API (wrapped or bare config dict)."""
         s = self._domain
+        old_classes = list(s.get_classes())
+        old_props = list(s.get_properties())
         ontology_config = raw_body.get("config", raw_body)
         ontology_config = Ontology.ensure_uris(ontology_config)
 
@@ -487,6 +532,12 @@ class Ontology:
                 "expressions": ontology_config.get("expressions", existing_expressions),
             }
         )
+        self._record_ontology_diff(
+            old_classes,
+            ontology_config.get("classes", []),
+            old_props,
+            ontology_config.get("properties", []),
+        )
         s.save()
 
         return {
@@ -510,6 +561,10 @@ class Ontology:
         if len(classes) >= original_len:
             raise NotFoundError("Class not found")
 
+        removed_name = next(
+            (c.get("name") for c in s.get_classes() if c.get("uri") == class_uri),
+            class_uri,
+        )
         s.ontology["classes"] = classes
         entity_mappings = s.get_entity_mappings()
         original_mapping_len = len(entity_mappings)
@@ -520,6 +575,10 @@ class Ontology:
             s._data["assignment"]["entities"] = entity_mappings
 
         s.clear_generated_content()
+        s.record_change(
+            "class_removed", entity_type="class",
+            entity_ref=class_uri, summary=removed_name or class_uri,
+        )
         s.save()
         return {
             "success": True,
@@ -537,6 +596,10 @@ class Ontology:
         if len(properties) >= original_len:
             raise NotFoundError("Property not found")
 
+        removed_name = next(
+            (p.get("name") for p in s.get_properties() if p.get("uri") == property_uri),
+            property_uri,
+        )
         s.ontology["properties"] = properties
         rel_mappings = s.get_relationship_mappings()
         original_mapping_len = len(rel_mappings)
@@ -545,6 +608,10 @@ class Ontology:
             s._data["assignment"]["relationships"] = rel_mappings
 
         s.clear_generated_content()
+        s.record_change(
+            "property_removed", entity_type="property",
+            entity_ref=property_uri, summary=removed_name or property_uri,
+        )
         s.save()
         return {
             "success": True,
@@ -563,6 +630,10 @@ class Ontology:
         classes.append(new_class)
         s.ontology["classes"] = classes
         s.clear_generated_content()
+        s.record_change(
+            "class_added", entity_type="class",
+            entity_ref=new_class.get("uri", ""), summary=new_class.get("name", ""),
+        )
         s.save()
         return {"success": True, "class": new_class}
 
@@ -580,6 +651,11 @@ class Ontology:
                 classes[i] = Ontology.build_class_from_data(data, cls)
                 s.ontology["classes"] = classes
                 s.clear_generated_content()
+                s.record_change(
+                    "class_updated", entity_type="class",
+                    entity_ref=classes[i].get("uri", ""),
+                    summary=classes[i].get("name", ""),
+                )
                 s.save()
                 return {"success": True, "class": classes[i]}
         raise NotFoundError("Class not found")
@@ -596,6 +672,11 @@ class Ontology:
         properties.append(new_property)
         s.ontology["properties"] = properties
         s.clear_generated_content()
+        s.record_change(
+            "property_added", entity_type="property",
+            entity_ref=new_property.get("uri", ""),
+            summary=new_property.get("name", ""),
+        )
         s.save()
         return {"success": True, "property": new_property}
 
@@ -613,6 +694,11 @@ class Ontology:
                 properties[i] = Ontology.build_property_from_data(data, prop)
                 s.ontology["properties"] = properties
                 s.clear_generated_content()
+                s.record_change(
+                    "property_updated", entity_type="property",
+                    entity_ref=properties[i].get("uri", ""),
+                    summary=properties[i].get("name", ""),
+                )
                 s.save()
                 return {"success": True, "property": properties[i]}
         raise NotFoundError("Property not found")
@@ -1209,6 +1295,8 @@ class Ontology:
         Returns the config dict suitable for ``response["config"]``.
         """
         s = self._domain
+        old_classes = list(s.get_classes())
+        old_props = list(s.get_properties())
         base_uri = s.ontology.get("base_uri") or DEFAULT_BASE_URI
         ontology_config = {
             "name": s.ontology.get("name", ""),
@@ -1234,6 +1322,13 @@ class Ontology:
                 "classes": ontology_config["classes"],
                 "properties": ontology_config["properties"],
             }
+        )
+        self._record_ontology_diff(
+            old_classes,
+            ontology_config["classes"],
+            old_props,
+            ontology_config["properties"],
+            source="agent",
         )
         s.save()
 
@@ -2089,6 +2184,10 @@ class Ontology:
         self._enforce_exclusive_membership(groups, name)
         self._sync_class_group_field(groups)
         self._domain.groups = groups
+        self._domain.record_change(
+            "group_updated" if 0 <= index < len(groups) else "group_added",
+            entity_type="group", entity_ref=name, summary=name,
+        )
         self._domain.save()
         return self._domain.groups
 
@@ -2104,14 +2203,20 @@ class Ontology:
         groups = self._domain.groups
 
         if 0 <= index < len(groups):
+            removed_ref = groups[index].get("name", "") or str(index)
             groups.pop(index)
         elif name:
+            removed_ref = name
             groups[:] = [g for g in groups if g.get("name") != name]
         else:
             raise ValidationError("Provide index or name to identify the group")
 
         self._sync_class_group_field(groups)
         self._domain.groups = groups
+        self._domain.record_change(
+            "group_removed", entity_type="group",
+            entity_ref=removed_ref, summary=removed_ref,
+        )
         self._domain.save()
         return self._domain.groups
 

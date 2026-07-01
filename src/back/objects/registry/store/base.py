@@ -161,6 +161,32 @@ class ReviewEvent(TypedDict, total=False):
     created_at: str          # ISO timestamp
 
 
+class ChangeEvent(TypedDict, total=False):
+    """One row in the ontology / mapping change audit log.
+
+    Captures a single fine-grained design edit for the tuple
+    ``(folder, version)`` — a class/property/mapping added, updated or
+    removed, an import, a reset, etc. ``source`` distinguishes human
+    (``user``) from AI-assistant (``agent``) edits. ``occurred_at`` is
+    the real edit time (buffered in the session); ``created_at`` is the
+    flush/save-to-registry time. Rows are append-only and ordered by
+    ``occurred_at``.
+    """
+
+    id: str                  # row id (UUID string; "" for stores without one)
+    folder: str              # domain folder (populated by reads)
+    version: str
+    actor: str               # acting user email
+    source: str              # 'user' | 'agent'
+    action: str              # class_added|class_updated|mapping_entity_removed|...
+    entity_type: str         # class | property | shacl | swrl | mapping | ...
+    entity_ref: str          # uri or name of the affected entity
+    summary: str
+    meta: Dict[str, Any]
+    occurred_at: str         # ISO timestamp (real edit time)
+    created_at: str          # ISO timestamp (flush/save time)
+
+
 class DomainComment(TypedDict, total=False):
     """One threaded comment on a DRAFT domain's discussion.
 
@@ -518,6 +544,40 @@ class RegistryStore(ABC):
         """All review events across the registry, each enriched with its
         ``folder``. Oldest-first. Backs the cross-domain "My Tasks"
         worklist. Empty list on any error.
+        """
+
+    # ------------------------------------------------------------------
+    # Ontology / mapping change audit (append-only)
+    #
+    # Fine-grained design edits are buffered in the working session and
+    # flushed here in one batch when a domain version is saved to the
+    # registry. Keyed by ``(folder, version)``; reads return
+    # oldest-first (by ``occurred_at``).
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    def record_change_events(
+        self,
+        folder: str,
+        version: str,
+        actor: str,
+        events: List[Dict[str, Any]],
+    ) -> Tuple[bool, str]:
+        """Append a batch of change-audit rows for ``(folder, version)``.
+
+        Each entry in *events* is a buffered edit
+        (``action``/``entity_type``/``entity_ref``/``summary``/``source``/
+        ``meta``/``occurred_at``). ``actor`` is the acting user stamped on
+        every row. Best-effort: returns ``(False, msg)`` instead of
+        raising so a save is never rolled back by a failed audit write.
+        """
+
+    @abstractmethod
+    def list_change_events(
+        self, folder: str, version: Optional[str] = None, limit: int = 500
+    ) -> List[ChangeEvent]:
+        """Oldest-first change events for *folder* (optionally a single
+        *version*), capped at *limit*. Empty list on any error.
         """
 
     # ------------------------------------------------------------------

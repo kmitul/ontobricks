@@ -55,6 +55,7 @@ class _InMemoryStore(RegistryStore):
         self._graph_analytics: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._graph_analytics_runs: Dict[Tuple[str, str], List[Dict[str, Any]]] = {}
         self._review_events: List[Dict[str, Any]] = []
+        self._change_events: List[Dict[str, Any]] = []
         self._comments: List[Dict[str, Any]] = []
         self._tasks: List[Dict[str, Any]] = []
         self._global: Dict[str, Any] = {}
@@ -264,6 +265,44 @@ class _InMemoryStore(RegistryStore):
 
     def list_all_review_events(self) -> List[Dict[str, Any]]:
         return [dict(e) for e in self._review_events]
+
+    def record_change_events(
+        self,
+        folder: str,
+        version: str,
+        actor: str,
+        events: List[Dict[str, Any]],
+    ) -> Tuple[bool, str]:
+        for e in events or []:
+            self._change_events.append(
+                {
+                    "id": str(len(self._change_events) + 1),
+                    "folder": folder,
+                    "version": version,
+                    "actor": actor,
+                    "source": e.get("source") or "user",
+                    "action": e.get("action") or "",
+                    "entity_type": e.get("entity_type") or "",
+                    "entity_ref": e.get("entity_ref") or "",
+                    "summary": e.get("summary") or "",
+                    "meta": dict(e.get("meta") or {}),
+                    "occurred_at": e.get("ts")
+                    or f"2026-01-01T00:00:{len(self._change_events):02d}",
+                    "created_at": f"2026-01-01T00:00:{len(self._change_events):02d}",
+                }
+            )
+        return True, "ok"
+
+    def list_change_events(
+        self, folder: str, version=None, limit: int = 500
+    ) -> List[Dict[str, Any]]:
+        rows = [
+            dict(e)
+            for e in self._change_events
+            if e["folder"] == folder
+            and (version is None or e["version"] == version)
+        ]
+        return rows[:limit]
 
     def insert_comment(
         self,

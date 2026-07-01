@@ -267,6 +267,39 @@ CREATE INDEX IF NOT EXISTS idx_review_events_domain_version
     ON domain_review_events(domain_id, version, created_at);
 
 -- ----------------------------------------------------------------
+-- Ontology / mapping change audit log (append-only). One immutable
+-- row per fine-grained design edit (class/property/mapping added,
+-- updated or removed, imports, resets, ...). Edits are buffered in
+-- the working session as they happen and flushed here in one batch
+-- when the domain version is saved to the registry, so the trail
+-- answers "who changed what, and when" for every ontology and
+-- mapping mutation. ``source`` distinguishes human ('user') from
+-- AI-assistant ('agent') edits. ``occurred_at`` is the real edit
+-- time captured in the session buffer; ``created_at`` is the flush
+-- (save-to-registry) time. Grain: (domain_id, version); many rows
+-- per tuple are expected.
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS domain_change_events (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id       uuid NOT NULL
+                    REFERENCES domains(id) ON DELETE CASCADE,
+    version         text NOT NULL,
+    actor           text NOT NULL DEFAULT '',
+    source          text NOT NULL DEFAULT 'user'
+                    CHECK (source IN ('user', 'agent')),
+    action          text NOT NULL,             -- e.g. class_added, mapping_entity_updated
+    entity_type     text NOT NULL DEFAULT '',  -- class | property | shacl | swrl | ...
+    entity_ref      text NOT NULL DEFAULT '',  -- uri or name of the affected entity
+    summary         text NOT NULL DEFAULT '',
+    meta            jsonb NOT NULL DEFAULT '{}'::jsonb,
+    occurred_at     timestamptz NOT NULL DEFAULT now(),  -- real edit time (buffered)
+    created_at      timestamptz NOT NULL DEFAULT now()   -- flush (save) time
+);
+
+CREATE INDEX IF NOT EXISTS idx_change_events_domain_version
+    ON domain_change_events(domain_id, version, occurred_at);
+
+-- ----------------------------------------------------------------
 -- Collaborative comments — domain-wide threaded discussion. Every
 -- comment belongs to the single per-(domain, version) thread. A
 -- non-empty ``parent_id`` makes the row a reply within a thread.
@@ -319,11 +352,13 @@ CREATE INDEX IF NOT EXISTS idx_domain_tasks_domain
 -- ----------------------------------------------------------------
 -- Domain edit locks — single-editor concurrency control for DRAFT
 -- versions. One row per (domain_id, version) records who currently
--- holds the edit lock. A heartbeat (``heartbeat_at``) keeps the lock
--- alive; a lock is considered stale once it ages past the TTL so the
--- next opener can reclaim it without admin intervention. The holder is
+-- holds the edit lock. There is no TTL / heartbeat: the lock is held
+-- until the holder explicitly *closes* the domain (release), an admin
+-- *takes over* (force), or the version leaves DRAFT. The holder is
 -- keyed by ``holder_email`` (same user across tabs shares one lock);
 -- ``holder_session`` is the browser session id, kept for display only.
+-- ``heartbeat_at`` is retained for backward compatibility only and is no
+-- longer read (kept to avoid a destructive migration on live registries).
 -- ----------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS domain_edit_locks (
     domain_id      uuid NOT NULL

@@ -760,6 +760,40 @@ Every domain version carries a **lifecycle status**, shown as a colour-coded bad
 Transitions are made from **Registry → Browse** (or Domain → Information):
 DRAFT → IN-REVIEW → PUBLISHED (admin or builder), IN-REVIEW → DRAFT (admin or builder), and PUBLISHED → DRAFT (admin only). While a version is **not DRAFT**, the ontology/mapping editors, metadata/document writes, and the **Build** (`/dtwin/sync/start`) and **Load** (`/dtwin/sync/load`) actions are blocked server-side — set it back to **DRAFT** to rebuild. Read-only Knowledge Graph operations (Explorer filter/expand, stats, status, etc.) remain fully accessible regardless of lifecycle status.
 
+#### Single-editor concurrency (open in edit vs. view) & the Close button
+
+To keep two people from silently overwriting each other, a **DRAFT** version can only be
+**edited by one user at a time**:
+
+- The **first** person to open a DRAFT domain gets it in **edit mode**.
+- Anyone who opens the **same** domain/version afterwards gets it **read-only (view mode)**,
+  with a banner naming the current editor. All write surfaces are disabled — they can still
+  browse, query and inspect everything.
+- The lock is **held until the editor explicitly closes the domain** — there is no timeout.
+  Simply navigating around the app or closing a tab does **not** hand the domain to someone
+  else; the editor keeps it until they click **Close**.
+
+**Closing a domain** — the top sub-navigation shows three buttons: **Save** (persist the
+domain to the registry), **Switch**, and **Close**. Clicking **Close** asks whether to *save
+before closing* (**Save & Close** / **Close without saving** / **Cancel**), then releases the
+edit lock and returns you to the Home page. Once you close, the next person can open the
+domain in edit mode.
+
+**Switching version** — the **Switch** button (between **Save** and **Close**) opens a popup
+listing every version of the currently open domain, with the current one flagged. Pick the
+current version to **reload** it from the Registry (discarding in-session edits) or another
+version to **switch** to it. A *"Save my changes before switching"* box is ticked by default —
+leave it on to persist your work first, or untick it to discard unsaved changes.
+
+**Stuck lock?** Because there is no auto-expiry, a lock left behind (e.g. a browser that
+crashed without closing) stays until it is cleared. An **app-admin** viewing the locked
+version gets a **Take over editing** button that reclaims the lock; the previous editor
+becomes read-only on their next page load. A version also releases its lock automatically
+when it leaves DRAFT (submitted for review / published).
+
+> The same user opening the domain in two tabs shares one lock (it is keyed by e-mail), so
+> a reload or a second tab never locks you out of your own domain.
+
 #### Validation & Review workflow (My Tasks + Domain → Validation)
 
 For a guided, business-user-oriented review on top of the raw lifecycle, OntoBricks adds a
@@ -821,7 +855,7 @@ Three related ideas:
 
 ### Domain Save/Load
 
-Domains are saved in a versioned JSON format and can be stored in Unity Catalog Volumes. Use the **Save Domain** and **Load Domain** options in the top menu to persist and restore your work.
+Domains are saved in a versioned JSON format and can be stored in Unity Catalog Volumes. Use the **Save** button (in the domain sub-navigation) and the **Load Domain** option in the top menu to persist and restore your work; the **Switch** button reloads the current domain or loads another of its versions from the Registry, and the **Close** button releases the edit lock and returns you to the Home page.
 
 ### Best Practices for Version Control
 
@@ -1403,7 +1437,7 @@ After the initial one-time configuration (steps 1–2), the entire pipeline from
 - **Start with a template**: Use one of the Wizard quick-templates (CRM, IoT, etc.) if your domain matches — it provides better guidelines for the LLM.
 - **Review before syncing**: After auto-map, quickly review the Designer view. Fix any red or orange nodes before synchronizing.
 - **Iterate**: The pipeline is not a one-shot process. You can re-generate the ontology, re-run auto-map, or manually adjust individual mappings at any time.
-- **Save your domain**: After achieving a good result, save the domain to Unity Catalog (**Save Domain** in the top menu) so you can reload it later.
+- **Save your domain**: After achieving a good result, save the domain to Unity Catalog (**Save** in the domain sub-navigation) so you can reload it later.
 
 ---
 

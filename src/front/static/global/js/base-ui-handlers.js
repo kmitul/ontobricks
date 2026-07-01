@@ -8,7 +8,9 @@
     var NAVBAR_ACTIONS = {
         domainNew: true,
         domainLoad: true,
-        domainSave: true
+        domainSave: true,
+        domainSwitch: true,
+        domainClose: true
     };
 
     function initNavbarActionDelegation() {

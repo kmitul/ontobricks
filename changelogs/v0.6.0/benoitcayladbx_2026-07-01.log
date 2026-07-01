@@ -71,3 +71,502 @@ the domain lifecycle (DRAFT / IN-REVIEW / PUBLISHED) was added in v0.5.0:
 `uv run pytest -q tests/units/auth/test_permission_middleware.py tests/units/api/test_ui_rendering.py tests/units/api/test_review_endpoints.py tests/units/api/test_comment_endpoints.py tests/units/api/test_set_version_status_endpoint.py`
 
 348 passed, 1 warning — 0 failures introduced by this change.
+
+
+## Ontology & Mapping Audit Trail (who / what / when)
+
+### Context
+
+Design changes to a domain's ontology and mappings were untraceable: the
+Domain → Audit trail feed only merged review/validation decisions and build
+runs, and no per-edit history was ever persisted. This adds a fine-grained
+audit trail that records every ontology and mapping change — who changed it,
+what changed, and when — surfaced in the existing audit-trail timeline.
+
+Design (agreed up front): edits are captured **fine-grained as they happen**
+but **buffered in the working session**, then **flushed to Lakebase in one
+batch on Save to registry** (nothing is persisted if the user never saves).
+Scope covers ontology edits, mapping edits, and AI-assistant edits (tagged
+`source=agent`). Actor is stamped at flush time from the save's `actor_email`
+(the single-editor edit lock guarantees the saver is the editor);
+`occurred_at` preserves the real edit time from the buffer.
+
+### Changes
+
+1. `src/back/objects/registry/store/lakebase/schema.sql`
+   - New append-only `domain_change_events` table (id, domain_id FK, version,
+     actor, source, action, entity_type, entity_ref, summary, meta, occurred_at,
+     created_at) + `idx_change_events_domain_version` index.
+
+2. `scripts/upgrade_lakebase_0.6_change_events.sql`
+   - Idempotent migration creating `domain_change_events` for registries
+     provisioned before this change (new installs self-heal).
+
+3. `src/back/objects/registry/store/base.py`
+   - New `ChangeEvent` TypedDict; abstract `record_change_events` and
+     `list_change_events` on the `RegistryStore` ABC.
+
+4. `src/back/objects/registry/store/lakebase/store.py`
+   - `_ensure_change_events_table` (lazy self-heal), `record_change_events`
+     (batch insert via `executemany`, one row per buffered event, resolves the
+     domain FK), `list_change_events` (oldest-first, version + limit filters),
+     `_change_row_to_event` mapper; `_change_events_ready` guard flag.
+
+5. `src/back/objects/registry/RegistryService.py`
+   - Thin `record_change_events` / `list_change_events` wrappers.
+
+6. `src/back/objects/session/DomainSession.py`
+   - `change_log: []` added to `get_empty_domain()`; `record_change()` buffers
+     an event (with edit-time `ts`) and `drain_change_log()` returns + clears
+     the buffer. Kept out of `_config_snapshot()` and `export_for_save()` so it
+     never affects change detection nor leaks into the persisted domain JSON.
+   - `reset_ontology()` buffers an `ontology_reset` event.
+
+7. `src/back/objects/ontology/Ontology.py`
+   - Instrumented `add_class` / `update_class` / `delete_class_by_uri`,
+     `add_property` / `update_property` / `delete_property_by_uri`,
+     `save_group` / `delete_group`. Bulk `save_ontology_config_from_editor` and
+     the assistant `apply_agent_ontology_changes` (tagged `source=agent`) emit a
+     per-entity diff via new `_diff_by_uri` / `_record_ontology_diff` helpers.
+
+8. `src/back/objects/mapping/Mapping.py`
+   - Instrumented entity/relationship add-update-delete, `toggle_exclude_items`
+     (excluded/included), and `reset_mapping`. Bulk `save_mapping_config` emits
+     a per-mapping diff via new `_diff_mappings` / `_record_mapping_diff`.
+
+9. `src/api/routers/internal/ontology.py`
+   - SHACL (`dataquality/save`, `dataquality/delete`) and SWRL (`swrl/save`,
+     `swrl/delete`) handlers buffer add/update/remove change events.
+
+10. `src/back/objects/domain/Domain.py`
+    - `save_domain_to_uc` flushes the buffered events into the registry after a
+      successful `write_version` (best-effort — an audit failure never rolls
+      back a save). `audit_trail_result` now returns a third `changes` stream.
+
+11. `src/front/static/domain/js/domain-audit.js`, `.../css/domain-audit.css`,
+    `src/front/templates/partials/domain/_domain_audit.html`
+    - New "Ontology & mapping" filter + a third interleaved timeline stream
+      (`changeItem`) with per-action icons/labels, an AI badge for agent edits,
+      the entity ref, actor and edit time; `audit-marker-change` styling.
+
+12. Tests
+    - `tests/units/registry/test_change_event_store.py`,
+      `tests/units/registry/test_change_event_service.py`,
+      `tests/units/domain/test_change_audit.py` (session buffer + export
+      isolation, ontology/mapping instrumentation, agent tagging, flush).
+    - `tests/units/registry/test_registry_store.py` in-memory fake store
+      extended with the two new methods.
+
+### Modified files
+
+- `src/back/objects/registry/store/lakebase/schema.sql`
+- `scripts/upgrade_lakebase_0.6_change_events.sql` (new)
+- `src/back/objects/registry/store/base.py`
+- `src/back/objects/registry/store/lakebase/store.py`
+- `src/back/objects/registry/RegistryService.py`
+- `src/back/objects/session/DomainSession.py`
+- `src/back/objects/ontology/Ontology.py`
+- `src/back/objects/mapping/Mapping.py`
+- `src/api/routers/internal/ontology.py`
+- `src/back/objects/domain/Domain.py`
+- `src/front/static/domain/js/domain-audit.js`
+- `src/front/static/domain/css/domain-audit.css`
+- `src/front/templates/partials/domain/_domain_audit.html`
+- `docs/architecture.md`, `docs/features.md`
+- `tests/units/registry/test_change_event_store.py` (new)
+- `tests/units/registry/test_change_event_service.py` (new)
+- `tests/units/domain/test_change_audit.py` (new)
+- `tests/units/registry/test_registry_store.py`
+
+### Test result
+
+`uv run pytest -q tests/units/registry/test_change_event_store.py tests/units/registry/test_change_event_service.py tests/units/domain/test_change_audit.py tests/units/registry/ tests/units/api/` — all pass (26 feature tests; 304 registry; 368 api).
+
+Full suite `uv run pytest -q -m "not scenario"`: 3137 passed, 17 skipped. The
+58 remaining failures are pre-existing full-suite cross-folder pollution in
+`tests/e2e/**`, `tests/mcp/integration/**`, and the comment/review/version
+endpoint tests — all unrelated to this change (each passes in isolation and
+alongside the new tests; no ontology/mapping change-audit code is exercised).
+
+
+## Release-based single-editor concurrency + Close button
+
+### Context
+
+The single-editor edit lock for DRAFT versions used a heartbeat + 90s TTL:
+the editor's browser beat every 30s and a lock went "stale" (reclaimable by
+anyone) once two beats were missed, with a best-effort release on tab close.
+In a multi-page app every navigation is a full unload, so the lock was
+released-and-reacquired on every page change, and the TTL made ownership
+fuzzy. The requested model is simpler and explicit: once a user opens a DRAFT
+domain in edit mode, everyone else is view-only **until that user explicitly
+closes the domain** (or an admin takes over). No timeouts.
+
+### Changes
+
+1. `src/back/objects/registry/store/lakebase/store.py`
+   - `acquire_edit_lock`: removed the TTL/stale reclamation clause — a lock
+     held by another user is never taken implicitly (only free / same holder
+     / `force` grant it). Dropped `_EDIT_LOCK_TTL_S`.
+   - Removed `heartbeat_edit_lock` entirely.
+   - `_get_edit_lock_row` / `_edit_lock_row_to_dict`: dropped the computed
+     `stale` field and the `heartbeat_at` read. The `heartbeat_at` column is
+     retained (unused) to avoid a destructive migration on live registries.
+
+2. `src/back/objects/registry/EditLockService.py`
+   - Removed `heartbeat()`; dropped all `stale` handling from `blocking_holder`,
+     `_shape`, and `_none`. Rewrote the module docstring for the no-TTL model.
+
+3. `src/api/routers/internal/domain.py`
+   - Removed the `POST /domain/edit-lock/heartbeat` endpoint.
+   - Added `POST /domain/close` — releases the caller's edit lock (what frees
+     the version for the next editor), then resets the session. Release runs
+     before reset since the lock target is read from the session.
+
+4. `src/shared/fastapi/main.py`
+   - Added `/domain/close` to `_DOMAIN_SCOPED_EXCEPTIONS` so any user (viewers
+     included) can close the domain they have open. Tidied a docstring.
+
+5. `src/back/objects/domain/Domain.py`
+   - Save-to-UC lock re-check simplified from `lock and not lock.get("stale")`
+     to `if lock:` (no stale concept).
+
+6. `src/front/static/global/js/edit-lock.js`
+   - Removed the heartbeat loop and the tab-close/navigation release (which
+     would briefly free the lock mid-session). Keeps the viewer banner and the
+     admin "Take over editing" action. Rewrote the header comment.
+
+7. `src/front/config/menu_config.json`
+   - Renamed the `Save Domain` action label to `Save`; added a `Close` action
+     (`domainClose`, `#menuCloseDomain`).
+
+8. `src/front/templates/base.html`
+   - Render the `Close` button beside `Save` in the L2 subnav.
+
+9. `src/front/static/global/js/base-ui-handlers.js`
+   - Whitelisted `domainClose` for `data-navbar-action` dispatch.
+
+10. `src/front/static/global/js/navbar.js`
+    - Added `domainClose()` + a "Save before closing?" dialog (Save & Close /
+      Close without saving / Cancel) and `closeDomainSession()` (POST
+      `/domain/close` then redirect to Home). `doDomainSave()` now returns a
+      success boolean so Save & Close can abort on failure.
+
+11. `src/front/static/global/css/main.css`
+    - Added `.ob-subnav-close-btn` styling (danger-tinted hover).
+
+12. `src/back/objects/registry/store/lakebase/schema.sql`
+    - Updated the `domain_edit_locks` comment (no TTL/heartbeat; held until
+      explicit close / take-over / status change).
+
+13. Tests
+    - `tests/units/registry/test_edit_lock_store.py`: dropped heartbeat/TTL/
+      stale assertions; asserts the upsert has no `make_interval` clause.
+    - `tests/units/registry/test_edit_lock_service.py`: removed heartbeat and
+      stale-based tests.
+    - `tests/units/api/test_edit_lock_endpoints.py`: removed the heartbeat
+      test; added a `/domain/close` delegation test.
+    - `tests/units/domain/test_change_audit.py`: `_svc()` mock now returns no
+      edit lock (`get_edit_lock -> None`), matching the free-lock default.
+
+14. Documentation
+    - `docs/user-guide.md`: new "Single-editor concurrency (open in edit vs.
+      view) & the Close button" subsection; `Save Domain` → `Save`/`Close`
+      wording.
+    - `docs/architecture.md`: documented the release-based single-editor lock
+      in the `PermissionMiddleware` lifecycle-gate note.
+    - `docs/features.md`: added a "Single-editor concurrency" feature bullet.
+    - `README.md`: added a "Single-editor concurrency" bullet.
+    - `releases/ReleaseNotes_V0.6.0.md`: rewrote the Domain Edit-Lock section
+      for the release-based model + Close button; updated summary and file map.
+    - Sphinx guides `{include}` these source `.md` files, so the changes flow
+      into the HTML docs on the next `docs` build.
+
+### Modified files
+
+- `src/back/objects/registry/store/lakebase/store.py`
+- `src/back/objects/registry/store/lakebase/schema.sql`
+- `src/back/objects/registry/EditLockService.py`
+- `src/api/routers/internal/domain.py`
+- `src/shared/fastapi/main.py`
+- `src/back/objects/domain/Domain.py`
+- `src/front/static/global/js/edit-lock.js`
+- `src/front/static/global/js/navbar.js`
+- `src/front/static/global/js/base-ui-handlers.js`
+- `src/front/static/global/css/main.css`
+- `src/front/config/menu_config.json`
+- `src/front/templates/base.html`
+- `tests/units/registry/test_edit_lock_store.py`
+- `tests/units/registry/test_edit_lock_service.py`
+- `tests/units/api/test_edit_lock_endpoints.py`
+- `tests/units/domain/test_change_audit.py`
+- `docs/user-guide.md`, `docs/architecture.md`, `docs/features.md`
+- `README.md`, `releases/ReleaseNotes_V0.6.0.md`
+
+### Test result
+
+`uv run pytest -q -m "not scenario" tests/units/registry/test_edit_lock_store.py
+tests/units/registry/test_edit_lock_service.py
+tests/units/api/test_edit_lock_endpoints.py` — 26 passed.
+
+`uv run pytest -q -m "not scenario" tests/units/registry tests/units/domain
+tests/units/api/test_edit_lock_endpoints.py` — 425 passed.
+
+Full suite `uv run pytest -q -m "not scenario"`: 3131 passed, 17 skipped. The
+59 remaining failures are the pre-existing cross-folder event-loop pollution
+in `tests/mcp/integration/**` and the async endpoint tests
+(comment/review/current-user/set-version-status) — all pass in isolation and
+are unrelated to this change.
+
+
+## Switch-version button in the L2 subnav
+
+### Context
+
+With the new release-based edit lock, reloading the open domain or jumping to
+another version of it lived only on the Domain → Versions page. This adds a
+**Switch** button in the top-right L2 subnav (between **Save** and **Close**)
+that opens a small popup to reload the current domain from the Registry or load
+another version of the same domain, warning the user to save first.
+
+### Changes
+
+1. `src/front/config/menu_config.json`
+   - Added a `Switch` navbar action (`domainSwitch`, `#menuSwitchDomain`,
+     `bi-arrow-repeat`) between `Save` and `Close`.
+
+2. `src/front/templates/base.html`
+   - Render the `Switch` button between `Save` and `Close` in the L2 subnav
+     (reuses `btn-requires-domain`, so it is disabled until the domain is saved
+     to the registry).
+
+3. `src/front/static/global/js/base-ui-handlers.js`
+   - Whitelisted `domainSwitch` for `data-navbar-action` dispatch.
+
+4. `src/front/static/global/js/navbar.js`
+   - Added `domainSwitch()` (reads current domain via `/domain/info`),
+     `showSwitchDomainDialog()` (popup with a version dropdown pre-selected on
+     the current version and a "Save my changes before switching" checkbox), and
+     `populateSwitchVersions()` (fills the dropdown from `/domain/versions-list`,
+     flagging the current version as "reload"). Confirm optionally saves first
+     (aborting on save failure) then reuses `doDomainLoad()`. Added a small
+     `escapeHtmlAttr()` helper; exposed `domainSwitch` on `window`.
+
+5. `src/front/static/global/css/main.css`
+   - Added `.ob-subnav-switch-btn` styling (primary-tinted hover), matching the
+     Save/Close buttons.
+
+### Modified files
+
+- `src/front/config/menu_config.json`
+- `src/front/templates/base.html`
+- `src/front/static/global/js/base-ui-handlers.js`
+- `src/front/static/global/js/navbar.js`
+- `src/front/static/global/css/main.css`
+- `docs/user-guide.md`, `releases/ReleaseNotes_V0.6.0.md`
+
+### Test result
+
+Frontend-only change (no Python behaviour altered).
+`uv run pytest -q -m "not scenario" tests/units/api/test_ui_rendering.py
+tests/units/api/test_edit_lock_endpoints.py` — 124 passed.
+
+
+## Audit Trail — "changes recorded on save" info note
+
+### Context
+
+Follow-up on the Ontology & Mapping Audit Trail: users create a new attribute
+/ entity and see nothing in the Audit trail, because change events are buffered
+in the working session and only flushed to the registry on Save to registry
+(the agreed design). The page gave no hint of this, so it read like a bug.
+
+### Changes
+
+1. `src/front/templates/partials/domain/_domain_audit.html`
+   - Added a persistent info banner above the timeline explaining that ontology
+     and mapping edits (new entities, attributes, mappings, rules) are recorded
+     in the trail when the domain is saved to the registry, and that
+     current-session changes appear after the next save.
+
+### Modified files
+
+- `src/front/templates/partials/domain/_domain_audit.html`
+
+### Test result
+
+Frontend-only change (static template copy; no Python behaviour altered).
+
+
+## Refactor — collapse duplicated change-audit diff loops
+
+### Context
+
+Refactor pass (Fowler, behaviour-preserving) on the audit-trail code added
+above. The two bulk-diff recorders each carried six near-identical
+`record_change` loops differing only by entity type and verb.
+
+### Changes
+
+1. `src/back/objects/ontology/Ontology.py`
+   - `_record_ontology_diff`: replaced the six per-(class/property × add/update/
+     remove) loops with a single data-driven double loop over
+     `(entity_type, old, new)` and `(verb, items)`. Same emitted actions
+     (`class_added`/`class_updated`/`class_removed`, `property_*`).
+
+2. `src/back/objects/mapping/Mapping.py`
+   - `_record_mapping_diff`: same collapse over
+     `(entity_type, key, old, new)` × `(verb, refs)`. Same emitted actions
+     (`mapping_entity_*`, `mapping_relationship_*`).
+
+Refactoring applied: *Extract/Consolidate Duplicate Loop* (data-driven table).
+The two keyed-diff helpers (`_diff_by_uri`, `_diff_mappings`) were left in place:
+they have different return shapes and live in separate modules, so unifying
+them would add cross-module coupling for little gain.
+
+### Modified files
+
+- `src/back/objects/ontology/Ontology.py`
+- `src/back/objects/mapping/Mapping.py`
+
+### Test result
+
+`uv run pytest -q tests/units/domain/test_change_audit.py tests/units/ontology/
+tests/units/mapping/ tests/units/registry/` — 873 passed.
+
+Full `uv run pytest -q -m "not scenario"`: 3132 passed, 17 skipped. The 58
+failures are the same pre-existing full-suite async-endpoint ordering failures
+(`tests/e2e/**`, `tests/mcp/integration/**`, comment/review/version endpoint
+tests) documented above — unrelated to this refactor, all pass in isolation.
+
+---
+
+## Consolidate the 0.6 Lakebase upgrade into a single migration script
+
+### Context
+
+The 0.6 cycle had accreted four separate upgrade scripts (`0.5_To_0.6`, plus
+standalone `add_graph_analytics`, `change_events`, `drop_comment_anchor`).
+Operators had to know which subset to run. Merged them into the one canonical
+`upgrade_lakebase_0.5_To_0.6.sql` so a single, idempotent run lands the full,
+final 0.6 registry + graph schema.
+
+### Changes
+
+1. `scripts/upgrade_lakebase_0.5_To_0.6.sql`
+   - Folded the additive registry tables into the registry migration block:
+     `graph_analytics` + `graph_analytics_runs` (§3) and `domain_change_events`
+     (§4), with their indexes/CHECKs. The dead comment-anchor column drop was
+     already handled here (§1b), so `drop_comment_anchor` was redundant.
+   - Renumbered the graph-schema part to §5/§6/§7 to avoid clashing with the
+     new registry §3/§4.
+   - Rewrote the header to describe the full final 0.6 schema and note it
+     supersedes the piecemeal 0.6.x patch scripts. Broadened the closing
+     summary query to list all five registry tables.
+
+2. Deleted the now-redundant standalone scripts:
+   - `scripts/upgrade_lakebase_0.6_add_graph_analytics.sql`
+   - `scripts/upgrade_lakebase_0.6_change_events.sql`
+   - `scripts/upgrade_lakebase_0.6_drop_comment_anchor.sql`
+
+3. `releases/ReleaseNotes_V0.6.0.md`
+   - Updated the change-audit note and the "Upgrading from v0.5.x" section to
+     point at the single consolidated script (removed the separate
+     `change_events` psql invocation).
+
+### Modified files
+
+- `scripts/upgrade_lakebase_0.5_To_0.6.sql`
+- `scripts/upgrade_lakebase_0.6_add_graph_analytics.sql` (deleted)
+- `scripts/upgrade_lakebase_0.6_change_events.sql` (deleted)
+- `scripts/upgrade_lakebase_0.6_drop_comment_anchor.sql` (deleted)
+- `releases/ReleaseNotes_V0.6.0.md`
+
+### Test result
+
+Docs/SQL-only change; no Python touched. `uv run pytest -q -m "not scenario"`
+unaffected (same suite as above). The consolidated DDL mirrors the canonical
+`schema.sql` verbatim, so it is exercised by every registry-store test that
+runs against a bootstrapped schema.
+
+---
+
+## Graph Analytics — up-front info note about the run limits
+
+### Context
+
+The Analytics page already blocks and shows a red banner when a graph is *over*
+the in-memory triple cap, but nothing told users about the constraints
+beforehand. Added a persistent, unobtrusive info note explaining how the
+analysis runs and why it is capped, so the limit is discoverable before hitting
+it (not just after).
+
+### Changes
+
+1. `src/front/templates/partials/dtwin/_query_analytics.html`
+   - Added `_showLimitInfo(show)` which renders an `alert-info` banner under the
+     section header describing: the in-memory (NetworkX) full-graph load capped
+     at `ONTOBRICKS_ANALYTICS_MAX_TRIPLES` triples (with the live limit + this
+     graph's triple count when known), the asynchronous/cached execution model,
+     and that entity-type filters narrow the charts, not the load.
+   - Wired it into `_loadEntityTypes`: shown when a graph exists and is under
+     the limit; hidden in the over-limit case (the existing red banner covers
+     it) and the no-graph case (the no-graph warning covers it).
+
+### Modified files
+
+- `src/front/templates/partials/dtwin/_query_analytics.html`
+
+### Test result
+
+Frontend-only template/JS change; no Python touched, no server-side test covers
+this partial. `uv run pytest -q -m "not scenario"` unaffected. Verified the
+partial has no linter errors and the banner show/hide branches are mutually
+exclusive with the existing no-graph / over-limit banners.
+
+
+## Test isolation — nightly e2e browser suite no longer poisons routine runs
+
+### Context
+
+The routine command `uv run pytest -q -m "not scenario"` reported 58 failures
+(MCP-integration schema tests + several async endpoint tests: `comment`,
+`review`, `set-version-status`, `current-user`) with `RuntimeError: Runner.run()
+cannot be called from a running event loop`. Root-caused to cross-suite
+pollution, **not** feature code: `tests/units` alone (2693), `tests/mcp` alone
+(25), and `mcp + units` together (2718) are all green; the 58 appear only once
+`tests/e2e` is collected and run. The e2e suite drives a **session-scoped**
+`sync_playwright` browser whose event loop stays alive in-process for the rest
+of the session, breaking `pytest-asyncio` for every async test collected after
+it. Marker-only deselection (`-m "not e2e"`) did not help because most e2e
+tests were not tagged `e2e` — they still ran and started the browser. The e2e
+suite is **nightly-only** by design (see `.cursor/08-testing-and-deployment`),
+so it must not run in routine/agent runs.
+
+### Changes
+
+1. `tests/e2e/conftest.py`
+   - Added `_e2e_explicitly_selected(config)` — true only when the caller
+     clearly targets the suite (a `tests/e2e` path arg, `-m e2e`, or live mode
+     via `ONTOBRICKS_LIVE_BASE`).
+   - Extended `pytest_collection_modifyitems` to tag every non-scenario e2e
+     test with the `e2e` marker and, unless the suite is explicitly targeted,
+     add a `skip` marker. Skipped-at-collection tests never trigger the
+     Playwright fixtures, so the session-scoped browser loop is never created
+     during routine runs. Live-mode gating is preserved.
+
+2. `.cursor/08-testing-and-deployment.mdc`
+   - Documented that the routine command auto-skips the nightly e2e browser
+     suite and how to run it explicitly (`uv run pytest tests/e2e`).
+
+### Modified files
+
+- `tests/e2e/conftest.py`
+- `.cursor/08-testing-and-deployment.mdc`
+
+### Test result
+
+`uv run pytest -q -m "not scenario"` → **2932 passed, 275 skipped, 4 deselected,
+0 failed in ~23s** (previously 58 failed / 3132 passed / 265s). e2e still runs
+when explicitly targeted (`uv run pytest tests/e2e`). No product code changed —
+this is a test-collection fix only.

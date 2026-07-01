@@ -595,7 +595,7 @@ async function doDomainSave(opts = {}) {
                 || 'A domain with this name already exists in the registry. Please choose a different name.';
             showNotification(_msg, 'error');
             try { _nameEl.focus(); } catch (e) {}
-            return;
+            return false;
         }
         showNotification('Saving domain to registry...', 'info', 5000);
         const response = await fetch('/domain/save-to-uc', {
@@ -613,12 +613,268 @@ async function doDomainSave(opts = {}) {
             if (opts.afterSave) {
                 setTimeout(() => { window.location.href = opts.afterSave; }, 800);
             }
+            return true;
         } else {
             showNotification('Error: ' + data.message, 'error');
+            return false;
         }
     } catch (error) {
         showNotification('Error: ' + error.message, 'error');
+        return false;
     }
+}
+
+// ==========================================
+// Domain close (release edit lock + return home)
+// ==========================================
+
+/**
+ * Close the currently open domain.
+ *
+ * Single-editor concurrency is release-based: the domain stays locked for
+ * every other user until the holder closes it here (or an admin takes
+ * over). Closing asks whether to save first, then releases the edit lock,
+ * resets the session and returns to the Home page.
+ */
+async function domainClose() {
+    const choice = await showCloseDomainDialog();
+    if (!choice || choice === 'cancel') return;
+
+    if (choice === 'save') {
+        // Persist domain info from the form (if present), then save to the
+        // registry. Abort the close if the save did not succeed so the user
+        // does not silently lose changes.
+        await saveDomainInfoBeforeSave();
+        const ok = await doDomainSave({ afterSave: null });
+        if (!ok) return;
+    }
+
+    await closeDomainSession();
+}
+
+/**
+ * Release the edit lock, reset the session and navigate to Home.
+ */
+async function closeDomainSession() {
+    showDomainLoading('Closing domain...');
+    try {
+        await fetch('/domain/close', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin'
+        });
+    } catch (e) {
+        // Best-effort: still navigate home so the user is not stuck.
+        console.warn('Could not cleanly close domain:', e);
+    }
+    invalidateDomainCaches();
+    window.location.href = '/';
+}
+
+/**
+ * Ask the user whether to save before closing.
+ * Resolves to 'save' | 'discard' | 'cancel'.
+ */
+function showCloseDomainDialog() {
+    return new Promise((resolve) => {
+        const existing = document.getElementById('domainCloseModal');
+        if (existing) existing.remove();
+
+        const modalHtml = `
+            <div class="modal fade" id="domainCloseModal" tabindex="-1">
+                <div class="modal-dialog modal-dialog-centered">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h5 class="modal-title"><i class="bi bi-x-circle me-2"></i>Close Domain</h5>
+                            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                        </div>
+                        <div class="modal-body">
+                            <p class="mb-2">Closing releases the edit lock so another user can edit this domain.</p>
+                            <p class="text-muted mb-0">Do you want to save your changes before closing?</p>
+                        </div>
+                        <div class="modal-footer">
+                            <button type="button" class="btn btn-secondary" id="closeCancelBtn">Cancel</button>
+                            <button type="button" class="btn btn-outline-danger" id="closeDiscardBtn">
+                                <i class="bi bi-x-lg"></i> Close without saving
+                            </button>
+                            <button type="button" class="btn btn-primary" id="closeSaveBtn">
+                                <i class="bi bi-cloud-upload"></i> Save &amp; Close
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        `;
+        document.body.insertAdjacentHTML('beforeend', modalHtml);
+        const modalEl = document.getElementById('domainCloseModal');
+        const modal = new bootstrap.Modal(modalEl);
+
+        let outcome = 'cancel';
+        const finish = (choice) => { outcome = choice; modal.hide(); };
+
+        document.getElementById('closeCancelBtn').addEventListener('click', () => finish('cancel'));
+        document.getElementById('closeDiscardBtn').addEventListener('click', () => finish('discard'));
+        document.getElementById('closeSaveBtn').addEventListener('click', () => finish('save'));
+
+        modalEl.addEventListener('hidden.bs.modal', () => {
+            modalEl.remove();
+            resolve(outcome);
+        });
+
+        modal.show();
+    });
+}
+
+// ==========================================
+// Domain switch (reload current / load another version)
+// ==========================================
+
+/**
+ * Switch the open domain to another version — or reload the current one — from
+ * the Registry.
+ *
+ * Opens a popup listing every available version of the currently open domain
+ * (the current one flagged) so the user can either reload it (discard the
+ * in-session edits and re-fetch from the Registry) or jump to a different
+ * version. Because both paths overwrite the session, the popup offers to
+ * *save first*; unchecking that box discards unsaved changes.
+ */
+async function domainSwitch() {
+    let info;
+    try {
+        const resp = await fetch('/domain/info', { credentials: 'same-origin' });
+        info = await resp.json();
+    } catch (e) {
+        showNotification('Could not read the current domain', 'error');
+        return;
+    }
+
+    const domainSlug = (info && info.domain_folder) || '';
+    const domainName = (info && (info.name || (info.info && info.info.name))) || 'domain';
+    const currentVersion = (info && (info.info && info.info.version)) || (info && info.version) || '';
+
+    if (!domainSlug) {
+        showNotification('Save the domain to the registry first before switching versions', 'warning');
+        return;
+    }
+
+    showSwitchDomainDialog(domainSlug, domainName, String(currentVersion));
+}
+
+/**
+ * Render the Switch-version popup for the currently open domain.
+ */
+function showSwitchDomainDialog(domainSlug, domainName, currentVersion) {
+    const existing = document.getElementById('domainSwitchModal');
+    if (existing) existing.remove();
+
+    const modalHtml = `
+        <div class="modal fade" id="domainSwitchModal" tabindex="-1">
+            <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title"><i class="bi bi-arrow-repeat me-2"></i>Switch Version</h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p class="mb-2 small text-muted">
+                            <i class="bi bi-diagram-3 me-1"></i>Domain: <strong>${escapeHtmlAttr(domainName)}</strong>
+                        </p>
+                        <div class="mb-3">
+                            <label class="form-label" for="switchVersionSelect">Version to load</label>
+                            <select class="form-select" id="switchVersionSelect" disabled>
+                                <option value="">Loading versions…</option>
+                            </select>
+                            <div class="form-text">Pick the current version to reload it from the Registry, or another version to switch.</div>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="switchSaveFirst" checked>
+                            <label class="form-check-label" for="switchSaveFirst">
+                                Save my changes before switching
+                            </label>
+                            <div class="form-text text-warning-emphasis">
+                                <i class="bi bi-exclamation-triangle me-1"></i>Unchecking discards any unsaved changes.
+                            </div>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="button" class="btn btn-primary" id="btnConfirmSwitch" disabled>
+                            <i class="bi bi-arrow-repeat"></i> Switch
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+    const modalEl = document.getElementById('domainSwitchModal');
+    const modal = new bootstrap.Modal(modalEl);
+    modal.show();
+    modalEl.addEventListener('hidden.bs.modal', () => modalEl.remove());
+
+    populateSwitchVersions(currentVersion);
+
+    document.getElementById('btnConfirmSwitch').addEventListener('click', async () => {
+        const select = document.getElementById('switchVersionSelect');
+        const version = select.value;
+        if (!version) {
+            showNotification('Please select a version', 'warning');
+            return;
+        }
+        const saveFirst = document.getElementById('switchSaveFirst').checked;
+        modal.hide();
+
+        if (saveFirst) {
+            if (typeof saveDomainInfoBeforeSave === 'function') await saveDomainInfoBeforeSave();
+            const ok = await doDomainSave({ afterSave: null });
+            if (!ok) return;
+        }
+
+        await doDomainLoad(domainSlug, version);
+    });
+}
+
+/**
+ * Fill the Switch popup version dropdown from ``/domain/versions-list``.
+ * The currently loaded version is flagged and pre-selected.
+ */
+async function populateSwitchVersions(currentVersion) {
+    const select = document.getElementById('switchVersionSelect');
+    const confirmBtn = document.getElementById('btnConfirmSwitch');
+    try {
+        const resp = await fetch('/domain/versions-list', { credentials: 'same-origin' });
+        const data = await resp.json();
+
+        if (!data.success || !data.versions || data.versions.length === 0) {
+            select.innerHTML = '<option value="">No versions found</option>';
+            return;
+        }
+
+        select.innerHTML = '';
+        data.versions.forEach((v) => {
+            const ver = String(v.version);
+            const isCurrent = v.is_current || ver === String(currentVersion);
+            const label = `v${ver} — ${statusLabel(v.status)}` + (isCurrent ? ' (current — reload)' : '');
+            const opt = document.createElement('option');
+            opt.value = ver;
+            opt.textContent = label;
+            if (isCurrent) opt.selected = true;
+            select.appendChild(opt);
+        });
+        select.disabled = false;
+        confirmBtn.disabled = false;
+    } catch (e) {
+        select.innerHTML = '<option value="">Error loading versions</option>';
+    }
+}
+
+/** Minimal attribute-safe escaper for interpolated text. */
+function escapeHtmlAttr(text) {
+    const div = document.createElement('div');
+    div.textContent = text == null ? '' : String(text);
+    return div.innerHTML;
 }
 
 /**
@@ -1038,6 +1294,8 @@ function handleImportResponse(data) {
 // Expose domain actions globally
 window.domainNew = domainNew;
 window.domainSave = domainSave;
+window.domainClose = domainClose;
+window.domainSwitch = domainSwitch;
 window.domainLoad = domainLoad;
 window.showDomainSaveDialog = showDomainSaveDialog;
 window.showDomainLoadDialog = showDomainLoadDialog;

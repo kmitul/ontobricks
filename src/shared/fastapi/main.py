@@ -189,6 +189,10 @@ _DOMAIN_SCOPED_EXCEPTIONS = (
     # handler (a Builder may manage status for a domain they have not
     # loaded), so it must not be gated by the *session* domain's role.
     "/domain/set-version-status",
+    # Closing only releases the caller's own edit lock and resets their
+    # session — any user with app access (viewers included) may close the
+    # domain they have open, so it is not gated by the session domain role.
+    "/domain/close",
 )
 
 # ----------------------------------------------------------------------
@@ -451,8 +455,8 @@ class PermissionMiddleware(BaseHTTPMiddleware):
         """Name of *another* user editing the session's loaded version.
 
         Returns ``""`` when the request must not be blocked (lock free /
-        stale / held by this user / backend unavailable). Only invoked on
-        the already-gated mutating edit routes, so it adds no per-request
+        held by this user / backend unavailable). Only invoked on the
+        already-gated mutating edit routes, so it adds no per-request
         Lakebase cost to reads.
         """
         try:

@@ -535,6 +535,38 @@
         return _totalTriples != null && _maxTriples != null && _totalTriples > _maxTriples;
     }
 
+    // Persistent, up-front note explaining how the analysis runs and its limits,
+    // so users understand the constraints before clicking Run (shown only when a
+    // graph exists and is UNDER the limit — the red over-limit banner covers the
+    // over-limit case, and the no-graph banner covers the empty case).
+    function _showLimitInfo(show) {
+        var existing = document.getElementById('analyticsLimitInfoBanner');
+        if (show) {
+            var limitTxt = (_maxTriples != null) ? _maxTriples.toLocaleString() : '—';
+            var curTxt   = (_totalTriples != null) ? _totalTriples.toLocaleString() : '—';
+            var html = '<i class="bi bi-info-circle-fill flex-shrink-0 mt-1"></i>'
+                + '<span>Analysis loads the full graph into memory (NetworkX), so it is capped at '
+                + '<strong>' + limitTxt + '</strong> triples'
+                + (_totalTriples != null ? ' (this graph: <strong>' + curTxt + '</strong>)' : '')
+                + '. It runs <strong>asynchronously</strong> in the background — you can keep working, '
+                + 'and the last result is cached and shown here. Entity-type filters narrow the '
+                + '<em>charts</em>, not the load, so they do not lift this limit.</span>';
+            if (existing) {
+                existing.innerHTML = html;
+                return;
+            }
+            var banner = document.createElement('div');
+            banner.id = 'analyticsLimitInfoBanner';
+            banner.className = 'alert alert-info d-flex align-items-start gap-2 small mb-3';
+            banner.innerHTML = html;
+            var section = document.getElementById('analyticsSection');
+            var header = section && section.querySelector('.section-header');
+            if (header) header.insertAdjacentElement('afterend', banner);
+        } else if (existing) {
+            existing.remove();
+        }
+    }
+
     // Load entity types from the live KG stats and populate the <select>
     async function _loadEntityTypes() {
         var sel = document.getElementById('analyticsTypeSelect');
@@ -545,6 +577,7 @@
         if (!cfg.graph_name) {
             _setComputeBtnState(false, 'Build the Knowledge Graph first (KG → Sync)');
             _showNoGraphBanner(true);
+            _showLimitInfo(false);
             sel.innerHTML = '<option value="">All types (full graph)</option>';
             return;
         }
@@ -563,6 +596,7 @@
             if (!data.success) {
                 _setComputeBtnState(false, 'Build the Knowledge Graph first (KG → Sync)');
                 _showNoGraphBanner(true);
+                _showLimitInfo(false);
                 sel.innerHTML = '<option value="">All types (full graph)</option>';
                 return;
             }
@@ -576,11 +610,13 @@
             _maxTriples   = data.analytics_max_triples || _maxTriples;
             if (_isOverTripleLimit()) {
                 _showOverLimitBanner(true);
+                _showLimitInfo(false);
                 _setComputeBtnState(false,
                     'Graph too large: ' + _totalTriples.toLocaleString()
                     + ' triples exceeds the analytics limit of ' + _maxTriples.toLocaleString());
             } else {
                 _showOverLimitBanner(false);
+                _showLimitInfo(true);
                 _setComputeBtnState(true);
             }
         } catch (e) {

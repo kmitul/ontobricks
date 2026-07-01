@@ -710,6 +710,7 @@ relational tables:
 | `graph_analytics` | Cache of the LAST knowledge-graph metrics result (centrality/structure) keyed by `(domain_id, version)`; one row, replaced on every successful async recompute (UPSERT). Backs the KG Analytics page and the Domain Validation cockpit |
 | `graph_analytics_runs` | Append-only history of every analytics run launched (success or failure) keyed by `(domain_id, version)`; lightweight per-run metadata (node/edge counts, components, avg degree, density, duration, scope, status). Capped per tuple. Backs the KG Analytics "History" tab |
 | `domain_review_events` | Append-only review/validation audit log (submit / sign-off / publish / reopen / comment) keyed by `(domain_id, version)` |
+| `domain_change_events` | Append-only ontology/mapping change audit ("who changed what, and when") keyed by `(domain_id, version)`. Fine-grained edits (class/property/mapping add/update/remove, imports, resets) are buffered in the working session as they happen and flushed here in one batch on save-to-registry; `source` tags human vs AI-assistant edits; `occurred_at` is the real edit time, `created_at` the flush time |
 | `domain_comments` | Domain-wide threaded discussion keyed by `(domain_id, version)`; `parent_id` links replies, `resolved` closes a thread |
 | `domain_tasks` | Personalised work items assigned to a teammate (usually born from a comment); `status` walks `open → in_progress → done` (or `cancelled`), surfaced in the assignee's "My Tasks" worklist |
 
@@ -1338,6 +1339,17 @@ OntoBricks provides a stateless REST API at `/api/v1/` for external applications
 >   DRAFT. They remain guarded by the builder role.
 > - **Read-only operations** (Explorer filter, stats, status, SPARQL, GraphQL)
 >   remain accessible on all statuses.
+>
+> On top of the lifecycle gate, a **single-editor lock** (`EditLockService` +
+> the Lakebase `domain_edit_locks` table) enforces that only one user edits a
+> given DRAFT `(domain, version)` at a time. The model is **release-based with
+> no TTL/heartbeat**: the first opener acquires the lock (on
+> `POST /domain/load-from-uc`), later openers are read-only, and the lock is
+> held until the holder explicitly closes the domain (`POST /domain/close`
+> releases the lock then resets the session), an admin **takes over**
+> (`POST /domain/edit-lock/acquire` with `force`), or the version leaves DRAFT
+> (`force_release`). `PermissionMiddleware` is authoritative — it 403s a
+> non-holder's mutating request on a DRAFT version (admins are not exempt).
 >
 > The lifecycle replaces the old per-version "Active"/`mcp_enabled` toggle.
 

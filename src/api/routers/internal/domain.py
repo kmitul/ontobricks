@@ -219,6 +219,29 @@ async def clear_domain(session_mgr: SessionManager = Depends(get_session_manager
     return await reset_domain(session_mgr)
 
 
+@router.post("/close")
+async def close_domain(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Close the loaded domain: release the edit lock, then reset the session.
+
+    Releasing the single-editor lock is what lets another user open the same
+    DRAFT version in edit mode. The release must happen *before* the reset,
+    since the lock target (folder, version) is read from the session. When
+    the caller is only a viewer the release is a harmless no-op (the lock is
+    keyed by holder e-mail).
+    """
+    from back.objects.registry.EditLockService import EditLockService
+
+    EditLockService.release_for_session(request, session_mgr, settings)
+    domain = get_domain(session_mgr)
+    domain.reset()
+    domain.clear_uc_metadata()
+    return {"success": True, "message": "Domain closed"}
+
+
 # ===========================================
 # Session Debug
 # ===========================================
@@ -615,24 +638,12 @@ async def get_edit_lock(
     """Edit-lock status for the session's loaded DRAFT ``(folder, version)``.
 
     Returns ``{mode: "edit"|"view"|"none", holder_email, holder_name,
-    acquired_at, is_self, is_admin, can_take_over, stale}``. A non-forcing
-    acquire is performed so the editor keeps the lock across page reloads.
+    acquired_at, is_self, is_admin, can_take_over}``. A non-forcing acquire
+    is performed so the editor keeps the lock across page reloads.
     """
     from back.objects.registry.EditLockService import EditLockService
 
     return EditLockService.status(request, session_mgr, settings)
-
-
-@router.post("/edit-lock/heartbeat")
-async def heartbeat_edit_lock(
-    request: Request,
-    session_mgr: SessionManager = Depends(get_session_manager),
-    settings: Settings = Depends(get_settings),
-):
-    """Refresh the editor's lock; ``{held: false}`` once it was taken over."""
-    from back.objects.registry.EditLockService import EditLockService
-
-    return EditLockService.heartbeat(request, session_mgr, settings)
 
 
 @router.post("/edit-lock/acquire")
