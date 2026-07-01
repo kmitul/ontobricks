@@ -136,6 +136,76 @@ def test_load_from_uc_attaches_lock_block_on_success():
     assert odl.called
 
 
+def test_load_from_uc_releases_prev_lock_before_opening_different_domain():
+    # Session currently has "acme" V2 open; the user opens a *different*
+    # domain, so its lock must be freed BEFORE the new domain is loaded.
+    domain_obj = MagicMock()
+    domain_obj.domain_folder = "acme"
+    domain_obj.current_version = "2"
+
+    order = []
+    fake_p = MagicMock()
+    fake_p.load_domain_from_uc.side_effect = lambda *a, **k: (
+        order.append("load") or {"success": True, "version": "1"}
+    )
+
+    with (
+        patch.object(_domain, "get_domain", return_value=domain_obj),
+        patch.object(_domain, "Domain", return_value=fake_p),
+        patch.object(
+            _svc.EditLockService, "release_prev",
+            side_effect=lambda *a, **k: order.append("release_prev") or True,
+        ) as rp,
+        patch.object(
+            _svc.EditLockService, "on_domain_loaded",
+            return_value={"mode": "edit", "is_self": True},
+        ) as odl,
+    ):
+        req = _request({"domain": "beta"})
+        res = _run(_domain.load_domain_from_uc(
+            req, session_mgr=MagicMock(), settings=MagicMock()
+        ))
+
+    assert res["success"] is True
+    # Close-before-open: prev lock released, and released BEFORE the load.
+    assert order == ["release_prev", "load"]
+    assert rp.call_args.args[-2:] == ("acme", "2")
+    # on_domain_loaded must not re-release the (already-freed) previous pair.
+    assert odl.call_args.kwargs.get("prev_folder") == ""
+    assert odl.call_args.kwargs.get("prev_version") == ""
+
+
+def test_load_from_uc_same_domain_version_switch_defers_release():
+    # Same domain, different version: no pre-load release — on_domain_loaded
+    # gets the previous pair and releases the old version after the load
+    # (so reopening the *same* version never churns the lock).
+    domain_obj = MagicMock()
+    domain_obj.domain_folder = "acme"
+    domain_obj.current_version = "1"
+
+    fake_p = MagicMock()
+    fake_p.load_domain_from_uc.return_value = {"success": True, "version": "2"}
+
+    with (
+        patch.object(_domain, "get_domain", return_value=domain_obj),
+        patch.object(_domain, "Domain", return_value=fake_p),
+        patch.object(_svc.EditLockService, "release_prev") as rp,
+        patch.object(
+            _svc.EditLockService, "on_domain_loaded",
+            return_value={"mode": "edit"},
+        ) as odl,
+    ):
+        req = _request({"domain": "acme", "version": "2"})
+        res = _run(_domain.load_domain_from_uc(
+            req, session_mgr=MagicMock(), settings=MagicMock()
+        ))
+
+    assert res["success"] is True
+    rp.assert_not_called()
+    assert odl.call_args.kwargs.get("prev_folder") == "acme"
+    assert odl.call_args.kwargs.get("prev_version") == "1"
+
+
 def test_settings_locks_list_delegates_to_service():
     with patch.object(
         _svc.EditLockService, "list_all",

@@ -480,32 +480,48 @@ async def load_domain_from_uc(
 ):
     """Load domain from registry Volume.
 
-    On a successful load of a DRAFT version this auto-acquires the
-    single-editor lock (releasing any lock the session held on the
-    previously loaded version) and returns a ``lock`` block describing
-    whether this browser is the editor or a read-only viewer.
+    When opening a **different** domain than the one currently loaded, the
+    previously-open domain is *closed first* — its single-editor lock is
+    released **before** the new domain is loaded, so a user never holds two
+    DRAFT locks at once. On a successful load of a DRAFT version this then
+    auto-acquires the lock for the newly loaded version and returns a
+    ``lock`` block describing whether this browser is the editor or a
+    read-only viewer. (Same-domain version switches release the old version's
+    lock after the load to avoid a needless release/re-acquire when reopening
+    the same version.)
     """
+    from back.objects.registry.EditLockService import EditLockService
+
     data = await request.json()
     domain_name = data.get("domain", data.get("project"))
     version = data.get("version")
     domain = get_domain(session_mgr)
     # Snapshot the previously loaded (folder, version) so its lock can be
-    # released once this load swaps the session over to a new version.
+    # released when this load swaps the session over to another domain/version.
     prev_folder = getattr(domain, "domain_folder", "") or ""
     prev_version = getattr(domain, "current_version", "") or ""
+
+    # Opening a different domain: close the currently-open one first so its
+    # edit-lock is freed before we load the new domain.
+    switching_domain = bool(prev_folder) and prev_folder != (domain_name or "")
+    if switching_domain and prev_version:
+        EditLockService.release_prev(
+            request, session_mgr, settings, prev_folder, prev_version
+        )
+
     p = Domain(domain, settings)
     result = p.load_domain_from_uc(
         p.build_registry_service(), domain_name, version
     )
     if isinstance(result, dict) and result.get("success"):
-        from back.objects.registry.EditLockService import EditLockService
-
         result["lock"] = EditLockService.on_domain_loaded(
             request,
             session_mgr,
             settings,
-            prev_folder=prev_folder,
-            prev_version=prev_version,
+            # Already released above when switching domains; only hand the
+            # previous pair to on_domain_loaded for same-domain version swaps.
+            prev_folder="" if switching_domain else prev_folder,
+            prev_version="" if switching_domain else prev_version,
         )
     return result
 

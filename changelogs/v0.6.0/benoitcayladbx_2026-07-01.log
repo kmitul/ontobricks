@@ -1121,3 +1121,49 @@ how to run/extend/isolate the campaign.
 - Unit suite: `uv run pytest -q -m "not scenario"` → **2946 passed, 275
   skipped, 0 failed** (5 scenarios deselected). The billable live campaign was
   **not** run.
+
+## Edit-lock: close the previous domain (free its lock) before opening another
+
+### Context
+
+Opening a **different** domain while one was already open released the previous
+domain's single-editor lock only **after** the new domain had loaded (inside
+`EditLockService.on_domain_loaded`). The desired behavior is to *close the
+open domain first* — free its edit-lock **before** the new domain is loaded —
+so a user is never momentarily holding two DRAFT locks. Same-domain version
+switches must keep the after-load release to avoid needlessly churning the lock
+when reopening the same version.
+
+### Changes
+
+1. `src/back/objects/registry/EditLockService.py`
+   - New `release_prev(request, session_mgr, settings, folder, version)`:
+     holder-scoped, best-effort release of a specific `(folder, version)` lock,
+     used to close the previously-open domain before a different one loads.
+2. `src/api/routers/internal/domain.py`
+   - `POST /domain/load-from-uc` now detects a **domain switch**
+     (`prev_folder != domain`) and calls `release_prev(...)` **before**
+     `Domain.load_domain_from_uc(...)`. For a switch it then hands
+     `on_domain_loaded` empty prev args (nothing left to release); same-domain
+     version switches still pass the previous pair so the old version's lock is
+     released after the load. Handler docstring updated.
+3. `tests/units/api/test_edit_lock_endpoints.py`
+   - `test_load_from_uc_releases_prev_lock_before_opening_different_domain`:
+     asserts `release_prev` runs with the previous `(folder, version)` and
+     **before** the load, and that `on_domain_loaded` gets empty prev args.
+   - `test_load_from_uc_same_domain_version_switch_defers_release`: asserts no
+     pre-load release and that `on_domain_loaded` receives the previous pair.
+
+### Modified files
+
+- `src/back/objects/registry/EditLockService.py`
+- `src/api/routers/internal/domain.py`
+- `tests/units/api/test_edit_lock_endpoints.py`
+
+### Test result
+
+`uv run pytest tests/units/api/test_edit_lock_endpoints.py
+tests/units/registry/test_edit_lock_service.py
+tests/units/registry/test_edit_lock_store.py -q` → **38 passed**. Full suite
+`uv run pytest -q -m "not scenario"` → **2948 passed, 275 skipped, 0 failed**
+(2 new tests).

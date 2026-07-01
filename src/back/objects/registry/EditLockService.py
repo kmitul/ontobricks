@@ -139,6 +139,36 @@ class EditLockService:
     # ------------------------------------------------------------------
 
     @staticmethod
+    def release_prev(
+        request,
+        session_mgr: SessionManager,
+        settings,
+        folder: str,
+        version: str,
+    ) -> bool:
+        """Release the current user's lock on a specific ``(folder, version)``.
+
+        Used to *close* the previously-open domain — freeing its edit-lock —
+        **before** a different domain is loaded, so a user never holds two
+        DRAFT locks at once. Holder-scoped and best-effort: it never raises
+        into the load path and no-ops when the backend is unavailable or the
+        caller is not the lock holder.
+        """
+        if not folder or not version:
+            return False
+        try:
+            store = EditLockService._store(session_mgr, settings)
+            if store is None:
+                return False
+            email, _, _ = EditLockService._identity(request)
+            return bool(
+                store.release_edit_lock(folder, version, holder_email=email)
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("release_prev edit-lock skipped: %s", exc)
+            return False
+
+    @staticmethod
     def on_domain_loaded(
         request,
         session_mgr: SessionManager,
