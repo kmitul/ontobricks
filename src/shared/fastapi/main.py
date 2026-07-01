@@ -428,8 +428,40 @@ class PermissionMiddleware(BaseHTTPMiddleware):
                     request,
                     f"This version is {status}; set it back to DRAFT to edit.",
                 )
+            # Single-editor lock (authoritative): on an editable (DRAFT)
+            # version only the lock holder may mutate. Admins are NOT
+            # auto-exempt — they must "take over" the lock first, which
+            # preserves the single-writer invariant.
+            holder = self._session_edit_lock_holder(request)
+            if holder:
+                return self._forbidden_json(
+                    request,
+                    f"This version is being edited by {holder}; you have "
+                    "read-only access. Take over editing to make changes.",
+                )
 
         return await call_next(request)
+
+    @staticmethod
+    def _session_edit_lock_holder(request: Request) -> str:
+        """Name of *another* user editing the session's loaded version.
+
+        Returns ``""`` when the request must not be blocked (lock free /
+        stale / held by this user / backend unavailable). Only invoked on
+        the already-gated mutating edit routes, so it adds no per-request
+        Lakebase cost to reads.
+        """
+        try:
+            from back.objects.session import SessionManager
+            from back.objects.registry.EditLockService import EditLockService
+
+            session_mgr = SessionManager(request)
+            return EditLockService.blocking_holder(
+                request, session_mgr, get_settings()
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("could not resolve edit-lock holder: %s", exc)
+            return ""
 
     @staticmethod
     def _session_version_status(request: Request) -> str:

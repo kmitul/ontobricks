@@ -390,6 +390,9 @@
     
     <!-- Global Version Status Check -->
     <script defer src="{{ url_for('static', filename='global/js/version-check.js') }}?v={{ asset_version }}"></script>
+
+    <!-- Single-editor edit lock (DRAFT versions) -->
+    <script defer src="{{ url_for('static', filename='global/js/edit-lock.js') }}?v={{ asset_version }}"></script>
     
     {% block extra_js %}{% endblock %}
 </body>

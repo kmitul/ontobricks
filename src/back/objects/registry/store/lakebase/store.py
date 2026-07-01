@@ -112,8 +112,16 @@ _KNOWN_TABLES = frozenset(
         "domain_review_events",
         "domain_comments",
         "domain_tasks",
+        "domain_edit_locks",
     }
 )
+
+# Single-editor lock TTL. A DRAFT (domain, version) edit lock is
+# considered stale once its last heartbeat ages past this window, so the
+# next opener can reclaim it without admin intervention (closed tab /
+# crash). The browser heartbeat interval (~30s, in edit-lock.js) is a
+# third of this, giving two missed beats of slack before expiry.
+_EDIT_LOCK_TTL_S = 90
 
 
 def _require_psycopg():
@@ -535,6 +543,10 @@ class LakebaseRegistryStore(RegistryStore):
         # collaborative comments + tasks feature existed (same pattern as
         # ``_review_events_ready``).
         self._collab_tables_ready = False
+        # Guards the lazy ``CREATE TABLE IF NOT EXISTS domain_edit_locks``
+        # used to self-heal deployments created before the single-editor
+        # lock feature existed (same pattern as ``_collab_tables_ready``).
+        self._edit_locks_ready = False
 
     # ------------------------------------------------------------------
     # Identity
@@ -2930,6 +2942,286 @@ class LakebaseRegistryStore(RegistryStore):
                 "update_task_status(%s/%s) failed: %s", folder, task_id, exc
             )
             return False, str(exc)
+
+    # ------------------------------------------------------------------
+    # Domain edit locks (single-editor concurrency control)
+    # ------------------------------------------------------------------
+
+    def _ensure_domain_edit_locks_table(self) -> bool:
+        """Lazily create ``domain_edit_locks`` (self-heal old deployments).
+
+        Same ownership-safe pattern as :meth:`_ensure_collab_tables`:
+        probe ``information_schema``, create idempotently, and on failure
+        log + return ``False`` so callers no-op (the lock simply becomes a
+        no-op rather than breaking domain loads).
+        """
+        if self._edit_locks_ready:
+            return True
+        try:
+            sch = self._q(self._schema)
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = %s "
+                    "AND table_name = 'domain_edit_locks'",
+                    (self._schema,),
+                )
+                if cur.fetchone():
+                    self._edit_locks_ready = True
+                    return True
+                cur.execute(
+                    f"""
+                    CREATE TABLE IF NOT EXISTS {sch}.domain_edit_locks (
+                        domain_id      uuid NOT NULL
+                                       REFERENCES {sch}.domains(id)
+                                       ON DELETE CASCADE,
+                        version        text NOT NULL,
+                        holder_email   text NOT NULL,
+                        holder_name    text NOT NULL DEFAULT '',
+                        holder_session text NOT NULL DEFAULT '',
+                        acquired_at    timestamptz NOT NULL DEFAULT now(),
+                        heartbeat_at   timestamptz NOT NULL DEFAULT now(),
+                        PRIMARY KEY (domain_id, version)
+                    )
+                    """
+                )
+            self._edit_locks_ready = True
+            return True
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "could not create domain_edit_locks table — run "
+                "`make bootstrap-lakebase` as the schema owner to apply "
+                "the migration: %s",
+                exc,
+            )
+            return False
+
+    @staticmethod
+    def _edit_lock_row_to_dict(r: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "holder_email": r.get("holder_email") or "",
+            "holder_name": r.get("holder_name") or "",
+            "holder_session": r.get("holder_session") or "",
+            "acquired_at": (
+                r["acquired_at"].isoformat() if r.get("acquired_at") else ""
+            ),
+            "heartbeat_at": (
+                r["heartbeat_at"].isoformat() if r.get("heartbeat_at") else ""
+            ),
+            "stale": bool(r.get("stale")),
+        }
+
+    def acquire_edit_lock(
+        self,
+        folder: str,
+        version: str,
+        *,
+        holder_email: str,
+        holder_name: str = "",
+        holder_session: str = "",
+        force: bool = False,
+    ) -> Dict[str, Any]:
+        """Atomically take the (domain, version) edit lock when available.
+
+        The lock is granted when it is free, **stale** (last heartbeat
+        older than :data:`_EDIT_LOCK_TTL_S`), already held by the **same**
+        ``holder_email`` (refresh), or ``force`` (admin take-over).
+
+        Returns ``{acquired, is_self, holder_email, holder_name,
+        acquired_at, stale}`` describing the *live* lock after the attempt.
+        ``acquired`` is ``True`` only when the caller now holds it.
+        """
+        if not self._ensure_domain_edit_locks_table():
+            return {"acquired": False, "is_self": False, "holder_email": ""}
+        try:
+            psycopg, dict_row = _require_psycopg()
+            sch = self._q(self._schema)
+            with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    INSERT INTO {sch}.domain_edit_locks
+                        (domain_id, version, holder_email, holder_name,
+                         holder_session)
+                    SELECT d.id, %s, %s, %s, %s
+                    FROM {sch}.domains d
+                    WHERE d.registry_id = %s AND d.folder = %s
+                    ON CONFLICT (domain_id, version) DO UPDATE SET
+                        holder_email   = EXCLUDED.holder_email,
+                        holder_name    = EXCLUDED.holder_name,
+                        holder_session = EXCLUDED.holder_session,
+                        acquired_at    = now(),
+                        heartbeat_at   = now()
+                    WHERE {sch}.domain_edit_locks.holder_email
+                              = EXCLUDED.holder_email
+                       OR {sch}.domain_edit_locks.heartbeat_at
+                              < now() - make_interval(secs => %s)
+                       OR %s
+                    RETURNING holder_email
+                    """,
+                    (
+                        version,
+                        holder_email or "",
+                        holder_name or "",
+                        holder_session or "",
+                        self._registry(),
+                        folder,
+                        _EDIT_LOCK_TTL_S,
+                        bool(force),
+                    ),
+                )
+                cur.fetchone()  # row present only when the upsert won
+                live = self._get_edit_lock_row(cur, sch, folder, version)
+            if not live:
+                return {"acquired": False, "is_self": False, "holder_email": ""}
+            d = self._edit_lock_row_to_dict(live)
+            is_self = (d["holder_email"] or "").lower() == (
+                holder_email or ""
+            ).lower()
+            return {
+                "acquired": is_self,
+                "is_self": is_self,
+                "holder_email": d["holder_email"],
+                "holder_name": d["holder_name"],
+                "acquired_at": d["acquired_at"],
+                "stale": d["stale"],
+            }
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "acquire_edit_lock(%s/%s) failed: %s", folder, version, exc
+            )
+            return {"acquired": False, "is_self": False, "holder_email": ""}
+
+    def heartbeat_edit_lock(
+        self, folder: str, version: str, *, holder_email: str
+    ) -> Dict[str, Any]:
+        """Refresh ``heartbeat_at`` iff the caller still holds the lock.
+
+        Returns ``{held: bool, ...holder}``. ``held`` is ``False`` when the
+        lock was taken over (0 rows updated) — the caller should flip to
+        read-only.
+        """
+        if not self._ensure_domain_edit_locks_table():
+            return {"held": False}
+        try:
+            psycopg, dict_row = _require_psycopg()
+            sch = self._q(self._schema)
+            with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {sch}.domain_edit_locks l
+                    SET heartbeat_at = now()
+                    FROM {sch}.domains d
+                    WHERE l.domain_id = d.id
+                      AND d.registry_id = %s AND d.folder = %s
+                      AND l.version = %s
+                      AND lower(l.holder_email) = lower(%s)
+                    RETURNING l.holder_email, l.holder_name,
+                              l.acquired_at, l.heartbeat_at,
+                              false AS stale
+                    """,
+                    (self._registry(), folder, version, holder_email or ""),
+                )
+                row = cur.fetchone()
+            if not row:
+                return {"held": False}
+            d = self._edit_lock_row_to_dict(row)
+            d["held"] = True
+            return d
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "heartbeat_edit_lock(%s/%s) failed: %s", folder, version, exc
+            )
+            return {"held": False}
+
+    def release_edit_lock(
+        self, folder: str, version: str, *, holder_email: str
+    ) -> bool:
+        """Release the lock iff the caller holds it. Idempotent no-op else."""
+        if not self._ensure_domain_edit_locks_table():
+            return False
+        try:
+            sch = self._q(self._schema)
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    DELETE FROM {sch}.domain_edit_locks l
+                    USING {sch}.domains d
+                    WHERE l.domain_id = d.id
+                      AND d.registry_id = %s AND d.folder = %s
+                      AND l.version = %s
+                      AND lower(l.holder_email) = lower(%s)
+                    """,
+                    (self._registry(), folder, version, holder_email or ""),
+                )
+                return cur.rowcount > 0
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "release_edit_lock(%s/%s) failed: %s", folder, version, exc
+            )
+            return False
+
+    def force_release_edit_lock(self, folder: str, version: str) -> bool:
+        """Unconditionally drop the lock for (domain, version) — admin only."""
+        if not self._ensure_domain_edit_locks_table():
+            return False
+        try:
+            sch = self._q(self._schema)
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    DELETE FROM {sch}.domain_edit_locks l
+                    USING {sch}.domains d
+                    WHERE l.domain_id = d.id
+                      AND d.registry_id = %s AND d.folder = %s
+                      AND l.version = %s
+                    """,
+                    (self._registry(), folder, version),
+                )
+                return cur.rowcount > 0
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "force_release_edit_lock(%s/%s) failed: %s",
+                folder,
+                version,
+                exc,
+            )
+            return False
+
+    def get_edit_lock(
+        self, folder: str, version: str
+    ) -> Optional[Dict[str, Any]]:
+        """Return the live lock row (+ computed ``stale``) or ``None``."""
+        if not self._ensure_domain_edit_locks_table():
+            return None
+        try:
+            psycopg, dict_row = _require_psycopg()
+            sch = self._q(self._schema)
+            with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
+                row = self._get_edit_lock_row(cur, sch, folder, version)
+            return self._edit_lock_row_to_dict(row) if row else None
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "get_edit_lock(%s/%s) failed: %s", folder, version, exc
+            )
+            return None
+
+    def _get_edit_lock_row(
+        self, cur: Any, sch: str, folder: str, version: str
+    ) -> Optional[Dict[str, Any]]:
+        """Fetch the live lock row for (folder, version) via an open cursor."""
+        cur.execute(
+            f"""
+            SELECT l.holder_email, l.holder_name, l.holder_session,
+                   l.acquired_at, l.heartbeat_at,
+                   (l.heartbeat_at < now() - make_interval(secs => %s))
+                       AS stale
+            FROM {sch}.domain_edit_locks l
+            JOIN {sch}.domains d ON d.id = l.domain_id
+            WHERE d.registry_id = %s AND d.folder = %s AND l.version = %s
+            """,
+            (_EDIT_LOCK_TTL_S, self._registry(), folder, version),
+        )
+        return cur.fetchone()
 
     # ------------------------------------------------------------------
     # Global config

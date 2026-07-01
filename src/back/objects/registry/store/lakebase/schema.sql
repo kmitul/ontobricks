@@ -315,3 +315,24 @@ CREATE INDEX IF NOT EXISTS idx_domain_tasks_assignee
     ON domain_tasks(lower(assignee), status);
 CREATE INDEX IF NOT EXISTS idx_domain_tasks_domain
     ON domain_tasks(domain_id, version);
+
+-- ----------------------------------------------------------------
+-- Domain edit locks — single-editor concurrency control for DRAFT
+-- versions. One row per (domain_id, version) records who currently
+-- holds the edit lock. A heartbeat (``heartbeat_at``) keeps the lock
+-- alive; a lock is considered stale once it ages past the TTL so the
+-- next opener can reclaim it without admin intervention. The holder is
+-- keyed by ``holder_email`` (same user across tabs shares one lock);
+-- ``holder_session`` is the browser session id, kept for display only.
+-- ----------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS domain_edit_locks (
+    domain_id      uuid NOT NULL
+                   REFERENCES domains(id) ON DELETE CASCADE,
+    version        text NOT NULL,
+    holder_email   text NOT NULL,
+    holder_name    text NOT NULL DEFAULT '',
+    holder_session text NOT NULL DEFAULT '',
+    acquired_at    timestamptz NOT NULL DEFAULT now(),
+    heartbeat_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain_id, version)
+);

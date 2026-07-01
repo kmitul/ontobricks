@@ -702,8 +702,16 @@ class Domain:
                 "List version details failed", detail=str(e)
             ) from e
 
-    def save_domain_to_uc(self, svc: RegistryService) -> Dict[str, Any]:
-        """Save domain into the registry Volume under /domains/<name>/V{ver}/V{ver}.json."""
+    def save_domain_to_uc(
+        self, svc: RegistryService, *, actor_email: str = ""
+    ) -> Dict[str, Any]:
+        """Save domain into the registry Volume under /domains/<name>/V{ver}/V{ver}.json.
+
+        ``actor_email`` (when provided) enables a defence-in-depth
+        single-editor lock re-check: an overwrite by anyone other than the
+        live lock holder is refused, mirroring the authoritative
+        :class:`PermissionMiddleware` edit gate.
+        """
         try:
             c = svc.cfg
             if not c.is_configured:
@@ -729,6 +737,24 @@ class Domain:
                         f"Version {version} is {live_status} (read-only). "
                         f"Reopen it to DRAFT before saving changes."
                     )
+                # Defence-in-depth single-editor lock re-check: refuse an
+                # overwrite by anyone other than the current lock holder
+                # (the authoritative gate lives in PermissionMiddleware).
+                if actor_email:
+                    get_lock = getattr(svc.store, "get_edit_lock", None)
+                    lock = get_lock(folder, version) if get_lock else None
+                    if lock and not lock.get("stale"):
+                        holder = lock.get("holder_email") or ""
+                        if (
+                            holder
+                            and holder.lower() != actor_email.lower()
+                        ):
+                            raise ConflictError(
+                                f"Version {version} is being edited by "
+                                f"{lock.get('holder_name') or holder}; you "
+                                "have read-only access. Take over editing "
+                                "to make changes."
+                            )
             export_data = self._s.export_for_save()
             # A brand-new domain always starts as DRAFT; an overwrite of an
             # existing version preserves whatever status the session carries.

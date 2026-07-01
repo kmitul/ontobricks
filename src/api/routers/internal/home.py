@@ -47,9 +47,18 @@ async def session_status(session_mgr: SessionManager = Depends(get_session_manag
 
 
 @router.post("/reset-session")
-async def reset_session(session_mgr: SessionManager = Depends(get_session_manager)):
+async def reset_session(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
     """Reset entire session."""
     domain = get_domain(session_mgr)
+    # Free the single-editor lock held by this session before wiping it,
+    # so the (domain, version) is immediately editable by the next opener.
+    from back.objects.registry.EditLockService import EditLockService
+
+    EditLockService.release_for_session(request, session_mgr, settings)
     domain.reset()
     return {"success": True, "message": "Session reset"}
 

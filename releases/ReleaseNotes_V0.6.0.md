@@ -1,8 +1,10 @@
 # OntoBricks — Release Notes V0.6.0
 
-**Release date:** 2026-06-27
+**Release date:** 2026-06-27 (updated 2026-06-30)
 **Type:** Major feature release
-**Test status:** 2998 passed, 17 skipped (unit tier, `make test`).
+**Test status:** 3056 passed, 17 skipped (unit tier). 58 pre-existing full-suite
+async-endpoint ordering failures (`Runner.run() cannot be called from a running
+event loop`) all pass in isolation — no regressions.
 
 ---
 
@@ -26,6 +28,11 @@ of new capability:
 
 In addition the release includes a suite of UX improvements (sidebar user panel, App Logs
 viewer, Registry access check, domain menu restructure) and a significant set of bug fixes.
+
+The 2026-06-30 update adds three operational-hardening items on top of the same
+version: **Domain Edit-Lock** (single-editor concurrency control for DRAFT versions),
+**In-app Registry Permission Grants** (apply Lakebase grants from the UI, no `psql`),
+and a **deploy-script dependency preflight**.
 
 No breaking changes. All v0.5.x features are fully intact.
 
@@ -129,6 +136,53 @@ All pages using the shared sidebar nav show the connected user's email and role 
 (Admin in red, domain role in blue when it differs) pinned to the sidebar footer. The
 redundant role pill in the top-right navbar is hidden.
 
+### 10. Domain Edit-Lock (single-editor, heartbeat TTL, admin take-over)
+
+Only one browser may **edit** a given DRAFT `(domain, version)` at a time. The first
+opener acquires the lock and edits; later openers land **read-only** with a banner naming
+the current editor. The lock lives in Lakebase (multi-replica safe) with a heartbeat +
+TTL auto-expiry, so a closed tab / crash self-heals without admin help.
+
+- **Auto-acquire on load** — `POST /domain/load-from-uc` acquires the lock for a loaded
+  DRAFT version (releasing any lock the session held on the previously loaded version)
+  and returns a `lock` block for an immediate toast.
+- **Heartbeat + TTL** — the editor's browser beats every ~30 s; the lock expires after
+  ~90 s of silence (`_EDIT_LOCK_TTL_S`), letting the next opener reclaim it.
+- **Admin take-over** — an app-admin viewing a locked version gets a **Take over editing**
+  button (`POST /domain/edit-lock/acquire` with `force`); the evicted editor flips to
+  read-only on its next heartbeat.
+- **Authoritative server enforcement** — `PermissionMiddleware` blocks a non-holder's
+  mutating request on a DRAFT version with a 403 ("being edited by …"); admins are *not*
+  auto-exempt (they must take over first). Defence-in-depth re-check in
+  `Domain.save_domain_to_uc`.
+- **UI re-uses the read-only gating** — a new `body.read-only-locked` class is folded into
+  the existing read-only CSS selector group, so every write surface locks down with no
+  per-control changes; `edit-lock.js` renders the banner and drives the heartbeat.
+- **Lakebase schema** — new table `domain_edit_locks` (keyed by `(domain_id, version)`,
+  `ON DELETE CASCADE`), created by `make bootstrap-lakebase` and lazily self-healed by the
+  store (`_ensure_domain_edit_locks_table`).
+
+### 11. In-app Registry Permission Grants (no `psql` required)
+
+Lakebase registry-schema permissions can now be applied directly from the UI, removing the
+`psql`-dependent manual `scripts/bootstrap-lakebase-perms.sh` step for the common case.
+
+- **Self-apply on Initialize** — Settings → Initialize now applies the project `CAN_USE`,
+  schema `USAGE`/`CREATE`/`DML`, and UC `ALL_PRIVILEGES` grants to the app + MCP service
+  principals, returning a `permissions` summary (best-effort, never fatal to Initialize).
+- **Repair permissions button** — an admin-gated button in the Lakebase Connection panel
+  re-applies the grants on demand (`POST /settings/registry/grant-permissions`) and renders
+  a per-grant results panel with any warnings.
+- **Shared grant primitives** — extracted into `back/core/databricks/lakebase_grants.py`
+  and reused by both the graph-DB provisioner and the registry store (no duplication).
+
+### 12. Deploy-script dependency preflight
+
+`scripts/deploy.sh` now checks external tooling **up front**: hard dependencies
+(`databricks`, `python3`) abort immediately, while soft dependencies (`psql`, only when a
+Lakebase-target run will reach the GRANT bootstrap) surface a warning and an interactive
+"continue anyway?" prompt — instead of failing deep into the deploy.
+
 ---
 
 ## Bug Fixes
@@ -201,7 +255,8 @@ redundant role pill in the top-right navbar is hidden.
 ### New deploys (v0.6.0 from scratch)
 
 No special action required beyond the standard `make bootstrap-lakebase` which creates all
-required tables including `domain_comments` and `domain_tasks`.
+required tables including `domain_comments`, `domain_tasks`, and `domain_edit_locks`.
+Registry-schema grants can also be applied straight from Settings → Initialize (no `psql`).
 
 ### Upgrading from v0.5.x
 
@@ -214,6 +269,11 @@ psql -v reg_schema=ontobricks_registry -f scripts/upgrade_lakebase_0.5_To_0.6.sq
 The script adds `domain_comments` + `domain_tasks` (3 indexes + 2 CHECK constraints),
 is fully non-destructive, and safe to re-run. The app's lazy `_ensure_collab_tables`
 self-heal will also create the tables on first Discussion load if this script is not run.
+
+The 2026-06-30 `domain_edit_locks` table requires **no manual migration**: it is created by
+`make bootstrap-lakebase` and lazily self-healed on first use by
+`_ensure_domain_edit_locks_table`. The in-app grant flow (Initialize / Repair permissions)
+covers its grants automatically.
 
 No other schema changes. No data migrations required.
 
@@ -240,6 +300,9 @@ No other schema changes. No data migrations required.
 | Status-gate Explorer fix | `src/shared/fastapi/main.py` | Fix |
 | Designer overlap fix | `ontology-map.js`, `mapping-design.js`, `ontoviz.js` | Fix |
 | Makefile test isolation | `Makefile` | Infrastructure |
+| Domain edit-lock | `registry/EditLockService.py`, `registry/store/lakebase/store.py`, `registry/store/lakebase/schema.sql`, `api/routers/internal/domain.py`, `api/routers/internal/home.py`, `src/shared/fastapi/main.py`, `objects/domain/Domain.py`, `front/static/global/js/edit-lock.js`, `permissions.css`, `permissions.js`, `base.html` | New feature |
+| In-app registry grants | `back/core/databricks/lakebase_grants.py`, `registry/store/lakebase/store.py`, `objects/domain/SettingsService.py`, `api/routers/internal/settings.py`, `partials/registry/_registry_configuration.html`, `registry/js/registry.js`, `graphdb/lakebase/provisioner.py` | New feature |
+| Deploy dependency preflight | `scripts/deploy.sh` | Enhancement |
 | Version | `pyproject.toml` | Bumped to `0.6.0` |
 
 ---

@@ -952,3 +952,95 @@ class TestImportAndResetEndpoints:
         )
         assert resp.status_code == 403
         assert not result.get("passed")
+
+
+# ------------------------------------------------------------------
+# Single-editor edit-lock gate (authoritative)
+# ------------------------------------------------------------------
+
+
+def _dispatch_with_edit_lock(holder, *, app_role=ROLE_EDITOR, domain_role=ROLE_EDITOR,
+                             method="POST", path="/ontology/"):
+    """Drive a dispatch on a DRAFT version with a stubbed lock holder.
+
+    ``holder`` is the name returned by ``_session_edit_lock_holder`` (``""``
+    means the lock is free / held by the caller — request must pass).
+    """
+    from shared.fastapi.main import PermissionMiddleware
+
+    req = _make_request(method=method, path=path)
+    result = {}
+
+    async def call_next(r):
+        result["passed"] = True
+        return MagicMock(status_code=200)
+
+    middleware = PermissionMiddleware(MagicMock())
+
+    with (
+        patch("back.core.databricks.is_databricks_app", return_value=True),
+        patch.object(
+            PermissionMiddleware, "_resolve_roles",
+            return_value=(app_role, domain_role),
+        ),
+        patch.object(
+            PermissionMiddleware, "_session_version_status", return_value="DRAFT"
+        ),
+        patch.object(
+            PermissionMiddleware, "_session_edit_lock_holder", return_value=holder
+        ),
+    ):
+        resp = _run(middleware.dispatch(req, call_next))
+    return req, resp, result
+
+
+class TestEditLockGate:
+    """The edit-lock gate runs after the lifecycle gate on DRAFT versions:
+    a non-holder mutating a gated edit route is 403'd, while the holder
+    (empty ``_session_edit_lock_holder``) passes through. Admins are NOT
+    exempt — they must take over the lock first."""
+
+    def test_non_holder_editor_blocked(self):
+        _, resp, result = _dispatch_with_edit_lock("Bob")
+        assert resp.status_code == 403
+        assert not result.get("passed")
+
+    def test_holder_passes(self):
+        _, _, result = _dispatch_with_edit_lock("")
+        assert result.get("passed")
+
+    def test_admin_not_exempt_from_lock(self):
+        _, resp, result = _dispatch_with_edit_lock(
+            "Bob", app_role=ROLE_ADMIN, domain_role=ROLE_ADMIN
+        )
+        assert resp.status_code == 403
+        assert not result.get("passed")
+
+    def test_lock_not_checked_on_read(self):
+        """GET is not a status-gated edit, so the lock gate never runs."""
+        called = {}
+
+        def _holder(_self, _req):
+            called["checked"] = True
+            return "Bob"
+
+        from shared.fastapi.main import PermissionMiddleware
+
+        req = _make_request(method="GET", path="/ontology/")
+
+        async def call_next(r):
+            return MagicMock(status_code=200)
+
+        middleware = PermissionMiddleware(MagicMock())
+        with (
+            patch("back.core.databricks.is_databricks_app", return_value=True),
+            patch.object(
+                PermissionMiddleware, "_resolve_roles",
+                return_value=(ROLE_EDITOR, ROLE_EDITOR),
+            ),
+            patch.object(
+                PermissionMiddleware, "_session_edit_lock_holder", _holder
+            ),
+        ):
+            _run(middleware.dispatch(req, call_next))
+        assert "checked" not in called

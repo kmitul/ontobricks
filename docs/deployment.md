@@ -115,7 +115,7 @@ OntoBricks uses Lakebase Postgres (Autoscaling) as **both** its registry store (
 ║  domain_permissions (roles / ACL)     ║     · managed_synced: Lakeflow snapshot        ║
 ║  schedules      (build definitions)   ║                                                ║
 ║  schedule_runs  (build run history)   ║  g_<domain>_v<n>__app                          ║
-║                                       ║   ← reasoning results / cohort writes          ║
+║  domain_edit_locks (DRAFT edit lock)  ║   ← reasoning results / cohort writes          ║
 ║                                       ║                                                ║
 ║                                       ║  g_<domain>_v<n>  (UNION VIEW — read only)    ║
 ║                                       ║   ← target of SPARQL queries                  ║
