@@ -283,6 +283,13 @@ class TestSettingsPage:
         html = _html(client, "/registry/")
         assert _find(_tags(html), id_="apiEndpointCards") is not None
 
+    def test_body_has_page_id_settings(self, client):
+        """<body data-page="settings"> must be set so the lifecycle gate's
+        generic form-field disabler does not grey out Settings when a
+        PUBLISHED domain is loaded (issue #78)."""
+        html = _html(client, "/settings")
+        assert 'data-page="settings"' in html
+
 
 # =====================================================
 # ONTOLOGY PAGE

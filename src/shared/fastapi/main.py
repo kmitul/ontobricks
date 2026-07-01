@@ -194,11 +194,16 @@ _DOMAIN_SCOPED_EXCEPTIONS = (
 # ----------------------------------------------------------------------
 # Lifecycle status edit-gate
 # ----------------------------------------------------------------------
-# A domain version's content is only editable while its lifecycle status
+# A domain version's *design* is only editable while its lifecycle status
 # is ``DRAFT``. Once it moves to ``IN-REVIEW`` or ``PUBLISHED`` the
-# mutating endpoints below are blocked server-side (authoritative) for
-# *all* roles. Read / query / generate / validate endpoints stay open so
-# a locked version can still be browsed, queried and inspected.
+# design-mutating endpoints below are blocked server-side (authoritative)
+# for *all* roles. Read / query / generate / validate endpoints stay open
+# so a locked version can still be browsed, queried and inspected.
+#
+# Data-refresh ops (KG build/sync, reasoning materialise) are NOT gated
+# on the lifecycle status: they re-materialise triples from source data
+# using the frozen design but do not change the design itself. A PUBLISHED
+# domain's graph can therefore be refreshed without reverting to DRAFT.
 
 # Write methods on these prefixes are pure model-editing surfaces.
 _STATUS_GATE_EDIT_PREFIXES = (
@@ -207,12 +212,14 @@ _STATUS_GATE_EDIT_PREFIXES = (
 )
 
 # Specific mutating endpoints outside the editing prefixes (domain
-# metadata/layout saves, document uploads, Digital-Twin build/load, and
-# reasoning materialisation) that persist into the loaded version.
-# NOTE: only the actual write operations under /dtwin/sync/ are listed
-# here (start, load). Read-only POSTs such as /dtwin/sync/filter must
-# remain accessible on PUBLISHED/IN-REVIEW versions so the Explorer
-# stays fully queryable regardless of domain status.
+# metadata/layout saves, document uploads) that persist into the loaded
+# version's *design*.
+# NOTE: KG data-refresh ops (/dtwin/sync/start, /dtwin/sync/load,
+# /dtwin/reasoning/materialize) are intentionally NOT listed here — they
+# re-materialise triples from source data using the frozen design but do
+# not mutate the design itself. They must remain usable on PUBLISHED /
+# IN-REVIEW versions so the graph can be refreshed without reverting to
+# DRAFT. They remain builder-gated via their endpoint role decorators.
 _STATUS_GATE_EDIT_PATHS = (
     "/domain/save",
     "/domain/info",
@@ -227,9 +234,6 @@ _STATUS_GATE_EDIT_PATHS = (
     "/domain/design-views/delete",
     "/domain/metadata/",
     "/domain/documents/",
-    "/dtwin/sync/start",
-    "/dtwin/sync/load",
-    "/dtwin/reasoning/materialize",
 )
 
 # Non-mutating POST endpoints that live under an editing prefix but only

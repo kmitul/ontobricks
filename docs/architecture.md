@@ -1323,13 +1323,23 @@ OntoBricks provides a stateless REST API at `/api/v1/` for external applications
 > — `DRAFT` → `IN-REVIEW` → `PUBLISHED` (transitions enforced server-side in
 > `back.objects.registry.version_lifecycle`). The external REST API, GraphQL
 > (`/api/v1/graphql`) and MCP only serve **PUBLISHED** versions and default to
-> the **numeric-latest PUBLISHED** version. Editing a version is only allowed
-> while it is `DRAFT` (gated in `PermissionMiddleware`): the gate blocks
-> ontology/mapping edits, metadata/document saves, and KG Build/Load
-> (`/dtwin/sync/start`, `/dtwin/sync/load`). Read-only Knowledge Graph
-> operations — Explorer filter, stats, status — remain accessible on IN-REVIEW
-> and PUBLISHED versions. The lifecycle replaces the old per-version
-> "Active"/`mcp_enabled` toggle.
+> the **numeric-latest PUBLISHED** version.
+>
+> The `PermissionMiddleware` lifecycle gate distinguishes between **design
+> edits** and **data-refresh ops**:
+>
+> - **Design edits** (ontology/mapping changes, metadata saves, document
+>   uploads, design-view CRUD) are blocked on non-DRAFT versions for all
+>   roles — the design is frozen.
+> - **Data-refresh ops** (`/dtwin/sync/start`, `/dtwin/sync/load`,
+>   `/dtwin/reasoning/materialize`) are **not** status-gated. They
+>   re-materialise graph triples from source data using the frozen design and
+>   can be triggered on PUBLISHED / IN-REVIEW versions without reverting to
+>   DRAFT. They remain guarded by the builder role.
+> - **Read-only operations** (Explorer filter, stats, status, SPARQL, GraphQL)
+>   remain accessible on all statuses.
+>
+> The lifecycle replaces the old per-version "Active"/`mcp_enabled` toggle.
 
 ### Available Endpoints
 
