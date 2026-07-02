@@ -5,21 +5,23 @@
  * Lists every active domain edit-lock across the registry (GET
  * /settings/locks) and lets an admin force-unlock a stuck one
  * (POST /settings/locks/release). Lazy-loaded on first visit to the
- * ``locks`` section so the registry query does not run on every page load.
+ * ``locks`` section (the registry query does not run on page load unless
+ * Locks is the active section) and re-fetched every time the section is
+ * (re-)opened, so the table always reflects the current locks.
  */
 document.addEventListener('DOMContentLoaded', function () {
     const container = document.getElementById('locksTableContainer');
     if (!container) return; // panel not in the DOM (non-admin user)
 
-    let locksLoaded = false;
     let pending = null; // {folder, version, holder} awaiting confirmation
 
     const modalEl = document.getElementById('lockReleaseModal');
     const modal = modalEl && window.bootstrap ? new bootstrap.Modal(modalEl) : null;
 
-    // Lazy load when the Locks section is first shown.
+    // Reload every time the Locks section is shown so the list is never
+    // a stale snapshot from an earlier visit.
     document.addEventListener('sidebarSectionChanged', (e) => {
-        if (e.detail && e.detail.section === 'locks' && !locksLoaded) {
+        if (e.detail && e.detail.section === 'locks') {
             loadLocks();
         }
     });
@@ -28,10 +30,7 @@ document.addEventListener('DOMContentLoaded', function () {
         loadLocks();
     }
 
-    document.getElementById('btnRefreshLocks')?.addEventListener('click', () => {
-        locksLoaded = false;
-        loadLocks();
-    });
+    document.getElementById('btnRefreshLocks')?.addEventListener('click', loadLocks);
 
     // Force-unlock button (event delegation — no JSON in onclick).
     container.addEventListener('click', (ev) => {
@@ -74,7 +73,6 @@ document.addEventListener('DOMContentLoaded', function () {
         } finally {
             if (modal) modal.hide();
             pending = null;
-            locksLoaded = false;
             loadLocks();
         }
     });
@@ -93,7 +91,6 @@ document.addEventListener('DOMContentLoaded', function () {
                     '</div>';
                 return;
             }
-            locksLoaded = true;
             renderLocks(Array.isArray(data.locks) ? data.locks : []);
         } catch (err) {
             container.innerHTML =

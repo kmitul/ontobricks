@@ -195,25 +195,20 @@ class TestHomePage:
         assert _find(_tags(html), class_="home-hero") is not None
         assert "OntoBricks" in html
 
-    def test_domain_panel(self, client):
+    def test_kpi_band_moved_off_home(self, client):
+        """The current-domain KPI / health band now lives on Domain →
+        Information; the Home page no longer renders it."""
         html = _html(client, "/")
-        assert _find(_tags(html), id_="sessionPanel") is not None
-        assert _find(_tags(html), id_="homeDomainName") is not None
-
-    def test_kpi_band(self, client):
-        html = _html(client, "/")
-        assert _find(_tags(html), id_="kpiEntities") is not None
-        assert _find(_tags(html), id_="kpiRelationships") is not None
-        assert _find(_tags(html), id_="kpiMappings") is not None
-        assert _find(_tags(html), id_="kpiQuality") is not None
-        assert _find(_tags(html), id_="kpiStatus") is not None
-        assert _find(_tags(html), id_="kpiVersion") is not None
+        assert _find(_tags(html), id_="sessionPanel") is None
+        assert _find(_tags(html), id_="homeDomainName") is None
+        assert _find(_tags(html), id_="kpiEntities") is None
 
     def test_domain_gateway(self, client):
         html = _html(client, "/")
         assert _find(_tags(html), id_="domainGateway") is not None
 
-    def test_quick_links(self, client):
+    def test_no_quick_links(self, client):
+        """Settings / About quick links were removed from the Home page."""
         html = _html(client, "/")
         tags = _tags(html)
         hrefs = [
@@ -221,8 +216,14 @@ class TestHomePage:
             for t, a in tags
             if t == "a" and _has_class(a, "quick-link-sm")
         ]
-        assert "/settings" in hrefs
-        assert "/about" in hrefs
+        assert "/settings" not in hrefs
+        assert "/about" not in hrefs
+
+    def test_my_tasks_before_domains(self, client):
+        """My Tasks now sits above the All Domains gateway."""
+        html = _html(client, "/")
+        assert "homeTasksSection" in html
+        assert html.index("homeTasksSection") < html.index("domainGateway")
 
 
 # =====================================================
@@ -444,6 +445,17 @@ class TestDomainPage:
         )
         assert _find(_tags(html), id_="domainDiscussionsContainer") is not None
         assert _find(_tags(html), id_="domainMyTasksContainer") is not None
+
+    def test_kpi_band(self, client):
+        """The current-domain KPI / health band, moved here from the Home
+        page, sits at the top of Domain → Information."""
+        html = _html(client, "/domain")
+        assert _find(_tags(html), id_="domainKpiPanel") is not None
+        for kpi_id in (
+            "kpiEntities", "kpiRelationships", "kpiMappings",
+            "kpiQuality", "kpiStatus", "kpiVersion",
+        ):
+            assert _find(_tags(html), id_=kpi_id) is not None
 
 
 # =====================================================
