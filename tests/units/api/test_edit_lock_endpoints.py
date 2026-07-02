@@ -12,9 +12,15 @@ from types import SimpleNamespace
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 _domain = importlib.import_module("api.routers.internal.domain")
 _settings = importlib.import_module("api.routers.internal.settings")
-_svc = importlib.import_module("back.objects.registry.EditLockService")
+_svc = importlib.import_module(
+    "back.objects.registry.lockmgt.EditLockService"
+)
+
+pytestmark = pytest.mark.unit
 
 
 def _run(coro):
@@ -91,6 +97,18 @@ def test_release_delegates_to_service():
         ))
     assert res["released"] is True
     assert rl.called
+
+
+def test_renew_delegates_to_service():
+    with patch.object(
+        _svc.EditLockService, "renew",
+        return_value={"success": True, "renewed": True},
+    ) as rn:
+        res = _run(_domain.renew_edit_lock(
+            _request(), session_mgr=MagicMock(), settings=MagicMock()
+        ))
+    assert res["renewed"] is True
+    assert rn.called
 
 
 def test_close_releases_lock_then_resets_session():
@@ -233,7 +251,6 @@ def test_settings_locks_release_forwards_folder_version():
 
 
 def test_settings_locks_release_rejects_missing_fields():
-    import pytest
     from back.core.errors import ValidationError
 
     with pytest.raises(ValidationError):
@@ -244,12 +261,20 @@ def test_settings_locks_release_rejects_missing_fields():
 
 
 def test_load_from_uc_no_lock_block_on_failure():
+    # No domain currently open (empty prev), so a failed load is not a switch
+    # and nothing needs reacquiring.
+    domain_obj = MagicMock()
+    domain_obj.domain_folder = ""
+    domain_obj.current_version = ""
+
     fake_p = MagicMock()
     fake_p.load_domain_from_uc.return_value = {"success": False, "error": "boom"}
 
     with (
-        patch.object(_domain, "get_domain", return_value=MagicMock()),
+        patch.object(_domain, "get_domain", return_value=domain_obj),
         patch.object(_domain, "Domain", return_value=fake_p),
+        patch.object(_svc.EditLockService, "release_prev", return_value=True),
+        patch.object(_svc.EditLockService, "reacquire") as rq,
         patch.object(_svc.EditLockService, "on_domain_loaded") as odl,
     ):
         req = _request({"domain": "acme", "version": "1"})
@@ -259,3 +284,57 @@ def test_load_from_uc_no_lock_block_on_failure():
     assert res["success"] is False
     assert "lock" not in res
     odl.assert_not_called()
+    # No switch happened here (no prev domain), so nothing to reacquire.
+    rq.assert_not_called()
+
+
+def test_load_from_uc_reacquires_prev_lock_when_switch_load_fails():
+    # Cross-domain switch whose load returns a failure envelope: the prev lock
+    # we freed pre-load must be restored so the switch does not orphan it.
+    domain_obj = MagicMock()
+    domain_obj.domain_folder = "acme"
+    domain_obj.current_version = "2"
+
+    fake_p = MagicMock()
+    fake_p.load_domain_from_uc.return_value = {"success": False, "error": "boom"}
+
+    with (
+        patch.object(_domain, "get_domain", return_value=domain_obj),
+        patch.object(_domain, "Domain", return_value=fake_p),
+        patch.object(_svc.EditLockService, "release_prev", return_value=True),
+        patch.object(_svc.EditLockService, "reacquire") as rq,
+        patch.object(_svc.EditLockService, "on_domain_loaded") as odl,
+    ):
+        req = _request({"domain": "beta"})
+        res = _run(_domain.load_domain_from_uc(
+            req, session_mgr=MagicMock(), settings=MagicMock()
+        ))
+    assert res["success"] is False
+    odl.assert_not_called()
+    assert rq.call_args.args[-2:] == ("acme", "2")
+
+
+def test_load_from_uc_reacquires_prev_lock_when_switch_load_raises():
+    # Same as above but the load raises: the prev lock is restored, then the
+    # error propagates to the global handler.
+    domain_obj = MagicMock()
+    domain_obj.domain_folder = "acme"
+    domain_obj.current_version = "2"
+
+    fake_p = MagicMock()
+    fake_p.load_domain_from_uc.side_effect = RuntimeError("kaboom")
+
+    with (
+        patch.object(_domain, "get_domain", return_value=domain_obj),
+        patch.object(_domain, "Domain", return_value=fake_p),
+        patch.object(_svc.EditLockService, "release_prev", return_value=True),
+        patch.object(_svc.EditLockService, "reacquire") as rq,
+        patch.object(_svc.EditLockService, "on_domain_loaded") as odl,
+    ):
+        req = _request({"domain": "beta"})
+        with pytest.raises(RuntimeError):
+            _run(_domain.load_domain_from_uc(
+                req, session_mgr=MagicMock(), settings=MagicMock()
+            ))
+    odl.assert_not_called()
+    assert rq.call_args.args[-2:] == ("acme", "2")

@@ -5,12 +5,21 @@ openers land read-only with a banner naming the current editor. The lock
 lives in Lakebase (``domain_edit_locks``) so it is consistent across app
 replicas.
 
-The lock has **no TTL / heartbeat**: it is held until the holder explicitly
-*closes* the domain (:meth:`release`, wired to the "Close" button), an
-app-admin *takes over* a held lock (``force``), or the version leaves DRAFT
-(:meth:`force_release`). A genuinely stuck lock (e.g. a crashed browser
-that never closed the domain) is recovered by admin take-over, not by a
-timeout.
+The lock is held until the holder explicitly *closes* the domain
+(:meth:`release`, wired to the "Close" button), an app-admin *takes over* a
+held lock (``force``), the version leaves DRAFT (:meth:`force_release`), or —
+when a lease TTL is configured — its lease lapses.
+
+**Lease (avoids permanent locks).** When ``ONTOBRICKS_EDIT_LOCK_TTL_S`` is a
+positive number of seconds (default 600 = 10 min; ``0`` disables the lease and
+restores hold-until-close behaviour) the lock carries a lease clock
+(``heartbeat_at``). The holder's browser keeps it alive by renewing
+(:meth:`renew` + the per-page non-forcing acquire); if renews stop — a crashed
+browser or a closed tab that never hit "Close" — the lease goes stale after the
+TTL and the next opener silently reclaims it, so no admin intervention is
+needed. Crucially the lock is **never released on unload**, so ordinary
+multi-page navigation cannot free it mid-session; only the absence of a renew
+for a full TTL can.
 
 Only DRAFT versions are lockable — IN-REVIEW / PUBLISHED versions are
 already read-only for everyone via the lifecycle gate.
@@ -33,6 +42,7 @@ Identity is taken from the request: the proxy-forwarded e-mail
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, Optional, Tuple
 
 from back.core.logging import get_logger
@@ -46,6 +56,11 @@ logger = get_logger(__name__)
 MODE_EDIT = "edit"
 MODE_VIEW = "view"
 MODE_NONE = "none"
+
+# Lease TTL (seconds) after which an un-renewed lock becomes reclaimable by
+# the next opener. ``0`` disables the lease (lock held until explicit
+# close / take-over). Configured via ``ONTOBRICKS_EDIT_LOCK_TTL_S``.
+_DEFAULT_EDIT_LOCK_TTL_S = 600
 
 
 class EditLockService:
@@ -84,6 +99,7 @@ class EditLockService:
             holder_name=name,
             holder_session=sess,
             force=False,
+            ttl_seconds=EditLockService._ttl_seconds(),
         )
         return EditLockService._shape(res, is_admin=is_admin)
 
@@ -114,8 +130,34 @@ class EditLockService:
             holder_name=name,
             holder_session=sess,
             force=force,
+            ttl_seconds=EditLockService._ttl_seconds(),
         )
         return EditLockService._shape(res, is_admin=is_admin)
+
+    @staticmethod
+    def renew(
+        request, session_mgr: SessionManager, settings
+    ) -> Dict[str, Any]:
+        """Keep the holder's lease on the loaded ``(folder, version)`` alive.
+
+        Bumps ``heartbeat_at`` so the lease does not lapse while the editor is
+        active. Returns ``{"success": True, "renewed": bool}`` — ``renewed``
+        is ``False`` when the caller no longer holds the lock (it was
+        reclaimed after going stale, released, or taken over), which the
+        client surfaces as "your editing session expired". No-ops (``renewed
+        False``) for a non-DRAFT version or when the backend is unavailable.
+        """
+        folder, version, lifecycle = EditLockService._loaded(session_mgr)
+        if not folder or not version or lifecycle != STATUS_DRAFT:
+            return {"success": True, "renewed": False}
+        store = EditLockService._store(session_mgr, settings)
+        if store is None:
+            return {"success": False, "renewed": False}
+        email, _, _ = EditLockService._identity(request)
+        renewed = store.renew_edit_lock(
+            folder, version, holder_email=email
+        )
+        return {"success": True, "renewed": bool(renewed)}
 
     @staticmethod
     def release(
@@ -169,6 +211,71 @@ class EditLockService:
             return False
 
     @staticmethod
+    def release_prev_on_switch(
+        request,
+        session_mgr: SessionManager,
+        settings,
+        *,
+        prev_folder: str,
+        prev_version: str,
+        new_domain: str,
+    ) -> bool:
+        """Close the currently-open domain when opening a *different* one.
+
+        When ``new_domain`` differs from the loaded ``prev_folder``
+        (case-insensitive, matching
+        :meth:`Domain._switch_domain_if_needed_for_resolve`), releases the
+        previous domain's edit-lock **before** the new domain is loaded so a
+        user never holds two DRAFT locks at once. Returns ``True`` for a
+        cross-domain switch (the caller then withholds ``prev_*`` from
+        :meth:`on_domain_loaded`); same-domain version switches return
+        ``False`` and defer their release to :meth:`on_domain_loaded`.
+        """
+        switching = bool(prev_folder) and (
+            prev_folder.strip().lower() != (new_domain or "").strip().lower()
+        )
+        if switching and prev_version:
+            EditLockService.release_prev(
+                request, session_mgr, settings, prev_folder, prev_version
+            )
+        return bool(switching)
+
+    @staticmethod
+    def reacquire(
+        request,
+        session_mgr: SessionManager,
+        settings,
+        folder: str,
+        version: str,
+    ) -> bool:
+        """Best-effort re-acquire of a specific ``(folder, version)``.
+
+        Restores the previous domain's lock when a cross-domain switch's load
+        fails after :meth:`release_prev_on_switch` already freed it, keeping the
+        switch atomic from the lock's perspective. Never raises.
+        """
+        if not folder or not version:
+            return False
+        try:
+            store = EditLockService._store(session_mgr, settings)
+            if store is None:
+                return False
+            email, name, sess = EditLockService._identity(request)
+            res = store.acquire_edit_lock(
+                folder,
+                version,
+                holder_email=email,
+                holder_name=name,
+                holder_session=sess,
+                force=False,
+                ttl_seconds=EditLockService._ttl_seconds(),
+            )
+            return bool(res.get("acquired"))
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("reacquire edit-lock skipped: %s", exc)
+            return False
+
+    @staticmethod
     def on_domain_loaded(
         request,
         session_mgr: SessionManager,
@@ -191,18 +298,14 @@ class EditLockService:
             if store is None:
                 return {"mode": MODE_NONE}
             email, name, sess = EditLockService._identity(request)
-            # Drop a stale lock from the previously loaded version.
-            if (
-                prev_folder
-                and prev_version
-                and (prev_folder, prev_version) != (folder, version)
-            ):
-                try:
-                    store.release_edit_lock(
-                        prev_folder, prev_version, holder_email=email
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    logger.debug("prev edit-lock release skipped: %s", exc)
+            # Drop a stale lock from the previously loaded version (same-domain
+            # version switch); cross-domain switches release before the load in
+            # the route, so they pass empty prev_* here. Reuses release_prev so
+            # holder-scoped release lives in one place.
+            if (prev_folder, prev_version) != (folder, version):
+                EditLockService.release_prev(
+                    request, session_mgr, settings, prev_folder, prev_version
+                )
             if not folder or not version or lifecycle != STATUS_DRAFT:
                 return {"mode": MODE_NONE}
             res = store.acquire_edit_lock(
@@ -212,6 +315,7 @@ class EditLockService:
                 holder_name=name,
                 holder_session=sess,
                 force=False,
+                ttl_seconds=EditLockService._ttl_seconds(),
             )
             shaped = EditLockService._shape(
                 res, is_admin=EditLockService._is_admin(request)
@@ -241,10 +345,12 @@ class EditLockService:
         """Display name of *another* user holding the loaded version's lock.
 
         Returns ``""`` when the request must **not** be blocked: the lock is
-        free, held by the requesting user, the version is not DRAFT, or the
-        backend is unavailable. Used by the authoritative
-        :class:`PermissionMiddleware` edit gate — admins are not exempt, so
-        they must "take over" before editing (preserving single-writer).
+        free, held by the requesting user, its lease has gone **stale**
+        (reclaimable — so a new editor is not blocked by an abandoned lock),
+        the version is not DRAFT, or the backend is unavailable. Used by the
+        authoritative :class:`PermissionMiddleware` edit gate — admins are not
+        exempt, so they must "take over" before editing (preserving
+        single-writer).
         """
         try:
             folder, version, lifecycle = EditLockService._loaded(session_mgr)
@@ -253,8 +359,10 @@ class EditLockService:
             store = EditLockService._store(session_mgr, settings)
             if store is None:
                 return ""
-            lock = store.get_edit_lock(folder, version)
-            if not lock:
+            lock = store.get_edit_lock(
+                folder, version, ttl_seconds=EditLockService._ttl_seconds()
+            )
+            if not lock or lock.get("is_stale"):
                 return ""
             email, _, _ = EditLockService._identity(request)
             holder_email = lock.get("holder_email") or ""
@@ -295,7 +403,9 @@ class EditLockService:
         if store is None:
             return {"success": True, "locks": []}
         try:
-            locks = store.list_all_edit_locks()
+            locks = store.list_all_edit_locks(
+                ttl_seconds=EditLockService._ttl_seconds()
+            )
         except Exception as exc:  # noqa: BLE001
             logger.debug("list_all edit-locks failed: %s", exc)
             locks = []
@@ -380,6 +490,21 @@ class EditLockService:
         return (getattr(request.state, "user_role", "") or "") == ROLE_ADMIN
 
     @staticmethod
+    def _ttl_seconds() -> int:
+        """Lease TTL in seconds from ``ONTOBRICKS_EDIT_LOCK_TTL_S``.
+
+        Falls back to :data:`_DEFAULT_EDIT_LOCK_TTL_S` when unset or invalid;
+        ``0`` disables the lease (lock held until explicit close / take-over).
+        """
+        raw = (os.environ.get("ONTOBRICKS_EDIT_LOCK_TTL_S") or "").strip()
+        if not raw:
+            return _DEFAULT_EDIT_LOCK_TTL_S
+        try:
+            return max(0, int(raw))
+        except ValueError:
+            return _DEFAULT_EDIT_LOCK_TTL_S
+
+    @staticmethod
     def _none(is_admin: bool) -> Dict[str, Any]:
         return {
             "success": True,
@@ -390,6 +515,7 @@ class EditLockService:
             "is_self": False,
             "is_admin": is_admin,
             "can_take_over": False,
+            "lease_ttl_s": EditLockService._ttl_seconds(),
         }
 
     @staticmethod
@@ -421,4 +547,6 @@ class EditLockService:
             # Only a viewer of a lock held by someone else can take over, and
             # only an admin is allowed to.
             "can_take_over": bool(is_admin and mode == MODE_VIEW),
+            # Renew cadence hint for the client (0 → lease disabled, no ping).
+            "lease_ttl_s": EditLockService._ttl_seconds(),
         }

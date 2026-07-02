@@ -72,7 +72,6 @@ def get_empty_domain() -> Dict[str, Any]:
             },
             "triplestore": {
                 "stats": {},
-                "source_versions": {},
             },
             "current_version": "1",
             "domain_folder": "",
@@ -1112,7 +1111,7 @@ class DomainSession:
 
     @property
     def triplestore(self) -> Dict[str, Any]:
-        """Get the triplestore configuration node (stats, source_versions)."""
+        """Get the triplestore configuration node (build stats/timestamps)."""
         return self._data["domain"].get("triplestore", {})
 
     @property

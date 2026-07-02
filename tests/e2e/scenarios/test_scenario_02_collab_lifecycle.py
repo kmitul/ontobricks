@@ -48,7 +48,6 @@ import os
 import pytest
 
 from tests.e2e.scenarios._harness import (
-    base_url,
     chain_marker,
     csrf_headers,
     json_body,
@@ -74,7 +73,6 @@ _BASE_VERSION = "1"
 # URL / CSRF / JSON helpers and the ``scenario_base`` / ``scenario_page``
 # fixtures are shared — see ``_harness.py`` + ``conftest.py``. The short local
 # names are kept so the journey below reads identically across every scenario.
-_base_url = base_url
 _csrf_headers = csrf_headers
 _json = json_body
 _step = make_step("scenario_2")

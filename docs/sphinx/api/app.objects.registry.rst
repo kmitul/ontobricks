@@ -20,7 +20,7 @@ Permissions
 Edit Lock (single-editor)
 --------------------------
 
-.. automodule:: back.objects.registry.EditLockService
+.. automodule:: back.objects.registry.lockmgt.EditLockService
    :members:
    :undoc-members:
    :show-inheritance:

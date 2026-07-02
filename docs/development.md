@@ -559,22 +559,49 @@ Modules with 0% coverage (`back/core/w3c/rdfs`, `back/core/sqlwizard`, `back/cor
 
 #### Markers
 
-Defined in `pytest.ini`:
+Defined in `pytest.ini` (see the file for the authoritative list):
 
 ```ini
 markers =
-    unit: Unit tests
-    integration: Integration tests
-    slow: Slow running tests
+    unit: Unit tests (pure in-process, no I/O — default)
+    integration: Multi-module, in-proc backends
+    contract: Schema/contract verification
+    e2e: Playwright browser flows (CI nightly only)
+    scenario: Live end-to-end journey suites under tests/e2e/scenarios/ (opt-in)
+    dependency: Cross-scenario ordering (pytest-dependency; campaign only)
+    db / spark / external / live_integration / property / slow / eval / mcp: see pytest.ini
 ```
 
 Use them to selectively run subsets:
 
 ```bash
+# Routine / agent runs — everything except the opt-in live scenarios:
+uv run pytest -q -m "not scenario"
+
 .venv/bin/python -m pytest -m unit
 .venv/bin/python -m pytest -m integration
 .venv/bin/python -m pytest -m "not slow"
 ```
+
+#### Live scenario campaign
+
+The suites under `tests/e2e/scenarios/` (`test_scenario_01_generate_live.py` →
+`02` → `03` → `test_scenario_validation.py`) are a **single, ordered, billable
+journey** (warehouse + LLM + a durable registry write) against a **running**
+app. They are `scenario`-marked, excluded from routine runs, and gated behind
+`ONTOBRICKS_SCENARIO_LIVE=1`. Run the whole campaign with:
+
+```bash
+make scenario-campaign                                   # local dev server
+make scenario-campaign ONTOBRICKS_LIVE_BASE=https://<app-url>
+```
+
+This sets `ONTOBRICKS_SCENARIO_LIVE=1` + `ONTOBRICKS_SCENARIO_CHAIN=1`
+(pytest-dependency chaining: an upstream failure skips the downstream suites),
+runs them in filename order, and writes reports to `artifacts/scenarios/`
+(`campaign.xml`, `campaign.html`, `campaign_report.md`). The canonical guide —
+env vars, chaining, registry isolation, and how to add a scenario — lives in
+[`tests/e2e/scenarios/README.md`](../tests/e2e/scenarios/README.md).
 
 #### Writing New Tests
 

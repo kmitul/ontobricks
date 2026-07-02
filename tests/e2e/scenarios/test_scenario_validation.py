@@ -59,7 +59,6 @@ import pathlib
 import pytest
 
 from tests.e2e.scenarios._harness import (
-    base_url,
     chain_marker,
     csrf_headers,
     json_body,
@@ -92,7 +91,6 @@ _MIN_SHACL = 1      # scenario 3 accepts at least one SHACL shape
 
 # URL / CSRF / JSON helpers and the ``scenario_base`` / ``scenario_page``
 # fixtures are shared — see ``_harness.py`` + ``conftest.py``.
-_base_url = base_url
 _csrf_headers = csrf_headers
 _json = json_body
 _step = make_step("scenario_validation")

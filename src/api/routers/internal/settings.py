@@ -1181,7 +1181,7 @@ async def list_edit_locks(
     settings: Settings = Depends(get_settings),
 ):
     """List all active domain edit-locks across the registry (admin only)."""
-    from back.objects.registry.EditLockService import EditLockService
+    from back.objects.registry.lockmgt import EditLockService
 
     with map_route_errors("list edit locks", logger):
         return EditLockService.list_all(session_mgr, settings)
@@ -1197,7 +1197,7 @@ async def release_edit_lock_admin(
     settings: Settings = Depends(get_settings),
 ):
     """Force-unlock a ``(folder, version)`` edit-lock (admin only)."""
-    from back.objects.registry.EditLockService import EditLockService
+    from back.objects.registry.lockmgt import EditLockService
 
     data = await request.json()
     folder = (data.get("folder") or "").strip()

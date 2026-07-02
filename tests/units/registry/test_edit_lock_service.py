@@ -9,9 +9,11 @@ import importlib
 
 from unittest.mock import MagicMock, patch
 
-from back.objects.registry.EditLockService import EditLockService
+from back.objects.registry.lockmgt import EditLockService
 
-_mod = importlib.import_module("back.objects.registry.EditLockService")
+_mod = importlib.import_module(
+    "back.objects.registry.lockmgt.EditLockService"
+)
 
 
 def _request(email="alice@acme.com", role="editor", session_id="sess1"):
@@ -38,7 +40,7 @@ def _patches(store, domain):
     )
 
 
-def _store(acquire=None, get=None):
+def _store(acquire=None, get=None, renew=True):
     st = MagicMock()
     st.acquire_edit_lock.return_value = acquire or {
         "acquired": True,
@@ -49,6 +51,7 @@ def _store(acquire=None, get=None):
     }
     st.get_edit_lock.return_value = get
     st.release_edit_lock.return_value = True
+    st.renew_edit_lock.return_value = renew
     return st
 
 
@@ -173,6 +176,164 @@ def test_release_calls_store_with_email():
 
 
 # ----------------------------------------------------------------------
+# renew (lease keep-alive)
+# ----------------------------------------------------------------------
+
+
+def test_renew_reports_renewed_for_holder():
+    store = _store(renew=True)
+    p1, p2 = _patches(store, _domain())
+    with p1, p2:
+        res = EditLockService.renew(_request(), MagicMock(), MagicMock())
+    assert res == {"success": True, "renewed": True}
+    assert (
+        store.renew_edit_lock.call_args.kwargs["holder_email"]
+        == "alice@acme.com"
+    )
+
+
+def test_renew_reports_lost_when_no_longer_holder():
+    store = _store(renew=False)
+    p1, p2 = _patches(store, _domain())
+    with p1, p2:
+        res = EditLockService.renew(_request(), MagicMock(), MagicMock())
+    assert res == {"success": True, "renewed": False}
+
+
+def test_renew_noop_on_non_draft_skips_store():
+    store = _store()
+    p1, p2 = _patches(store, _domain(status="PUBLISHED"))
+    with p1, p2:
+        res = EditLockService.renew(_request(), MagicMock(), MagicMock())
+    assert res == {"success": True, "renewed": False}
+    store.renew_edit_lock.assert_not_called()
+
+
+def test_status_exposes_lease_ttl():
+    store = _store()
+    p1, p2 = _patches(store, _domain())
+    with p1, p2, patch.dict(
+        _mod.os.environ, {"ONTOBRICKS_EDIT_LOCK_TTL_S": "300"}
+    ):
+        res = EditLockService.status(_request(), MagicMock(), MagicMock())
+    assert res["lease_ttl_s"] == 300
+    assert store.acquire_edit_lock.call_args.kwargs["ttl_seconds"] == 300
+
+
+# ----------------------------------------------------------------------
+# release_prev / release_prev_on_switch — close-before-open plumbing
+# ----------------------------------------------------------------------
+
+
+def test_release_prev_releases_holder_scoped_pair():
+    store = _store()
+    p1, p2 = _patches(store, _domain())
+    with p1, p2:
+        ok = EditLockService.release_prev(
+            _request(), MagicMock(), MagicMock(), "acme", "1"
+        )
+    assert ok is True
+    store.release_edit_lock.assert_called_once_with(
+        "acme", "1", holder_email="alice@acme.com"
+    )
+
+
+def test_release_prev_noops_without_folder_or_version():
+    store = _store()
+    p1, p2 = _patches(store, _domain())
+    with p1, p2:
+        assert (
+            EditLockService.release_prev(
+                _request(), MagicMock(), MagicMock(), "", "1"
+            )
+            is False
+        )
+    store.release_edit_lock.assert_not_called()
+
+
+def test_release_prev_on_switch_releases_before_switching_domain():
+    store = _store()
+    p1, p2 = _patches(store, _domain())
+    with p1, p2:
+        switching = EditLockService.release_prev_on_switch(
+            _request(),
+            MagicMock(),
+            MagicMock(),
+            prev_folder="acme",
+            prev_version="2",
+            new_domain="beta",
+        )
+    assert switching is True
+    store.release_edit_lock.assert_called_once_with(
+        "acme", "2", holder_email="alice@acme.com"
+    )
+
+
+def test_release_prev_on_switch_same_domain_defers_release():
+    store = _store()
+    p1, p2 = _patches(store, _domain())
+    with p1, p2:
+        switching = EditLockService.release_prev_on_switch(
+            _request(),
+            MagicMock(),
+            MagicMock(),
+            prev_folder="Acme",  # case-insensitive match with new_domain
+            prev_version="1",
+            new_domain="acme",
+        )
+    assert switching is False
+    store.release_edit_lock.assert_not_called()
+
+
+def test_reacquire_restores_previous_lock():
+    store = _store()
+    p1, p2 = _patches(store, _domain())
+    with p1, p2:
+        ok = EditLockService.reacquire(
+            _request(), MagicMock(), MagicMock(), "acme", "2"
+        )
+    assert ok is True
+    assert store.acquire_edit_lock.call_args.kwargs["force"] is False
+    assert (
+        store.acquire_edit_lock.call_args.kwargs["holder_email"]
+        == "alice@acme.com"
+    )
+
+
+def test_reacquire_noops_without_folder_or_version():
+    store = _store()
+    p1, p2 = _patches(store, _domain())
+    with p1, p2:
+        assert (
+            EditLockService.reacquire(
+                _request(), MagicMock(), MagicMock(), "acme", ""
+            )
+            is False
+        )
+    store.acquire_edit_lock.assert_not_called()
+
+
+def test_on_domain_loaded_defers_prev_release_for_version_switch():
+    """Same-domain version switch: on_domain_loaded releases the old version's
+    lock (via release_prev) and then acquires the freshly loaded one."""
+    store = _store()
+    p1, p2 = _patches(store, _domain(folder="acme", version="2"))
+    with p1, p2:
+        res = EditLockService.on_domain_loaded(
+            _request(),
+            MagicMock(),
+            MagicMock(),
+            prev_folder="acme",
+            prev_version="1",
+        )
+    store.release_edit_lock.assert_called_once_with(
+        "acme", "1", holder_email="alice@acme.com"
+    )
+    store.acquire_edit_lock.assert_called_once()
+    assert res["mode"] == "edit"
+
+
+# ----------------------------------------------------------------------
 # admin overview — list_all / admin_release
 # ----------------------------------------------------------------------
 
@@ -259,3 +420,21 @@ def test_blocking_holder_empty_on_non_draft():
         )
     assert holder == ""
     store.get_edit_lock.assert_not_called()
+
+
+def test_blocking_holder_empty_when_lease_stale():
+    """A stale lease (heartbeat lapsed past the TTL) must not block a new
+    editor — it is reclaimable, so the gate treats it as free."""
+    store = _store(
+        get={
+            "holder_email": "bob@acme.com",
+            "holder_name": "Bob",
+            "is_stale": True,
+        }
+    )
+    p1, p2 = _patches(store, _domain())
+    with p1, p2:
+        holder = EditLockService.blocking_holder(
+            _request(email="carol@acme.com"), MagicMock(), MagicMock()
+        )
+    assert holder == ""

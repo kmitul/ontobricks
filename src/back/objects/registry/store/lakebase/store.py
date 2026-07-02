@@ -117,11 +117,13 @@ _KNOWN_TABLES = frozenset(
     }
 )
 
-# Single-editor lock for DRAFT (domain, version) versions. The lock has
-# no TTL / heartbeat: it is held until the holder explicitly *closes* the
-# domain (release), an admin *takes over* (force), or the version leaves
-# DRAFT. There is deliberately no auto-expiry — a genuinely stuck lock is
-# recovered by admin take-over rather than a timeout.
+# Single-editor lock for DRAFT (domain, version) versions. The lock is held
+# until the holder explicitly *closes* the domain (release), an admin *takes
+# over* (force), the version leaves DRAFT, or — when a lease TTL is configured
+# (``ttl_seconds``) — its ``heartbeat_at`` lease lapses, at which point the
+# next opener silently reclaims it. The holder keeps the lease alive by
+# renewing ``heartbeat_at`` (``renew_edit_lock`` + the per-page acquire). A
+# TTL of 0 disables the lease (held until explicit release / take-over).
 
 
 def _require_psycopg():
@@ -3187,6 +3189,12 @@ class LakebaseRegistryStore(RegistryStore):
             "acquired_at": (
                 r["acquired_at"].isoformat() if r.get("acquired_at") else ""
             ),
+            "heartbeat_at": (
+                r["heartbeat_at"].isoformat() if r.get("heartbeat_at") else ""
+            ),
+            # Populated only by reads that pass a positive lease TTL (the
+            # ``is_stale`` SQL expression); absent/false otherwise.
+            "is_stale": bool(r.get("is_stale")),
         }
 
     def acquire_edit_lock(
@@ -3198,12 +3206,21 @@ class LakebaseRegistryStore(RegistryStore):
         holder_name: str = "",
         holder_session: str = "",
         force: bool = False,
+        ttl_seconds: int = 0,
     ) -> Dict[str, Any]:
         """Atomically take the (domain, version) edit lock when available.
 
         The lock is granted when it is free, already held by the **same**
-        ``holder_email`` (refresh), or ``force`` (admin take-over). There is
-        no TTL: a lock held by another user is *never* reclaimed implicitly.
+        ``holder_email`` (refresh), ``force`` (admin take-over), or its lease
+        has gone **stale** — ``ttl_seconds > 0`` and the current holder has
+        not renewed (``heartbeat_at``) within the TTL. A live lock held by
+        another user whose lease is still fresh is *never* reclaimed. With
+        ``ttl_seconds == 0`` the lease is disabled and the lock is held until
+        an explicit release / take-over (the pre-lease behaviour).
+
+        On a successful grant ``heartbeat_at`` is bumped to ``now()``;
+        ``acquired_at`` is reset only when the holder actually changes (a
+        same-holder refresh keeps the original session start).
 
         Returns ``{acquired, is_self, holder_email, holder_name,
         acquired_at}`` describing the *live* lock after the attempt.
@@ -3214,6 +3231,7 @@ class LakebaseRegistryStore(RegistryStore):
         try:
             psycopg, dict_row = _require_psycopg()
             sch = self._q(self._schema)
+            ttl = max(0, int(ttl_seconds or 0))
             with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     f"""
@@ -3227,10 +3245,18 @@ class LakebaseRegistryStore(RegistryStore):
                         holder_email   = EXCLUDED.holder_email,
                         holder_name    = EXCLUDED.holder_name,
                         holder_session = EXCLUDED.holder_session,
-                        acquired_at    = now()
+                        acquired_at    = CASE
+                            WHEN {sch}.domain_edit_locks.holder_email
+                                     = EXCLUDED.holder_email
+                            THEN {sch}.domain_edit_locks.acquired_at
+                            ELSE now()
+                        END,
+                        heartbeat_at   = now()
                     WHERE {sch}.domain_edit_locks.holder_email
                               = EXCLUDED.holder_email
                        OR %s
+                       OR (%s > 0 AND now() - {sch}.domain_edit_locks.heartbeat_at
+                                     > make_interval(secs => %s))
                     RETURNING holder_email
                     """,
                     (
@@ -3241,10 +3267,14 @@ class LakebaseRegistryStore(RegistryStore):
                         self._registry(),
                         folder,
                         bool(force),
+                        ttl,
+                        ttl,
                     ),
                 )
                 cur.fetchone()  # row present only when the upsert won
-                live = self._get_edit_lock_row(cur, sch, folder, version)
+                live = self._get_edit_lock_row(
+                    cur, sch, folder, version, ttl_seconds=ttl
+                )
             if not live:
                 return {"acquired": False, "is_self": False, "holder_email": ""}
             d = self._edit_lock_row_to_dict(live)
@@ -3264,6 +3294,36 @@ class LakebaseRegistryStore(RegistryStore):
             )
             return {"acquired": False, "is_self": False, "holder_email": ""}
 
+    def _delete_edit_lock(
+        self,
+        cur,
+        sch: str,
+        folder: str,
+        version: str,
+        *,
+        holder_email: str | None = None,
+    ) -> int:
+        """Delete the ``(folder, version)`` lock row; return affected rowcount.
+
+        Holder-scoped (case-insensitive) when *holder_email* is provided;
+        unconditional when ``None`` (admin force-release). Shared execution
+        core for :meth:`release_edit_lock` / :meth:`force_release_edit_lock`.
+        """
+        where = (
+            "l.domain_id = d.id AND d.registry_id = %s "
+            "AND d.folder = %s AND l.version = %s"
+        )
+        params: list = [self._registry(), folder, version]
+        if holder_email is not None:
+            where += " AND lower(l.holder_email) = lower(%s)"
+            params.append(holder_email or "")
+        cur.execute(
+            f"DELETE FROM {sch}.domain_edit_locks l USING {sch}.domains d "
+            f"WHERE {where}",
+            tuple(params),
+        )
+        return cur.rowcount
+
     def release_edit_lock(
         self, folder: str, version: str, *, holder_email: str
     ) -> bool:
@@ -3273,18 +3333,12 @@ class LakebaseRegistryStore(RegistryStore):
         try:
             sch = self._q(self._schema)
             with self._connect() as conn, conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    DELETE FROM {sch}.domain_edit_locks l
-                    USING {sch}.domains d
-                    WHERE l.domain_id = d.id
-                      AND d.registry_id = %s AND d.folder = %s
-                      AND l.version = %s
-                      AND lower(l.holder_email) = lower(%s)
-                    """,
-                    (self._registry(), folder, version, holder_email or ""),
+                return (
+                    self._delete_edit_lock(
+                        cur, sch, folder, version, holder_email=holder_email
+                    )
+                    > 0
                 )
-                return cur.rowcount > 0
         except Exception as exc:  # noqa: BLE001
             logger.debug(
                 "release_edit_lock(%s/%s) failed: %s", folder, version, exc
@@ -3298,17 +3352,7 @@ class LakebaseRegistryStore(RegistryStore):
         try:
             sch = self._q(self._schema)
             with self._connect() as conn, conn.cursor() as cur:
-                cur.execute(
-                    f"""
-                    DELETE FROM {sch}.domain_edit_locks l
-                    USING {sch}.domains d
-                    WHERE l.domain_id = d.id
-                      AND d.registry_id = %s AND d.folder = %s
-                      AND l.version = %s
-                    """,
-                    (self._registry(), folder, version),
-                )
-                return cur.rowcount > 0
+                return self._delete_edit_lock(cur, sch, folder, version) > 0
         except Exception as exc:  # noqa: BLE001
             logger.debug(
                 "force_release_edit_lock(%s/%s) failed: %s",
@@ -3318,17 +3362,58 @@ class LakebaseRegistryStore(RegistryStore):
             )
             return False
 
+    def renew_edit_lock(
+        self, folder: str, version: str, *, holder_email: str
+    ) -> bool:
+        """Bump ``heartbeat_at`` iff the caller still holds the lock.
+
+        This is the lease keep-alive (called periodically by the holder's
+        browser). Returns ``False`` when the caller no longer holds the lock
+        — because someone reclaimed a stale lease or it was released/taken
+        over — which the client reads as "your editing session expired".
+        """
+        if not self._ensure_domain_edit_locks_table():
+            return False
+        try:
+            sch = self._q(self._schema)
+            with self._connect() as conn, conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    UPDATE {sch}.domain_edit_locks l
+                    SET heartbeat_at = now()
+                    FROM {sch}.domains d
+                    WHERE l.domain_id = d.id
+                      AND d.registry_id = %s AND d.folder = %s
+                      AND l.version = %s
+                      AND lower(l.holder_email) = lower(%s)
+                    """,
+                    (self._registry(), folder, version, holder_email or ""),
+                )
+                return cur.rowcount > 0
+        except Exception as exc:  # noqa: BLE001
+            logger.debug(
+                "renew_edit_lock(%s/%s) failed: %s", folder, version, exc
+            )
+            return False
+
     def get_edit_lock(
-        self, folder: str, version: str
+        self, folder: str, version: str, ttl_seconds: int = 0
     ) -> Optional[Dict[str, Any]]:
-        """Return the live lock row or ``None`` when the lock is free."""
+        """Return the live lock row or ``None`` when the lock is free.
+
+        When ``ttl_seconds > 0`` the returned dict carries ``is_stale`` — the
+        lease has lapsed (no renew within the TTL) and the lock is reclaimable
+        — so callers (e.g. the permission gate) can ignore an abandoned lock.
+        """
         if not self._ensure_domain_edit_locks_table():
             return None
         try:
             psycopg, dict_row = _require_psycopg()
             sch = self._q(self._schema)
             with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
-                row = self._get_edit_lock_row(cur, sch, folder, version)
+                row = self._get_edit_lock_row(
+                    cur, sch, folder, version, ttl_seconds=ttl_seconds
+                )
             return self._edit_lock_row_to_dict(row) if row else None
         except Exception as exc:  # noqa: BLE001
             logger.debug(
@@ -3337,39 +3422,56 @@ class LakebaseRegistryStore(RegistryStore):
             return None
 
     def _get_edit_lock_row(
-        self, cur: Any, sch: str, folder: str, version: str
+        self,
+        cur: Any,
+        sch: str,
+        folder: str,
+        version: str,
+        ttl_seconds: int = 0,
     ) -> Optional[Dict[str, Any]]:
-        """Fetch the live lock row for (folder, version) via an open cursor."""
+        """Fetch the live lock row for (folder, version) via an open cursor.
+
+        ``is_stale`` is computed server-side: true only when
+        ``ttl_seconds > 0`` and the lease has lapsed past the TTL.
+        """
+        ttl = max(0, int(ttl_seconds or 0))
         cur.execute(
             f"""
             SELECT l.holder_email, l.holder_name, l.holder_session,
-                   l.acquired_at
+                   l.acquired_at, l.heartbeat_at,
+                   (%s > 0 AND now() - l.heartbeat_at
+                             > make_interval(secs => %s)) AS is_stale
             FROM {sch}.domain_edit_locks l
             JOIN {sch}.domains d ON d.id = l.domain_id
             WHERE d.registry_id = %s AND d.folder = %s AND l.version = %s
             """,
-            (self._registry(), folder, version),
+            (ttl, ttl, self._registry(), folder, version),
         )
         return cur.fetchone()
 
-    def list_all_edit_locks(self) -> List[Dict[str, Any]]:
+    def list_all_edit_locks(self, ttl_seconds: int = 0) -> List[Dict[str, Any]]:
         """List every active edit lock across the registry (admin overview).
 
         Joins ``domains`` for the folder and ``domain_versions`` for the
-        current lifecycle status, newest lock first. Returns ``[]`` when the
-        lock backend is unavailable so the admin UI degrades to "no locks".
+        current lifecycle status, newest lock first. When ``ttl_seconds > 0``
+        each row carries ``is_stale`` so the admin Locks panel can flag an
+        abandoned lease that will auto-reclaim. Returns ``[]`` when the lock
+        backend is unavailable so the admin UI degrades to "no locks".
         """
         if not self._ensure_domain_edit_locks_table():
             return []
         try:
             psycopg, dict_row = _require_psycopg()
             sch = self._q(self._schema)
+            ttl = max(0, int(ttl_seconds or 0))
             with self._connect() as conn, conn.cursor(row_factory=dict_row) as cur:
                 cur.execute(
                     f"""
                     SELECT d.folder, l.version,
                            l.holder_email, l.holder_name, l.holder_session,
-                           l.acquired_at, v.status
+                           l.acquired_at, l.heartbeat_at, v.status,
+                           (%s > 0 AND now() - l.heartbeat_at
+                                     > make_interval(secs => %s)) AS is_stale
                     FROM {sch}.domain_edit_locks l
                     JOIN {sch}.domains d ON d.id = l.domain_id
                     LEFT JOIN {sch}.domain_versions v
@@ -3377,7 +3479,7 @@ class LakebaseRegistryStore(RegistryStore):
                     WHERE d.registry_id = %s
                     ORDER BY l.acquired_at DESC
                     """,
-                    (self._registry(),),
+                    (ttl, ttl, self._registry()),
                 )
                 rows = cur.fetchall()
             return [

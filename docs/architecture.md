@@ -764,7 +764,8 @@ For security and regeneration reasons, these are excluded from exports:
 |----------|--------|-------------|
 | `/domain/list-versions` | GET | List all versions of a domain |
 | `/domain/save-to-uc` | POST | Save domain to Unity Catalog |
-| `/domain/load-from-uc` | POST | Load specific version from UC |
+| `/domain/load-from-uc` | POST | Load a version from UC; on a domain switch closes the previously-open domain (releases its edit-lock) before loading, and returns a `lock` block |
+| `/domain/close` | POST | Release the loaded version's edit-lock and reset the session |
 | `/domain/create-version` | POST | Create new version (increment) |
 | `/domain/version-status` | GET | Get current version status |
 
@@ -1342,14 +1343,30 @@ OntoBricks provides a stateless REST API at `/api/v1/` for external applications
 >
 > On top of the lifecycle gate, a **single-editor lock** (`EditLockService` +
 > the Lakebase `domain_edit_locks` table) enforces that only one user edits a
-> given DRAFT `(domain, version)` at a time. The model is **release-based with
-> no TTL/heartbeat**: the first opener acquires the lock (on
-> `POST /domain/load-from-uc`), later openers are read-only, and the lock is
-> held until the holder explicitly closes the domain (`POST /domain/close`
-> releases the lock then resets the session), an admin **takes over**
-> (`POST /domain/edit-lock/acquire` with `force`), or the version leaves DRAFT
-> (`force_release`). `PermissionMiddleware` is authoritative — it 403s a
-> non-holder's mutating request on a DRAFT version (admins are not exempt).
+> given DRAFT `(domain, version)` at a time. The model is **renew-only lease**:
+> the first opener acquires the lock (on `POST /domain/load-from-uc`), later
+> openers are read-only, and the lock is held until the holder explicitly
+> closes the domain (`POST /domain/close` releases the lock then resets the
+> session), an admin **takes over** (`POST /domain/edit-lock/acquire` with
+> `force`), the version leaves DRAFT (`force_release`), or — when a lease TTL
+> is configured (`ONTOBRICKS_EDIT_LOCK_TTL_S`, seconds; default `600`, `0`
+> disables) — its lease lapses. The lease clock is the `heartbeat_at` column:
+> `acquire_edit_lock`'s `ON CONFLICT` reclaims a lock only when the current
+> holder has not renewed within the TTL, and the holder keeps it alive via
+> `POST /domain/edit-lock/renew` (a client timer pinging every ~TTL/3) plus the
+> per-page non-forcing acquire. The lock is **never released on unload**, so
+> ordinary multi-page navigation cannot free it mid-session — only the absence
+> of a renew for a full TTL can. `PermissionMiddleware` is authoritative — it
+> 403s a non-holder's mutating request on a DRAFT version (admins are not
+> exempt) but treats a **stale** lease as free (`blocking_holder` ignores it).
+>
+> **Opening a different domain closes the previous one first.** On a domain
+> switch, `load-from-uc` releases the prior domain's lock
+> (`EditLockService.release_prev`) **before** loading the new one, so a user
+> never holds two DRAFT locks at once. A same-domain **version** switch instead
+> releases the old version's lock **after** the new one loads
+> (`on_domain_loaded`), avoiding a needless release/re-acquire when reopening
+> the same version.
 >
 > Admins get a registry-wide view of every active lock via **Settings › Locks**
 > (`GET /settings/locks` → `EditLockService.list_all` →

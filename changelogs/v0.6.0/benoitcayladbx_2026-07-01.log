@@ -1167,3 +1167,100 @@ tests/units/registry/test_edit_lock_service.py
 tests/units/registry/test_edit_lock_store.py -q` → **38 passed**. Full suite
 `uv run pytest -q -m "not scenario"` → **2948 passed, 275 skipped, 0 failed**
 (2 new tests).
+
+## Code + docs review — safe fixups (dead code, consistency, docs)
+
+### Context
+
+Full review pass (rule compliance, duplication, dead code, session-data audit,
+tests, docs) over the session's changes. This entry records the low-risk
+fixups applied inline; larger refactors (EditLockService release-path
+consolidation, lakebase DELETE-SQL extraction, moving lock orchestration out
+of the route, and several session-data compute/remove candidates) were
+identified and proposed for a follow-up, not applied here.
+
+### Changes
+
+1. `tests/e2e/scenarios/test_scenario_01/02/03 + test_scenario_validation.py`
+   - Removed the dead `_base_url = base_url` alias and the now-unused
+     `base_url` import left over from the harness refactor (fixtures use
+     `base_url` via `conftest.py`).
+2. `src/api/routers/internal/domain.py`
+   - `load-from-uc` domain-switch detection is now case-insensitive
+     (`prev_folder.strip().lower() != domain.strip().lower()`), matching
+     `Domain._switch_domain_if_needed_for_resolve`.
+3. `tests/units/api/test_edit_lock_endpoints.py`
+   - Added module-level `pytestmark = pytest.mark.unit` (coding_rules §10);
+     dropped the redundant in-function `import pytest`.
+4. Docs — documented the two recent features:
+   - `docs/architecture.md`: edit-lock section now describes close-before-open
+     on a domain switch vs release-after-load on a same-domain version switch;
+     endpoint table expands `load-from-uc` and adds `POST /domain/close`.
+   - `docs/user-guide.md`: new bullet on the single-editor section clarifying
+     that opening a different domain (or switching version) releases the prior
+     lock.
+   - `README.md`: single-editor bullet updated; new **Testing** section
+     (routine `-m "not scenario"` vs `make scenario-campaign`).
+   - `docs/development.md`: markers block refreshed to match `pytest.ini`;
+     new **Live scenario campaign** subsection linking
+     `tests/e2e/scenarios/README.md`.
+
+### Modified files
+
+- `tests/e2e/scenarios/test_scenario_01_generate_live.py`
+- `tests/e2e/scenarios/test_scenario_02_collab_lifecycle.py`
+- `tests/e2e/scenarios/test_scenario_03_rules_analysis.py`
+- `tests/e2e/scenarios/test_scenario_validation.py`
+- `src/api/routers/internal/domain.py`
+- `tests/units/api/test_edit_lock_endpoints.py`
+- `docs/architecture.md`
+- `docs/user-guide.md`
+- `README.md`
+- `docs/development.md`
+
+### Test result
+
+`uv run pytest -q -m "not scenario"` → **2948 passed, 275 skipped, 0 failed**.
+Scenario collection unchanged (5 tests, ordered). No lint errors.
+
+## Deploy: re-pin `uv.lock` to the public CDN + redeploy v0.6.0
+
+### Context
+
+A `make deploy` pre-flight caught that the committed `uv.lock` (HEAD `e636189`,
+the "release previous domain's edit-lock" commit) had every URL rewritten back
+to `pypi-proxy.dev.databricks.com` (3994 proxied lines) — accidental churn from
+running `uv` in the proxied dev shell during that unrelated feature commit. The
+Apps container runs `uv run --frozen`, and the internal proxy cold-caches fresh
+wheels and times out, which crashes the deploy. The lock had last been correctly
+pinned to the public CDN in `d9cf05a`; the two dev-only deps added afterward
+(`pytest-html`, `pytest-dependency`) meant a wholesale revert to `d9cf05a` was
+not safe (it would drop them and break `--frozen`'s lock↔pyproject consistency).
+
+### Changes
+
+1. `uv.lock`
+   - Host-swapped both proxied URL forms back to the public CDN, preserving
+     HEAD's full dependency set (incl. the two new dev deps): every
+     `https://pypi-proxy.dev.databricks.com/packages/…` wheel/sdist URL →
+     `https://files.pythonhosted.org/packages/…` (identical paths + hashes,
+     verified against `d9cf05a`), and every
+     `registry = "https://pypi-proxy.dev.databricks.com/simple"` →
+     `registry = "https://pypi.org/simple"`. 3994 lines total (3658 file URLs +
+     336 registry lines). Confirmed 0 proxy references remain; only
+     `files.pythonhosted.org` (3658) and `pypi.org` (336) hosts; content diff vs
+     HEAD (ignoring URL/registry lines) is empty.
+
+### Modified files
+
+- `uv.lock`
+
+### Test result
+
+- Lockfile in sync: `UV_INDEX_URL=https://pypi.org/simple uv lock --check` → exit 0.
+- `uv run --frozen pytest -q -m "not scenario"` → **2948 passed, 275 skipped, 0
+  failed** in ~20s.
+- `make deploy` → both apps bootstrapped (`ontobricks-060`, `mcp-ontobricks-060`),
+  app-perms + Lakebase schema/permissions applied. App status `RUNNING` /
+  compute `ACTIVE` ("App started successfully"); `/healthz` → **HTTP 200** at
+  `https://ontobricks-060-2508734981122804.aws.databricksapps.com`.

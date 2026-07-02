@@ -81,12 +81,14 @@ def _bind(st, cur):
     return patch.object(st, "_connect", _cm)
 
 
-def _live_row(email="alice@acme.com", name="Alice"):
+def _live_row(email="alice@acme.com", name="Alice", is_stale=False):
     return {
         "holder_email": email,
         "holder_name": name,
         "holder_session": "sess",
         "acquired_at": _NOW,
+        "heartbeat_at": _NOW,
+        "is_stale": is_stale,
     }
 
 
@@ -106,11 +108,13 @@ def test_acquire_when_free_grants_to_caller():
     assert res["acquired"] is True
     assert res["is_self"] is True
     assert res["holder_email"] == "alice@acme.com"
-    # The upsert is an ON CONFLICT with no TTL clause; force is the last param.
+    # The upsert is an ON CONFLICT that reclaims a stale lease (make_interval).
+    # Params tail is (force, ttl, ttl); default call → ttl 0 (lease off).
     upsert_sql, upsert_params = cur.executed[0]
     assert "ON CONFLICT" in upsert_sql
-    assert "make_interval" not in upsert_sql  # no TTL / stale reclamation
-    assert upsert_params[-1] is False  # force
+    assert "make_interval" in upsert_sql
+    assert upsert_params[-3] is False  # force
+    assert upsert_params[-2:] == (0, 0)  # ttl disabled by default
 
 
 def test_acquire_when_held_by_other_returns_not_acquired():
@@ -136,7 +140,23 @@ def test_acquire_force_passes_true():
             "acme", "1", holder_email="alice@acme.com", force=True
         )
     _, upsert_params = cur.executed[0]
-    assert upsert_params[-1] is True
+    assert upsert_params[-3] is True  # force (ttl pair follows)
+
+
+def test_acquire_passes_ttl_for_stale_reclaim():
+    st = _store()
+    cur = _FakeCursor(fetchone_results=[{"holder_email": "alice@acme.com"}, _live_row()])
+    with _bind(st, cur):
+        st.acquire_edit_lock(
+            "acme", "1", holder_email="alice@acme.com", ttl_seconds=600
+        )
+    upsert_sql, upsert_params = cur.executed[0]
+    assert "make_interval" in upsert_sql
+    # force False, then the TTL passed twice (guard + interval).
+    assert upsert_params[-3:] == (False, 600, 600)
+    # The live-row read after the upsert also carries the TTL (is_stale calc).
+    _, live_params = cur.executed[1]
+    assert live_params[:2] == (600, 600)
 
 
 def test_acquire_no_domain_row_returns_empty():
@@ -184,11 +204,24 @@ def test_get_edit_lock_returns_holder():
     st = _store()
     cur = _FakeCursor(fetchone_results=[_live_row(email="bob@acme.com", name="Bob")])
     with _bind(st, cur):
-        lock = st.get_edit_lock("acme", "1")
+        lock = st.get_edit_lock("acme", "1", ttl_seconds=600)
     assert lock is not None
     assert lock["holder_email"] == "bob@acme.com"
     assert lock["holder_name"] == "Bob"
-    assert "stale" not in lock  # no TTL / stale concept anymore
+    assert lock["is_stale"] is False  # fresh lease
+    # The staleness TTL is threaded into the SELECT (is_stale calc).
+    _, params = cur.executed[0]
+    assert params[:2] == (600, 600)
+
+
+def test_get_edit_lock_flags_stale_lease():
+    st = _store()
+    cur = _FakeCursor(
+        fetchone_results=[_live_row(email="bob@acme.com", is_stale=True)]
+    )
+    with _bind(st, cur):
+        lock = st.get_edit_lock("acme", "1", ttl_seconds=600)
+    assert lock["is_stale"] is True
 
 
 def test_get_edit_lock_none_when_absent():
@@ -196,6 +229,33 @@ def test_get_edit_lock_none_when_absent():
     cur = _FakeCursor(fetchone_results=[None])
     with _bind(st, cur):
         assert st.get_edit_lock("acme", "1") is None
+
+
+# ----------------------------------------------------------------------
+# renew_edit_lock (lease keep-alive)
+# ----------------------------------------------------------------------
+
+
+def test_renew_true_when_holder_row_updated():
+    st = _store()
+    cur = _FakeCursor(rowcount=1)
+    with _bind(st, cur):
+        assert (
+            st.renew_edit_lock("acme", "1", holder_email="alice@acme.com")
+            is True
+        )
+    sql, _ = cur.executed[0]
+    assert "heartbeat_at = now()" in sql
+
+
+def test_renew_false_when_not_holder():
+    st = _store()
+    cur = _FakeCursor(rowcount=0)
+    with _bind(st, cur):
+        assert (
+            st.renew_edit_lock("acme", "1", holder_email="alice@acme.com")
+            is False
+        )
 
 
 # ----------------------------------------------------------------------
@@ -222,7 +282,8 @@ def test_list_all_edit_locks_maps_rows():
     sql, params = cur.executed[0]
     assert "domain_edit_locks" in sql
     assert "domain_versions" in sql
-    assert params == ("reg-1",)
+    # TTL pair (is_stale calc) precedes the registry id.
+    assert params == (0, 0, "reg-1")
 
 
 def test_list_all_edit_locks_empty():

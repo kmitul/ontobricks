@@ -1,0 +1,264 @@
+# 2026-07-02 — benoitcayladbx — v0.6.0
+
+## Edit-lock refactor + failed-switch hardening + dead session-data removal
+
+### Context
+
+Follow-up to the code review of the "close-before-open" edit-lock change. The
+review approved (a) consolidating the duplicated holder-release logic, (b)
+de-duplicating the edit-lock DELETE SQL, (c) moving the load-from-uc lock
+orchestration out of the route into `EditLockService`, (d) hardening the failed
+cross-domain switch so a released lock is not orphaned, and (e) removing dead
+session-data. All changes are behaviour-preserving except (d), which closes a
+correctness gap, and (e), which drops an unused field.
+
+### Changes
+
+1. `src/back/objects/registry/EditLockService.py`
+   - `on_domain_loaded` now reuses `release_prev` for its previous-version
+     release instead of an inline `store.release_edit_lock` try/except — the
+     holder-scoped release lives in one place (Extract/Reuse).
+   - Added `release_prev_on_switch(...)`: encapsulates the case-insensitive
+     domain-switch detection and the pre-load release, returning whether this
+     was a cross-domain switch. Moves that decision out of the route.
+   - Added `reacquire(...)`: best-effort restore of a specific
+     `(folder, version)` lock, used when a cross-domain switch's load fails
+     after the previous lock was already freed. Never raises.
+2. `src/api/routers/internal/domain.py`
+   - `load_domain_from_uc` thinned to delegate to
+     `EditLockService.release_prev_on_switch` (pre-load) and `on_domain_loaded`
+     (post-load).
+   - Failed-switch hardening: if the load raises *or* returns a failure
+     envelope after a cross-domain release, the previous lock is re-acquired via
+     `EditLockService.reacquire` so a failed switch never orphans the user's
+     lock on the domain they came from.
+3. `src/back/objects/registry/store/lakebase/store.py`
+   - Extracted `_delete_edit_lock(cur, sch, folder, version, holder_email=None)`
+     shared by `release_edit_lock` (holder-scoped) and `force_release_edit_lock`
+     (unconditional) — removes the duplicated DELETE … USING SQL.
+4. `src/back/objects/session/DomainSession.py`
+   - Removed the dead `triplestore.source_versions` init entry (no property,
+     reader, or writer referenced it anywhere in `src/`); tidied the
+     `triplestore` property docstring.
+
+### Tests
+
+- `tests/units/registry/test_edit_lock_service.py`: added coverage for
+  `release_prev`, `release_prev_on_switch` (switch + same-domain defer, case
+  insensitive), `reacquire`, and `on_domain_loaded`'s deferred version-switch
+  release.
+- `tests/units/api/test_edit_lock_endpoints.py`: added failed-switch
+  re-acquire tests (failure envelope + raised exception); made the existing
+  "no lock block on failure" test's empty-prev intent explicit.
+
+### Modified files
+
+- `src/back/objects/registry/EditLockService.py`
+- `src/api/routers/internal/domain.py`
+- `src/back/objects/registry/store/lakebase/store.py`
+- `src/back/objects/session/DomainSession.py`
+- `tests/units/registry/test_edit_lock_service.py`
+- `tests/units/api/test_edit_lock_endpoints.py`
+
+### Test result
+
+- `uv run pytest -q -m "not scenario"` → **2957 passed, 275 skipped, 5
+  deselected** in ~28s.
+- `uv run pytest tests/e2e/scenarios --collect-only -q` → 5 scenario tests
+  collected (no import regressions).
+- Lint clean on all changed files.
+
+### Notes / deferred
+
+- `triplestore.build_last_update`, `is_active_version`, and `precision_score`
+  were reviewed but **kept**: `build_last_update` is written by the dtwin build
+  route and read by the build pipeline; `is_active_version`/`precision_score`
+  are cached values whose "compute on read" would change behaviour / recompute
+  pitfalls on every read (out of scope for a behaviour-preserving pass).
+
+
+## Edit-lock lease — auto-expire abandoned locks (renew-only, no unload-release)
+
+### Context
+
+The single-editor DRAFT lock had **no auto-expiry**: a crashed browser or a tab
+closed without hitting **Close** held the lock forever, recoverable only by an
+admin force-unlock (Settings › Locks) or take-over. Requested: a lease so
+abandoned locks free themselves. The earlier heartbeat model was removed
+precisely because it *released on unload*, and a multi-page app unloads on every
+navigation — so the lock got stolen mid-session. This adds a **renew-only
+lease**: the lock is never released on unload; it only lapses when the holder
+stops renewing for a full TTL, at which point the next opener silently reclaims
+it. Reuses the long-dormant `heartbeat_at` column as the lease clock (no
+migration). Config: `ONTOBRICKS_EDIT_LOCK_TTL_S` (seconds, default `600`; `0`
+disables the lease → prior hold-until-close behaviour).
+
+### Changes
+
+1. `src/back/objects/registry/store/lakebase/store.py`
+   - `acquire_edit_lock(..., ttl_seconds=0)`: `ON CONFLICT` now also grants when
+     the current lease is **stale** (`ttl > 0 AND now() - heartbeat_at >
+     make_interval(secs => ttl)`). Bumps `heartbeat_at = now()` on every grant;
+     resets `acquired_at` only when the holder actually changes (a same-holder
+     refresh keeps the original session start via a `CASE`).
+   - New `renew_edit_lock(folder, version, *, holder_email)` → `UPDATE
+     heartbeat_at = now()` iff the caller still holds it; `False` = lease lost.
+   - `get_edit_lock(..., ttl_seconds=0)` / `_get_edit_lock_row(...)` compute an
+     `is_stale` flag server-side and return `heartbeat_at`.
+   - `list_all_edit_locks(ttl_seconds=0)` adds `heartbeat_at` + `is_stale` for
+     the admin Locks panel.
+2. `src/back/objects/registry/EditLockService.py`
+   - New `renew(...)` → `{success, renewed}` (DRAFT-gated, holder-scoped).
+   - `_ttl_seconds()` reads `ONTOBRICKS_EDIT_LOCK_TTL_S` (default 600, `0`
+     disables); threaded into every `acquire_edit_lock` / `get_edit_lock` /
+     `list_all_edit_locks` call.
+   - `blocking_holder` now treats a **stale** lease as *not blocking*, so the
+     `PermissionMiddleware` edit gate never locks a new editor out on an
+     abandoned lock.
+   - Status/acquire payloads carry `lease_ttl_s` (client renew-cadence hint).
+3. `src/api/routers/internal/domain.py`
+   - New `POST /domain/edit-lock/renew` → `EditLockService.renew(...)`. (No
+     middleware change: it inherits the same treatment as `/edit-lock/acquire`
+     and is not status-gated, so it never trips the edit-lock 403 gate.)
+4. `src/front/static/global/js/edit-lock.js`
+   - While `mode == "edit"` and `lease_ttl_s > 0`, a keep-alive timer pings
+     `/domain/edit-lock/renew` every ~TTL/3 (and on tab re-focus). Never
+     releases on unload — the timer just dies and the lease lapses naturally.
+   - On a lost lease (`renewed === false`) it flips to read-only and shows a
+     new **"your editing session expired — read-only, saving disabled"** banner
+     with a **Reload** button. Transient network/backend blips are ignored (the
+     next tick retries).
+
+### Docs
+
+- `docs/user-guide.md`, `docs/architecture.md`, `docs/features.md`: rewrote the
+  single-editor sections from "release-based, no TTL" to the renew-only lease
+  (auto-expiry, background renew, `ONTOBRICKS_EDIT_LOCK_TTL_S`, expired banner,
+  stale-lease handling in the gate + admin panel).
+
+### Tests
+
+- `tests/units/registry/test_edit_lock_store.py`: TTL reclaim clause + params,
+  `renew_edit_lock` (holder / non-holder), `get_edit_lock` `is_stale` calc +
+  stale passthrough, updated `list_all` params to the TTL pair.
+- `tests/units/registry/test_edit_lock_service.py`: `renew` (renewed / lost /
+  non-DRAFT no-op), `status` exposes `lease_ttl_s` + forwards `ttl_seconds`,
+  `blocking_holder` ignores a stale lease.
+- `tests/units/api/test_edit_lock_endpoints.py`: `/domain/edit-lock/renew`
+  delegation.
+
+### Modified files
+
+- `src/back/objects/registry/store/lakebase/store.py`
+- `src/back/objects/registry/EditLockService.py`
+- `src/api/routers/internal/domain.py`
+- `src/front/static/global/js/edit-lock.js`
+- `tests/units/registry/test_edit_lock_store.py`
+- `tests/units/registry/test_edit_lock_service.py`
+- `tests/units/api/test_edit_lock_endpoints.py`
+- `docs/user-guide.md`, `docs/architecture.md`, `docs/features.md`
+
+### Test result
+
+- Edit-lock suites (`test_edit_lock_store` + `_service` + `_endpoints`) →
+  **57 passed**.
+- Full `uv run pytest -q -m "not scenario"` → **2967 passed, 275 skipped, 5
+  deselected** in ~28s. Lint clean on all changed files.
+- No schema migration: `heartbeat_at` already exists live and in `schema.sql`
+  (retained from the original heartbeat model).
+
+
+## Refactor — group the edit-lock service into a `lockmgt` subpackage
+
+### Context
+
+Follow-up housekeeping: gather the lock-specific application code into a
+dedicated subpackage instead of a lone module beside the other registry
+services. Only `EditLockService` is a standalone lock module and is cleanly
+movable. The lock's *persistence* (`acquire_edit_lock` / `renew_edit_lock` /
+… on `LakebaseRegistryStore`) stays with the store — extracting it would split
+a class across files (forbidden by `.cursor/07`); the HTTP routes, `schema.sql`
+DDL, and the `edit-lock.js` static asset likewise stay in their layers. This is
+a pure **Move Module** refactor — behaviour unchanged.
+
+Refactoring applied: *Move Module* (Fowler) + package re-export via
+`__init__.py` per `.cursor/07 §__init__.py Conventions` ("import from the
+package").
+
+### Changes
+
+1. `src/back/objects/registry/lockmgt/` (new subpackage)
+   - `EditLockService.py` — moved here from
+     `src/back/objects/registry/EditLockService.py` (`git mv`, content
+     unchanged; its imports were already absolute).
+   - `__init__.py` — re-exports `EditLockService` + the `MODE_EDIT` /
+     `MODE_VIEW` / `MODE_NONE` constants.
+2. Import sites repointed to `from back.objects.registry.lockmgt import
+   EditLockService`:
+   - `src/api/routers/internal/domain.py` (7), `settings.py` (2), `home.py`,
+     `src/shared/fastapi/main.py`.
+3. Tests repointed to the new module path
+   (`back.objects.registry.lockmgt.EditLockService`):
+   - `tests/units/registry/test_edit_lock_service.py`,
+     `tests/units/api/test_edit_lock_endpoints.py`.
+4. `docs/sphinx/api/app.objects.registry.rst` — `automodule` path updated to
+   `back.objects.registry.lockmgt.EditLockService`.
+
+### Modified files
+
+- `src/back/objects/registry/lockmgt/__init__.py` (new)
+- `src/back/objects/registry/lockmgt/EditLockService.py` (moved)
+- `src/api/routers/internal/domain.py`
+- `src/api/routers/internal/settings.py`
+- `src/api/routers/internal/home.py`
+- `src/shared/fastapi/main.py`
+- `tests/units/registry/test_edit_lock_service.py`
+- `tests/units/api/test_edit_lock_endpoints.py`
+- `docs/sphinx/api/app.objects.registry.rst`
+
+### Test result
+
+- Lock + permission-middleware suites → **310 passed**.
+- Full `uv run pytest -q -m "not scenario"` → **2967 passed, 275 skipped, 5
+  deselected**. Lint clean; no behavioural change.
+
+
+## Feature — lease countdown tooltip on the navbar domain badge
+
+### Context
+
+With the renew-only lease in place, the remaining lease time was invisible.
+Added a hover tooltip on the navbar domain badge that shows — only while this
+browser is the editor — a live countdown of the lease (time until expiry if the
+tab goes idle). Frontend-only; reuses the Bootstrap `Tooltip` already used
+elsewhere (e.g. `permissions.js`).
+
+### Changes
+
+1. `src/front/static/global/js/edit-lock.js`
+   - Track `leaseTtlS` + `lastRenewAt`; `startRenew` records the lease start and
+     `doRenew` resets `lastRenewAt` on each confirmed renew (`renewed === true`).
+   - `setupLeaseTooltip()` attaches a Bootstrap tooltip to `#currentDomainName`
+     (the navbar domain badge) with a dynamic title; it is created only in the
+     `mode === "edit"` branch (i.e. only while editing) and only when a lease is
+     configured. On `shown.bs.tooltip` a 1s timer refreshes the tooltip content
+     (`setContent`) so the `M:SS` countdown ticks live; cleared on hide.
+   - `teardownLeaseTooltip()` disposes the tooltip + timer and is called from
+     `onLeaseLost` (editing ended → tooltip removed).
+   - Graceful no-op when Bootstrap's `Tooltip` is unavailable.
+
+### Docs
+
+- `docs/user-guide.md`: single-editor section notes the hover countdown on the
+  navbar domain name.
+
+### Modified files
+
+- `src/front/static/global/js/edit-lock.js`
+- `docs/user-guide.md`
+
+### Test result
+
+- Frontend-only (no Python touched). `node --check` clean; JS lint clean.
+- `uv run pytest -q -m "not scenario"` → **2967 passed, 275 skipped, 5
+  deselected** (unchanged; re-run for the post-change routine).

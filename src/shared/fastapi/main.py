@@ -461,7 +461,7 @@ class PermissionMiddleware(BaseHTTPMiddleware):
         """
         try:
             from back.objects.session import SessionManager
-            from back.objects.registry.EditLockService import EditLockService
+            from back.objects.registry.lockmgt import EditLockService
 
             session_mgr = SessionManager(request)
             return EditLockService.blocking_holder(

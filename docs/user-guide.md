@@ -769,9 +769,19 @@ To keep two people from silently overwriting each other, a **DRAFT** version can
 - Anyone who opens the **same** domain/version afterwards gets it **read-only (view mode)**,
   with a banner naming the current editor. All write surfaces are disabled — they can still
   browse, query and inspect everything.
-- The lock is **held until the editor explicitly closes the domain** — there is no timeout.
-  Simply navigating around the app or closing a tab does **not** hand the domain to someone
-  else; the editor keeps it until they click **Close**.
+- The lock is **held until the editor explicitly closes the domain**, or until their
+  editing session goes idle for the lease period (10 minutes by default). Simply navigating
+  around the app keeps the lease alive automatically, and closing a tab does **not** hand the
+  domain to someone else straight away — the editor keeps it until they click **Close** or
+  the lease lapses. The editor's browser quietly renews the lease in the background while the
+  domain is open, so an actively-used session never expires. **Hover the domain name in the
+  top navbar** while you are editing to see a live countdown of the remaining lease (the time
+  before it would expire if the tab went idle).
+- **Opening a different domain closes the current one for you.** Loading another domain
+  (navbar **Load Domain**, or **Registry → Browse → Load**) releases your lock on the
+  previously-open domain **before** the new one opens, so you never hold two locks at once.
+  Switching to another **version of the same domain** releases the old version's lock
+  **after** the new version loads.
 
 **Closing a domain** — the top sub-navigation shows three buttons: **Save** (persist the
 domain to the registry), **Switch**, and **Close**. Clicking **Close** asks whether to *save
@@ -785,15 +795,24 @@ current version to **reload** it from the Registry (discarding in-session edits)
 version to **switch** to it. A *"Save my changes before switching"* box is ticked by default —
 leave it on to persist your work first, or untick it to discard unsaved changes.
 
-**Stuck lock?** Because there is no auto-expiry, a lock left behind (e.g. a browser that
-crashed without closing) stays until it is cleared. There are two ways to clear it:
+**Stuck lock?** A lock left behind (e.g. a browser that crashed without closing) clears
+itself: once its lease lapses (no renew for the TTL, 10 minutes by default) the next person
+to open the version silently reclaims it — no admin action needed. If the original editor
+comes back after that, they see a *"your editing session expired"* banner and can **Reload**
+to reconnect (regaining edit if no one else has taken over). For an immediate hand-off there
+are also two manual paths:
 
 - An **app-admin** viewing the locked version gets a **Take over editing** button that
   reclaims the lock; the previous editor becomes read-only on their next page load.
 - From **Settings → Admin → Locks** (admin only), an admin sees *every* active edit-lock
-  across the registry — domain, version, lifecycle status, who holds it, and when it was
-  acquired — and can **force-unlock** any of them without opening that domain first
-  (a confirmation dialog names the domain, version, and holder).
+  across the registry — domain, version, lifecycle status, who holds it, when it was
+  acquired, and whether its lease has gone stale — and can **force-unlock** any of them
+  without opening that domain first (a confirmation dialog names the domain, version, and
+  holder).
+
+> The lease TTL is configurable via the `ONTOBRICKS_EDIT_LOCK_TTL_S` environment variable
+> (seconds; default `600`). Set it to `0` to disable auto-expiry entirely and require an
+> explicit Close / admin take-over, as in earlier releases.
 
 A version also releases its lock automatically when it leaves DRAFT (submitted for review /
 published). The read-only banner and the sidebar role badge both name the current holder,
