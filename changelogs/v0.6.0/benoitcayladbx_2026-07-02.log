@@ -532,3 +532,315 @@ generic input/textarea/select gate catching the offcanvas fields.
 - `uv run pytest -q -m "not scenario"` → **2971 passed, 275 skipped, 5
   deselected** in ~26s (the discussion-panel asset contract test still passes —
   its token assertions are unaffected by the added `data-collab` attributes).
+
+## Move the "Current Domain" KPI band from Home to Domain → Information
+
+### Context
+
+The Home page led with a "Current Domain" card (domain name header + a six-tile
+KPI / health band: Entities, Relationships, Mappings, Quality, Status, Version)
+plus Settings / About quick links. The band is really *domain* context, so it
+belongs on Domain → Information. Per request, the band moves to Information while
+the Settings and About buttons stay on the Home page.
+
+### Changes
+
+1. `src/front/templates/home.html`
+   - Removed the `#sessionPanel` "Current Domain" card (header + KPI band). Kept
+     the Settings / About `quick-link-sm` buttons (now in a right-aligned row)
+     and the `#domainStatus` element used by the New Domain flow.
+2. `src/front/templates/partials/domain/_domain_information.html`
+   - Added the KPI band as a `domain-panel` (`#domainKpiPanel`) at the top of the
+     section, reusing the same tile ids (`kpiEntities` … `kpiVersion`).
+3. `src/front/static/home/js/home.js`
+   - Removed the KPI logic (`loadHomeStatus`, `renderKpis`, `setKpiValue`,
+     `renderQualityKpi`, `renderStatusKpi`, `renderVersionKpi`, `statusBadge`)
+     and its `DOMContentLoaded` call; updated the file header comment.
+4. `src/front/static/domain/js/domain-information.js`
+   - Ported the KPI population into a self-contained IIFE (no new globals) that
+     fetches `/domain/info` + `/session-status` and fills the tiles on load,
+     guarded by the presence of `#domainKpiPanel`.
+5. `src/front/static/global/css/components.css`
+   - Added the reusable `.ob-kpi-band` responsive grid (moved from home.css and
+     renamed from `.home-kpi-band`) next to the shared `.ob-kpi-tile` rules.
+6. `src/front/static/home/css/home.css`
+   - Removed the now-unused `.home-kpi-band` rules.
+7. `tests/units/api/test_ui_rendering.py`
+   - Replaced the Home `test_domain_panel` / `test_kpi_band` asserts with
+     `test_kpi_band_moved_off_home` (Home no longer has `#sessionPanel` /
+     `#homeDomainName` / `#kpiEntities`) and added a `test_kpi_band` on the
+     Domain page asserting `#domainKpiPanel` + the six tiles.
+8. `tests/e2e/navigation/test_navigation_flows.py`
+   - Replaced `test_domain_panel_visible` with `test_quick_links_visible`
+     (Settings / About links still on Home).
+
+### Modified files
+
+- `src/front/templates/home.html`
+- `src/front/templates/partials/domain/_domain_information.html`
+- `src/front/static/home/js/home.js`
+- `src/front/static/domain/js/domain-information.js`
+- `src/front/static/global/css/components.css`
+- `src/front/static/home/css/home.css`
+- `tests/units/api/test_ui_rendering.py`
+- `tests/e2e/navigation/test_navigation_flows.py`
+
+### Test result
+
+- `node --check` on both edited JS files → clean.
+- `uv run pytest tests/units/api/test_ui_rendering.py -q` → **117 passed** in ~2s.
+
+## Fix: Settings → Locks showed a stale snapshot on re-entry
+
+### Context
+
+Opening Settings → Locks a second time (switch away and back, or return later)
+kept showing the lock list from the *first* visit — you had to hit the Refresh
+button to see the real current locks. The `sidebarSectionChanged` handler only
+called `loadLocks()` on the first visit, guarded by a one-shot `locksLoaded`
+flag; on re-entry the guard short-circuited, so the SPA-retained table was never
+re-fetched. The Refresh button "worked" only because it reset `locksLoaded`.
+
+### Changes
+
+1. `src/front/static/config/js/settings-locks.js`
+   - Removed the one-shot `locksLoaded` guard so `loadLocks()` runs every time
+     the Locks section is (re-)opened — the table now always reflects the
+     current locks. Simplified the Refresh and post-release handlers (no flag to
+     reset) and dropped the now-dead `locksLoaded = true` in `loadLocks`. Updated
+     the file header comment to describe the re-fetch-on-open behaviour.
+
+### Modified files
+
+- `src/front/static/config/js/settings-locks.js`
+
+### Test result
+
+- `node --check src/front/static/config/js/settings-locks.js` → clean.
+- `uv run pytest -q -m "not scenario"` → **2971 passed, 275 skipped** (no test
+  references the Locks tab JS; behaviour is client-side lazy-load timing).
+
+## Home page: drop Settings / About links, lift My Tasks above All Domains
+
+### Context
+
+Follow-up to moving the KPI band off Home. The Settings / About quick links are
+redundant (both are reachable from the navbar), and the review worklist is more
+useful up top than buried below the domain gateway.
+
+### Changes
+
+1. `src/front/templates/home.html`
+   - Removed the Settings / About `quick-link-sm` row.
+   - Reordered so the My Tasks section (`#homeTasksSection`) renders above the
+     All Domains gateway. Kept `#domainStatus` (used by the New Domain flow).
+2. `tests/units/api/test_ui_rendering.py`
+   - Replaced `test_quick_links` with `test_no_quick_links` (no `/settings` or
+     `/about` `quick-link-sm` on Home) and added `test_my_tasks_before_domains`
+     (My Tasks precedes the domain gateway in source order).
+3. `tests/e2e/navigation/test_navigation_flows.py`
+   - Replaced `test_quick_links_visible` with `test_all_domains_gateway_visible`
+     (gateway present, no quick links).
+
+### Modified files
+
+- `src/front/templates/home.html`
+- `tests/units/api/test_ui_rendering.py`
+- `tests/e2e/navigation/test_navigation_flows.py`
+
+### Test result
+
+- `uv run pytest tests/units/api/test_ui_rendering.py -q` → **118 passed** in ~2s.
+
+## Review pass: KPI band fetch dedup + docs/API verification
+
+### Context
+
+Code-review / refactor pass over the Home → Information KPI-band move and the
+Locks re-fetch fix. Reviewed changed files against `src/.coding_rules.md`,
+checked for duplication and dead code, verified the API surface and docs are
+current, and re-ran the full suite.
+
+### Findings & changes
+
+1. `src/front/static/domain/js/domain-information.js` (refactor)
+   - The ported KPI loader fetched `/domain/info` with a raw `fetch`, but the
+     file's main version-status loader already pulls `/domain/info` via
+     `fetchOnce`. Switched the KPI loader to `fetchOnce('/domain/info')` +
+     `fetchOnce('/session-status')` so the page makes a single `/domain/info`
+     round-trip (`.cursor/06 performance`). No behaviour change.
+2. Duplication / dead code — none introduced: the KPI helpers were *moved* from
+   `home.js` into a self-contained IIFE (not duplicated); no dangling references
+   to the removed `loadHomeStatus` / `renderKpis` / `home-kpi-band` /
+   `#sessionPanel` / `#homeDomainName` remain (grep-verified across the repo).
+3. API check — no endpoints changed this session. Verified the endpoints the
+   touched frontend calls (`/domain/info`, `/session-status`, `/settings/locks`)
+   and the edit-lock TTL routes exist and match the docs (`GET
+   /settings/edit-lock-ttl`, `POST /settings/save-edit-lock-ttl` in
+   `settings.py` ↔ `docs/api.md`).
+4. Docs — `features.md` / `architecture.md` / `user-guide.md` already describe
+   the renew-only lease and admin Locks accurately; no doc describes the Home
+   dashboard layout, so moving the KPI band to Domain → Information needs no doc
+   rewrite. The KPI 1-column report was an asset-cache artifact (`asset_version`
+   is fixed at server startup); a restart/redeploy serves the new
+   `.ob-kpi-band` grid and renders the six tiles in one row.
+
+### Modified files
+
+- `src/front/static/domain/js/domain-information.js`
+
+### Test result
+
+- `node --check src/front/static/domain/js/domain-information.js` → clean.
+- `uv run pytest -q -m "not scenario"` → **2972 passed, 275 skipped, 5
+  deselected** in ~28s.
+
+## Fix: OWL generator silently accepted token-truncated output (scenario 1)
+
+### Context
+
+Live scenario 1 intermittently timed out ("Wizard did not produce an ontology
+within 420s") with **0 classes**. Root cause (from `logs/ontobricks.log`): the
+generator's final Turtle answer hit the output-token cap, so `OntologyParser`
+logged *"Content appeared truncated"* and `parse_rdf_flexible` failed for every
+RDF syntax (turtle/xml/n3/nt/json-ld) → empty ontology. `agent_owl_generator`
+called the endpoint with a fixed `max_tokens=4096` and, in the text-answer
+branch, accepted the content **unconditionally** — it logged `finish_reason` but
+never acted on `finish_reason == "length"`. A CRM/energy guideline (5 classes +
+relationships + labels/comments), especially after a pitfall-fix round re-emits
+the whole ontology, sits right at the 4096 boundary — hence the intermittency.
+
+This is an LLM-agent change → handled under the AI-feature lifecycle gate
+(`.cursor/12`), hotfix/regression tier: SPEC failure-mode + regression dataset +
+unit coverage.
+
+### Changes
+
+1. `src/agents/agent_owl_generator/engine.py`
+   - Added `_GEN_MAX_TOKENS = 8192` (the documented endpoint output cap, matching
+     `agent_auto_icon_assign._ABSOLUTE_MAX_TOKENS`) and used it at both
+     `call_serving_endpoint` sites (was `4096`).
+   - Added a **truncation guard** in the text-answer branch: when
+     `finish_reason == "length"`, the cut-off Turtle is no longer accepted — the
+     agent is asked to re-emit the complete ontology concisely (within
+     `MAX_ITERATIONS`), or the run fails with an explicit "output truncated"
+     error instead of landing a silent empty ontology.
+2. `tests/units/agents/test_agent_owl_generator_truncation.py` (new)
+   - Hermetic guard coverage (patched `call_serving_endpoint`): truncated→complete
+     recovers; a truncated answer is never accepted verbatim; persistent
+     truncation fails loudly.
+3. `tests/eval/datasets/agent_owl_generator/regression.jsonl` (new)
+   - The failing CRM/energy guideline captured as the regression case.
+4. `.planning/agents/agent_owl_generator/SPEC.md`
+   - Documented the truncation failure mode + mitigation; recorded the `8192`
+     token budget in the identity table.
+
+### Modified files
+
+- `src/agents/agent_owl_generator/engine.py`
+- `tests/units/agents/test_agent_owl_generator_truncation.py` (new)
+- `tests/eval/datasets/agent_owl_generator/regression.jsonl` (new)
+- `.planning/agents/agent_owl_generator/SPEC.md`
+
+### Test result
+
+- `uv run pytest tests/units/agents/test_agent_owl_generator_truncation.py -q`
+  → **3 passed**.
+- Live re-validation (restart local app to load the new engine, then Ontology →
+  Generate with the CRM/energy guideline / scenario 1) — pending.
+
+## OWL generator: over-generation (class-explosion) guard
+
+### Context
+
+After the `8192` truncation fix, scenario 1 got *past* generation but failed at
+**auto-map**: `Auto-Map produced no entity SQL within 600s`. Root cause was not
+the mapper — it was genuinely working (`Chunk 9/22 done: +45 entities`) — but
+the generator over-decomposed the ~5-entity CRM/energy guideline into **110
+`owl:Class` declarations** (one class per column/value: `VatAmount`,
+`MeterReading`, `Payment`, `Call`, …). The auto-mapper chunks ~5 classes/chunk
+with cool-downs, so 110 classes → ~22 chunks → ~18 min, well past the scenario
+`AUTOMAP_TIMEOUT`. The healthy baseline is ~10 classes / 4 chunks. The prompt
+was the culprit: `GENERIC_GUIDELINES` authorised "30–60 classes" and the model
+blew past even that.
+
+This is an LLM-agent change → AI-feature lifecycle gate (`.cursor/12`),
+hotfix/regression tier: prompt tightening + a deterministic, unit-testable
+guard + SPEC failure-mode + regression dataset.
+
+### Changes
+
+1. `src/agents/agent_owl_generator/engine.py`
+   - Prompt: replaced the `GENERIC_GUIDELINES` "Size limits per iteration:
+     30–60 classes" with "prefer the smallest set that covers the input
+     (typically 8–25), one class per real-world entity, **never a class per
+     column or attribute value** (those are datatype properties), hard limit
+     40, consolidate rather than add".
+   - Guard: added `_DEFAULT_MAX_CLASSES = 40`, `_MAX_CONSOLIDATE_ROUNDS = 2`,
+     and `_count_owl_classes()` (regex over `a`/`rdf:type owl:Class`). In the
+     text-answer branch, when the accepted Turtle exceeds `max_classes` the
+     agent is asked (bounded by the round cap) to consolidate to the core
+     entities before accepting; on exhaustion it accepts the best available
+     ontology (no infinite loop). Overridable via `options["max_classes"]`
+     (`<=0` disables).
+2. `tests/units/agents/test_agent_owl_generator_class_cap.py` (new)
+   - Hermetic guard coverage (patched `call_serving_endpoint`): count helper;
+     over-cap→consolidated recovers; under-cap accepted directly; guard
+     disabled via `max_classes=0`; persistent over-cap accepts best after the
+     bounded rounds.
+3. `tests/eval/datasets/agent_owl_generator/regression.jsonl`
+   - Added `regression-crm-energy-overgeneration-002` (same CRM guideline,
+     `max_classes: 40` constraint).
+4. `.planning/agents/agent_owl_generator/SPEC.md`
+   - Added the "Over-generation / class explosion" failure mode + mitigation
+     and recorded `max_classes = 40` in the identity table.
+
+### Modified files
+
+- `src/agents/agent_owl_generator/engine.py`
+- `tests/units/agents/test_agent_owl_generator_class_cap.py` (new)
+- `tests/eval/datasets/agent_owl_generator/regression.jsonl`
+- `.planning/agents/agent_owl_generator/SPEC.md`
+
+### Test result
+
+- `uv run pytest tests/units/agents -q --no-cov` → **149 passed**
+  (10 in the two owl-generator guard suites).
+- Live re-validation (restart local app, re-run the scenario campaign) —
+  pending.
+
+---
+
+## Security: mitigate NLTK path-traversal (Dependabot #58 / GHSA-p4gq-832x-fm9v)
+
+### Context
+
+Dependabot alert #58 (CVE-2026-54293) flags a URL-encoded path traversal in
+`nltk.data.load()`/`find()` for nltk<=3.9.4: the unsafe-path regex runs before
+`url2pathname()` decodes `%xx`, so `%2f`/`%2e%2e` bypass the check (decode-after-
+check). The fix only exists in nltk 3.10.0, which is **not yet on PyPI** (upstream
+latest and the Databricks proxy both top out at 3.9.4), so a version pin is
+currently unsatisfiable. We therefore made the flaw unreachable in-code as
+defense-in-depth until the patched release is available.
+
+### Changes
+
+1. `src/back/core/external/pitfalls/utils.py`
+   - Added `_assert_safe_nltk_resource()` and call it from `ensure_nltk_resource()`
+     before `nltk.data.find()`. Rejects percent-encoding (`%`), traversal (`..`)
+     and absolute/UNC paths, blocking the exact attack shapes. No behavior change:
+     all call sites pass hardcoded resource names (`corpora/wordnet`,
+     `sentiment/vader_lexicon`).
+2. `pyproject.toml`
+   - Kept `nltk>=3.9.4` (3.10.0 unavailable) and updated the security note /
+     restored the TODO to bump to `nltk>=3.10.0` once it lands on PyPI.
+
+### Modified files
+
+- `src/back/core/external/pitfalls/utils.py`
+- `pyproject.toml`
+
+### Test result
+
+- `uv run pytest -q -m "not scenario"` → **2982 passed, 275 skipped, 5 deselected**.
+- `uv lock --check` → lockfile consistent (nltk resolves to 3.9.4).

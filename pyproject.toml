@@ -62,11 +62,14 @@ lakebase = [
 pitfalls = [
     "sentence-transformers>=3.0.0",
     "scikit-learn>=1.3.0",
-    # TODO: bump to nltk>=3.10.0 once the stable release is on PyPI.
+    # TODO: bump to nltk>=3.10.0 once the stable release is on PyPI (currently
+    # only a 3.10.0-rc1 GitHub tag exists; upstream + proxy top out at 3.9.4).
     # GHSA-p4gq-832x-fm9v (CVE-2026-54293): URL-encoded path traversal in
-    # nltk.data.load() via %2f/%2e%2e — decode-after-check bypass. Fix merged
-    # (PR #3575 / commit 7df10e6) but only in 3.10.0-rc1 at time of writing.
-    # Mitigation: never pass user-controlled input to nltk.data.load() / find().
+    # nltk.data.load() via %2f/%2e%2e — decode-after-check bypass, fixed in
+    # 3.10.0. Until then the flaw is made unreachable in-code by the guard in
+    # ``ensure_nltk_resource`` (back/core/external/pitfalls/utils.py), which
+    # rejects percent-encoded/traversal/absolute resource paths, and by the
+    # fact that we only ever pass hardcoded resource names — never user input.
     "nltk>=3.9.4",
     "scipy>=1.11.0",
 ]
