@@ -81,7 +81,7 @@
             '<div class="oc-comments-list flex-grow-1 p-3" data-oc-list></div>' +
             '<div class="oc-comments-compose border-top p-3" data-oc-compose>' +
             '<textarea class="form-control form-control-sm mb-2" rows="2" ' +
-            'data-oc-input placeholder="Write a comment..."></textarea>' +
+            'data-oc-input data-collab placeholder="Write a comment..."></textarea>' +
             '<div class="d-flex justify-content-end">' +
             '<button type="button" class="btn btn-sm btn-primary" data-oc-send>' +
             '<i class="bi bi-send me-1"></i>Comment</button>' +
@@ -338,7 +338,7 @@
         box.style.display = '';
         box.innerHTML =
             '<textarea class="form-control form-control-sm mb-2" rows="2" ' +
-            'placeholder="Write a reply..."></textarea>' +
+            'data-collab placeholder="Write a reply..."></textarea>' +
             '<div class="d-flex justify-content-end">' +
             '<button type="button" class="btn btn-sm btn-outline-primary">Reply</button></div>';
         const ta = box.querySelector('textarea');
@@ -373,16 +373,16 @@
             '<div class="small fw-medium mb-2"><i class="bi bi-check2-square me-1"></i>' +
             esc(heading) + '</div>' +
             '<div class="d-flex align-items-center gap-1 mb-2">' +
-            '<input type="text" class="form-control form-control-sm flex-grow-1" data-tk-title placeholder="Task title">' +
+            '<input type="text" class="form-control form-control-sm flex-grow-1" data-tk-title data-collab placeholder="Task title">' +
             copyBtn + '</div>' +
             '<div class="d-flex align-items-center justify-content-between mb-1">' +
             '<label class="form-label small text-muted mb-0">Assignee</label>' +
             '<button type="button" class="btn btn-link btn-sm p-0" data-tk-me>' +
             '<i class="bi bi-person-check me-1"></i>Assign to me</button>' +
             '</div>' +
-            '<select class="form-select form-select-sm mb-2" data-tk-assignee>' +
+            '<select class="form-select form-select-sm mb-2" data-tk-assignee data-collab>' +
             '<option value="">Assign to...</option>' + opts + '</select>' +
-            '<input type="date" class="form-control form-control-sm mb-2" data-tk-due title="Due date (optional)">' +
+            '<input type="date" class="form-control form-control-sm mb-2" data-tk-due data-collab title="Due date (optional)">' +
             '<div class="d-flex justify-content-end gap-2">' + cancel +
             '<button type="button" class="btn btn-sm btn-success" data-tk-create>Create task</button>' +
             '</div></div>';

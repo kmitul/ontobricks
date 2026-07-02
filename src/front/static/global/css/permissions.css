@@ -244,6 +244,14 @@ body:is(.read-only-version, .role-viewer, .read-only-locked) .view-mode-hidden {
        admin "Back to Draft" / Publish on an IN-REVIEW or PUBLISHED
        version — opens this modal to capture an audit note, so the box
        must stay editable precisely when the domain is read-only.
+     - ``[data-collab]`` the discussion offcanvas fields (comment /
+       reply boxes, task title / assignee / due-date — see
+       ``comments-panel.js``). Comments and tasks are collaboration, not
+       domain editing: their ``/comments`` + ``/tasks`` endpoints are
+       neither domain-role- nor lifecycle-status-gated server-side, so a
+       viewer, a reader on an older/published version, or someone locked
+       out of a DRAFT by another editor must still be able to discuss and
+       assign work.
 
    Any future "navigation" select / input should be added here rather
    than to a per-page override.
@@ -266,9 +274,9 @@ body:is(.read-only-version, .role-viewer, .read-only-locked) .view-mode-hidden {
    ``/ontology/pitfalls/analyze`` endpoint is status-open), so a reader on
    a PUBLISHED/IN-REVIEW version must still be able to pick which patterns
    to check and run the analysis. */
-body:is(.read-only-version, .role-viewer, .read-only-locked):not([data-page="digitaltwin"]):not([data-page="settings"]) input:not([type="search"]):not([id*="search"]):not([id*="filter"]):not([id*="query"]):not(#domainVersionSelect):not(.pitfall-chk),
-body:is(.read-only-version, .role-viewer, .read-only-locked):not([data-page="digitaltwin"]):not([data-page="settings"]) textarea:not([data-rm-comment]),
-body:is(.read-only-version, .role-viewer, .read-only-locked):not([data-page="digitaltwin"]):not([data-page="settings"]) select:not(#domainVersionSelect):not(#loadDomainSelect):not(#loadVersionSelect):not(#auditVersionFilter):not(#runsVersionFilter) {
+body:is(.read-only-version, .role-viewer, .read-only-locked):not([data-page="digitaltwin"]):not([data-page="settings"]) input:not([type="search"]):not([id*="search"]):not([id*="filter"]):not([id*="query"]):not(#domainVersionSelect):not(.pitfall-chk):not([data-collab]),
+body:is(.read-only-version, .role-viewer, .read-only-locked):not([data-page="digitaltwin"]):not([data-page="settings"]) textarea:not([data-rm-comment]):not([data-collab]),
+body:is(.read-only-version, .role-viewer, .read-only-locked):not([data-page="digitaltwin"]):not([data-page="settings"]) select:not(#domainVersionSelect):not(#loadDomainSelect):not(#loadVersionSelect):not(#auditVersionFilter):not(#runsVersionFilter):not([data-collab]) {
     pointer-events: none !important;
     background-color: #e9ecef !important;
     opacity: 0.7 !important;

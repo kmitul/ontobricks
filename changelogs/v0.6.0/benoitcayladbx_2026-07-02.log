@@ -490,3 +490,45 @@ reloads until the user **explicitly resumes**.
 - `uv run pytest -q -m "not scenario"` → **2971 passed, 275 skipped, 5
   deselected** in ~21s (status-shape tests use key access, unaffected by the new
   `folder` / `version` keys).
+
+
+## Fix — allow comments & task creation in read-only / view mode
+
+### Context
+
+In any read-only mode (`read-only-locked` from the single-editor lock,
+`role-viewer`, or `read-only-version`) the discussion offcanvas was half-broken:
+the "Comment" / "New task" buttons stayed clickable but the comment textarea and
+the task title / assignee / due-date fields were greyed out and unusable — so
+you could open the forms but not fill them in. This is wrong: comments and tasks
+are **collaboration, not domain editing**. Their `/comments` + `/tasks`
+endpoints are neither domain-role- nor lifecycle-status- nor edit-lock-gated
+server-side (confirmed in `PermissionMiddleware`: `/comments` is not in
+`_DOMAIN_SCOPED_PREFIXES`, not `_STATUS_GATE_*`, so viewers and locked-out users
+already pass the backend). The block was purely the frontend `permissions.css`
+generic input/textarea/select gate catching the offcanvas fields.
+
+### Changes
+
+1. `src/front/static/global/js/comments-panel.js`
+   - Tagged the discussion-offcanvas fields with a `data-collab` marker: the
+     comment compose textarea, the reply textarea, and the task form's title
+     input, assignee `<select>` and due-date input.
+2. `src/front/static/global/css/permissions.css`
+   - Added `:not([data-collab])` to the three generic read-only form-field
+     selectors (input / textarea / select), mirroring the existing
+     `textarea[data-rm-comment]` review-box exemption, so `data-collab` controls
+     stay interactive under all three read-only body classes. Documented the new
+     exemption in the selector's explanatory comment.
+
+### Modified files
+
+- `src/front/static/global/js/comments-panel.js`
+- `src/front/static/global/css/permissions.css`
+
+### Test result
+
+- `node --check src/front/static/global/js/comments-panel.js` → clean.
+- `uv run pytest -q -m "not scenario"` → **2971 passed, 275 skipped, 5
+  deselected** in ~26s (the discussion-panel asset contract test still passes —
+  its token assertions are unaffected by the added `data-collab` attributes).
