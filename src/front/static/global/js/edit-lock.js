@@ -366,7 +366,12 @@
     function buildIdleModal() {
         if (idleModalEl) return;
         var el = document.createElement('div');
-        el.className = 'modal fade';
+        // No `fade`: the activity listener hides this modal the instant the
+        // user moves the mouse after it pops. A mid-transition Bootstrap
+        // hide() is a no-op, which — with the static backdrop — leaves the
+        // page frozen behind an un-dismissable overlay. Synchronous show/hide
+        // (no transition) removes that race.
+        el.className = 'modal';
         el.id = 'editLockIdleModal';
         el.setAttribute('tabindex', '-1');
         el.setAttribute('aria-hidden', 'true');

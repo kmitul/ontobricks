@@ -873,3 +873,41 @@ canvas explicitly.
 
 - CSS/HTML-only change (no Python/JS logic). `uv run pytest -q -m "not scenario"`
   re-run for the post-change routine — see below.
+
+## Fix — frozen "Still editing?" idle-warning modal (stuck static backdrop)
+
+### Context
+
+After a long idle wait the DRAFT edit-lock **"Still editing?"** warning modal
+popped but then looked **frozen** — the whole page was blocked behind the grey
+overlay and only a full reload recovered it. Root cause is a Bootstrap
+show/hide race in `edit-lock.js`: the idle modal is built with the `fade` class
+**and** `data-bs-backdrop: static` / `data-bs-keyboard: false` (blocking
+backdrop, no close button). The capture-phase activity listeners
+(`mousemove`, `keydown`, …) call `markActivity → hideIdleWarning →
+idleModal.hide()` the instant the user moves the mouse after the warning
+appears. If that first move lands during the modal's ~300 ms fade-in
+transition, Bootstrap 5's `hide()` is a no-op (`_isTransitioning` guard) — but
+the code has already set `warnShown = false`, so the idle watcher's self-heal
+branch (`else if (warnShown) hideIdleWarning()`) is gated off and never retries.
+The modal + its static backdrop stay on screen with nothing able to dismiss
+them, so the page reads as frozen.
+
+### Changes
+
+1. `src/front/static/global/js/edit-lock.js`
+   - `buildIdleModal()` now creates the modal element **without** the `fade`
+     class (`el.className = 'modal'`). With no transition, Bootstrap's
+     show/hide are synchronous, so a hide triggered by the activity listener the
+     moment the warning pops can no longer no-op mid-transition and strand the
+     static backdrop. Added an explaining comment.
+
+### Modified files
+
+- `src/front/static/global/js/edit-lock.js`
+
+### Test result
+
+- `node --check src/front/static/global/js/edit-lock.js` → clean.
+- `uv run pytest -q -m "not scenario"` → **2982 passed, 275 skipped, 5
+  deselected, 0 failed** in ~24s (frontend-behaviour fix; no Python touched).
