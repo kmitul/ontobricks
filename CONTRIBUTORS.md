@@ -8,7 +8,7 @@ Thank you to everyone who has contributed to OntoBricks!
 |------|--------|------|
 | Benoit Cayla | [@benoitcayladbx](https://github.com/benoitcayladbx) | Creator & Lead Maintainer |
 | Dermot Smyth | [@dermotsmyth-db](https://github.com/dermotsmyth-db) | Contributor |
-| hourdays | [@hourdays](https://github.com/hourdays) | Contributor |
+| Hugues Journeau | [@hourdays](https://github.com/hourdays) | Contributor |
 
 ## How to Contribute
 

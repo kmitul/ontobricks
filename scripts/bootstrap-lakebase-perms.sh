@@ -34,7 +34,7 @@ set -euo pipefail
 #
 #   1. Registry schema  (e.g. ontobricks_registry)
 #      Coords : deploy.config.sh → LAKEBASE_PROJECT / LAKEBASE_BRANCH /
-#               LAKEBASE_REGISTRY_DATABASE / LAKEBASE_REGISTRY_SCHEMA
+#               LAKEBASE_DATABASE / LAKEBASE_SCHEMA
 #      → ``scripts/deploy.sh`` grants this one automatically on every
 #        dev-lakebase deploy (re-run after "Settings > Registry > Initialize"
 #        if the schema did not exist yet at deploy time).
@@ -301,6 +301,46 @@ CREATE TABLE IF NOT EXISTS "${SCHEMA}".build_runs (
 CREATE INDEX IF NOT EXISTS idx_build_runs_domain_version
     ON "${SCHEMA}".build_runs(domain_id, version, started_at DESC);
 
+-- graph_analytics (async KG analytics cache added after initial release —
+-- one row per (domain_id, version), replaced on every successful recompute)
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".graph_analytics (
+    domain_id    uuid NOT NULL
+                 REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version      text NOT NULL,
+    status       text NOT NULL DEFAULT 'completed',
+    graph_name   text NOT NULL DEFAULT '',
+    class_filter jsonb NOT NULL DEFAULT '[]'::jsonb,
+    stats        jsonb NOT NULL DEFAULT '{}'::jsonb,
+    top_pagerank jsonb NOT NULL DEFAULT '[]'::jsonb,
+    result       jsonb NOT NULL DEFAULT '{}'::jsonb,
+    error        text NOT NULL DEFAULT '',
+    task_id      text NOT NULL DEFAULT '',
+    duration_ms  bigint NOT NULL DEFAULT 0,
+    computed_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain_id, version)
+);
+
+-- graph_analytics_runs (append-only analysis run history)
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".graph_analytics_runs (
+    id                  bigserial PRIMARY KEY,
+    domain_id           uuid NOT NULL
+                        REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version             text NOT NULL,
+    status              text NOT NULL DEFAULT 'completed',
+    class_filter        jsonb NOT NULL DEFAULT '[]'::jsonb,
+    node_count          bigint NOT NULL DEFAULT 0,
+    edge_count          bigint NOT NULL DEFAULT 0,
+    connected_components integer NOT NULL DEFAULT 0,
+    avg_degree          double precision NOT NULL DEFAULT 0,
+    density             double precision NOT NULL DEFAULT 0,
+    duration_ms         bigint NOT NULL DEFAULT 0,
+    task_id             text NOT NULL DEFAULT '',
+    error               text NOT NULL DEFAULT '',
+    computed_at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_graph_analytics_runs_domain_version
+    ON "${SCHEMA}".graph_analytics_runs(domain_id, version, computed_at DESC);
+
 -- domain_review_events (validation/review audit log added after initial release)
 CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_review_events (
     id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -317,9 +357,92 @@ CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_review_events (
 );
 CREATE INDEX IF NOT EXISTS idx_review_events_domain_version
     ON "${SCHEMA}".domain_review_events(domain_id, version, created_at);
+
+-- domain_comments + domain_tasks (collaborative Discussions, v0.6 — final,
+-- domain-wide shape; mirrors schema.sql). Created here so every deploy /
+-- in-place update provisions them as the schema owner instead of relying on
+-- the app's lazy self-heal. Converge any pre-existing table created with the
+-- early per-anchor columns onto the final shape (drop anchor_type/anchor_ref).
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_comments (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id   uuid NOT NULL
+                REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version     text NOT NULL,
+    parent_id   uuid REFERENCES "${SCHEMA}".domain_comments(id) ON DELETE CASCADE,
+    author      text NOT NULL,
+    body        text NOT NULL DEFAULT '',
+    resolved    boolean NOT NULL DEFAULT false,
+    created_at  timestamptz NOT NULL DEFAULT now()
+);
+DROP INDEX IF EXISTS "${SCHEMA}".idx_domain_comments_anchor;
+ALTER TABLE IF EXISTS "${SCHEMA}".domain_comments DROP COLUMN IF EXISTS anchor_type;
+ALTER TABLE IF EXISTS "${SCHEMA}".domain_comments DROP COLUMN IF EXISTS anchor_ref;
+CREATE INDEX IF NOT EXISTS idx_domain_comments_lookup
+    ON "${SCHEMA}".domain_comments(domain_id, version, created_at);
+
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_tasks (
+    id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id   uuid NOT NULL
+                REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version     text NOT NULL,
+    assignee    text NOT NULL,
+    created_by  text NOT NULL,
+    title       text NOT NULL,
+    description text NOT NULL DEFAULT '',
+    status      text NOT NULL DEFAULT 'open'
+                CHECK (status IN ('open', 'in_progress', 'done', 'cancelled')),
+    due_date    date,
+    comment_id  uuid REFERENCES "${SCHEMA}".domain_comments(id) ON DELETE SET NULL,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_domain_tasks_assignee
+    ON "${SCHEMA}".domain_tasks(lower(assignee), status);
+CREATE INDEX IF NOT EXISTS idx_domain_tasks_domain
+    ON "${SCHEMA}".domain_tasks(domain_id, version);
+
+-- domain_edit_locks (single-editor DRAFT lock, v0.6 — mirrors schema.sql).
+-- Created here as the schema owner because the app's lazy self-heal cannot:
+-- the FK REFERENCES domains(id) needs a privilege the app service principal
+-- lacks, so without this migration the table never exists on an in-place
+-- update and every opener is falsely shown as a read-only viewer.
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_edit_locks (
+    domain_id      uuid NOT NULL
+                   REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version        text NOT NULL,
+    holder_email   text NOT NULL,
+    holder_name    text NOT NULL DEFAULT '',
+    holder_session text NOT NULL DEFAULT '',
+    acquired_at    timestamptz NOT NULL DEFAULT now(),
+    heartbeat_at   timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (domain_id, version)
+);
+
+-- domain_change_events (ontology/mapping audit trail, v0.6 — mirrors
+-- schema.sql). Same owner-provisioning rationale as domain_edit_locks: the
+-- app's lazy self-heal cannot create the FK to domains, so without this the
+-- audit trail is silently empty on an in-place update.
+CREATE TABLE IF NOT EXISTS "${SCHEMA}".domain_change_events (
+    id              uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    domain_id       uuid NOT NULL
+                    REFERENCES "${SCHEMA}".domains(id) ON DELETE CASCADE,
+    version         text NOT NULL,
+    actor           text NOT NULL DEFAULT '',
+    source          text NOT NULL DEFAULT 'user'
+                    CHECK (source IN ('user', 'agent')),
+    action          text NOT NULL,
+    entity_type     text NOT NULL DEFAULT '',
+    entity_ref      text NOT NULL DEFAULT '',
+    summary         text NOT NULL DEFAULT '',
+    meta            jsonb NOT NULL DEFAULT '{}'::jsonb,
+    occurred_at     timestamptz NOT NULL DEFAULT now(),
+    created_at      timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_change_events_domain_version
+    ON "${SCHEMA}".domain_change_events(domain_id, version, occurred_at);
 SQL
     then
-        echo "  ✓ schema migrations applied (domain_versions.status, domains.review_quorum, build_runs, domain_review_events)"
+        echo "  ✓ schema migrations applied (domain_versions.status, domains.review_quorum, build_runs, graph_analytics, graph_analytics_runs, domain_review_events, domain_comments, domain_tasks, domain_edit_locks, domain_change_events)"
     else
         echo "  ⚠ schema migration failed — continuing (SP grants below may partially succeed)"
     fi
