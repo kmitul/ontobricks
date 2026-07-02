@@ -26,10 +26,16 @@
 //      / scroll / tab re-focus). Once the user has been idle long enough that
 //      the lease is about to lapse, a modal warns them that they are about to
 //      be disconnected from the project, with a live countdown and a "Keep
-//      editing" button that renews on the spot. If the lease is lost (they
-//      ignore the warning, or it was reclaimed after going stale), it flips to
-//      read-only and shows a "session expired" banner. Hovering the navbar
-//      domain badge (#currentDomainName) shows the same countdown.
+//      editing" button that renews on the spot. If they ignore the warning
+//      the lease lapses: the lock is *released* server-side (so another user
+//      can take it immediately) and this browser flips to read-only with a
+//      "session expired" banner. A per-version sticky flag (sessionStorage)
+//      then keeps it read-only across incidental reloads / navigation — the
+//      still-free lock is not silently re-grabbed — until the user clicks
+//      "Resume editing". A lease lost to a take-over / stale reclaim flips to
+//      read-only the same way (without the sticky, since it is already gone).
+//      Hovering the navbar domain badge (#currentDomainName) shows the
+//      remaining-lease countdown while editing.
 //
 // ``window.editLockMode`` ('edit' | 'view' | 'none') is exposed so
 // ``permissions.js`` → ``canEditOntology()`` respects the lock too.
@@ -52,6 +58,51 @@
     function notify(msg, kind) {
         if (typeof window.showNotification === 'function') {
             window.showNotification(msg, kind || 'info');
+        }
+    }
+
+    // ----- "editing session expired" sticky state -------------------
+    //
+    // When a lease lapses through *inactivity* we release the lock and record
+    // that this browser gave up editing this exact (folder, version). Because
+    // this is a multi-page app, a plain reload / menu navigation would
+    // otherwise silently re-acquire the still-free lock (the server grants a
+    // free lock to the loader) and hand editing straight back — undoing the
+    // timeout. The sticky flag (per version, in sessionStorage so it survives
+    // reloads but not a new tab) keeps the browser read-only until the user
+    // *explicitly* resumes (the banner's "Resume editing" button).
+
+    var STICKY_KEY = 'ob:editLockExpired';
+    // "folder\u0000version" of the loaded lockable version, once known.
+    var lockKey = '';
+
+    function keyFor(data) {
+        return (data && data.folder && data.version)
+            ? data.folder + '\u0000' + data.version
+            : '';
+    }
+
+    function stickyGet() {
+        try { return window.sessionStorage.getItem(STICKY_KEY); }
+        catch (e) { return null; }
+    }
+    function stickySet(v) {
+        try { window.sessionStorage.setItem(STICKY_KEY, v); } catch (e) {}
+    }
+    function stickyClear() {
+        try { window.sessionStorage.removeItem(STICKY_KEY); } catch (e) {}
+    }
+
+    function releaseLock() {
+        try {
+            fetch('/domain/edit-lock/release', {
+                method: 'POST',
+                headers: { 'Accept': 'application/json' },
+                credentials: 'same-origin',
+                keepalive: true,
+            });
+        } catch (e) {
+            // Best-effort — the lease also lapses on its own after the TTL.
         }
     }
 
@@ -135,7 +186,8 @@
             '<i class="bi bi-hourglass-bottom me-1"></i>' +
             'Your editing session expired after a period of inactivity — you ' +
             'now have <strong>read-only</strong> access and saving is disabled. ' +
-            'Reload to reconnect (you regain editing if no one else has taken over).';
+            'Click <strong>Resume editing</strong> to reconnect (you regain ' +
+            'editing if no one else has taken over).';
         banner.appendChild(msg);
 
         var actions = document.createElement('span');
@@ -144,8 +196,12 @@
         var reload = document.createElement('button');
         reload.type = 'button';
         reload.className = 'btn btn-sm btn-warning';
-        reload.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Reload';
+        reload.innerHTML =
+            '<i class="bi bi-arrow-clockwise me-1"></i>Resume editing';
         reload.addEventListener('click', function () {
+            // Explicit reconnect: drop the sticky "expired" flag so the reload
+            // is allowed to re-acquire the (still-free) lock.
+            stickyClear();
             window.location.reload();
         });
         actions.appendChild(reload);
@@ -215,6 +271,15 @@
         renderExpiredBanner();
     }
 
+    // Lease lapsed through inactivity: give the lock up server-side (so another
+    // user can take it now, not only after the stale TTL) and remember we did,
+    // so a later reload / navigation does not silently re-grab it.
+    function expireByIdle() {
+        if (lockKey) stickySet(lockKey);
+        releaseLock();
+        onLeaseLost();
+    }
+
     function leaseRemainingMs() {
         if (!leaseTtlS) return 0;
         return Math.max(0, leaseTtlS * 1000 - (Date.now() - lastRenewAt));
@@ -254,7 +319,7 @@
     function onIdleTick() {
         var remainingMs = leaseRemainingMs();
         if (remainingMs <= 0) {
-            onLeaseLost();
+            expireByIdle();
             return;
         }
         if (remainingMs <= warnLeadMs) {
@@ -474,16 +539,35 @@
         if (!data || !data.success) return;
 
         var mode = data.mode || 'none';
-        window.editLockMode = mode;
+        lockKey = keyFor(data);
 
         if (mode === 'view') {
+            // Someone else holds it now — the sticky "expired" state (if any)
+            // is moot; a fresh viewer banner tells the real story.
+            stickyClear();
+            window.editLockMode = 'view';
             enterReadOnly(data);
             renderBanner(data);
         } else if (mode === 'edit') {
-            // This browser holds the lock — keep its lease alive.
-            startRenew(data.lease_ttl_s);
+            if (lockKey && stickyGet() === lockKey) {
+                // We timed out on this exact version earlier and the backend's
+                // non-forcing acquire just handed the still-free lock back.
+                // Honour the timeout: give it up again and stay read-only until
+                // the user explicitly resumes.
+                window.editLockMode = 'view';
+                releaseLock();
+                enterReadOnly({});
+                renderExpiredBanner();
+            } else {
+                // This browser holds the lock — keep its lease alive.
+                window.editLockMode = 'edit';
+                startRenew(data.lease_ttl_s);
+            }
+        } else {
+            // mode === 'none' → not a lockable DRAFT version; nothing to do.
+            window.editLockMode = 'none';
+            stickyClear();
         }
-        // mode === 'none' → not a lockable DRAFT version; nothing to do.
     }
 
     if (document.readyState === 'loading') {

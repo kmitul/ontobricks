@@ -440,3 +440,53 @@ change.
   lint clean.
 - `uv run pytest -q -m "not scenario"` → **2971 passed, 275 skipped, 5
   deselected** in ~27s (unchanged; re-run for the post-change routine).
+
+
+## Fix — idle-timeout edit-lock was silently re-granted on the next navigation
+
+### Context
+
+Follow-up to the activity-based lease change: after the inactivity lease lapsed
+the browser correctly went read-only, **but the lock row was never released** —
+the user stayed the recorded holder. Since this is a multi-page app, any
+reload / menu navigation re-ran `initEditLock` → `GET /domain/edit-lock`, whose
+non-forcing acquire hands a free/own lock straight back to the loader (a stale
+lease is still granted to its owner). Net effect: the timeout was undone by the
+next click — edit mode came back automatically, defeating the whole point. Fix:
+on an **inactivity** timeout, actually release the lock server-side and remember
+(per version) that this browser gave editing up, staying read-only across
+reloads until the user **explicitly resumes**.
+
+### Changes
+
+1. `src/front/static/global/js/edit-lock.js`
+   - New `expireByIdle()` (called from the idle watcher instead of `onLeaseLost`
+     directly): `POST /domain/edit-lock/release` (frees the lock immediately for
+     other users) + a per-version **sticky flag** in `sessionStorage`
+     (`ob:editLockExpired = "folder\u0000version"`), then the usual read-only +
+     expired-banner teardown.
+   - `initEditLock` now honours the sticky flag: when the status check re-grants
+     `mode == "edit"` for the *same* version we timed out on, it re-releases the
+     lock and stays read-only (expired banner) instead of resuming editing. A
+     `view` result (someone else took it) or `none` clears the flag.
+   - Expired banner button relabelled **Reload → "Resume editing"**; it now
+     clears the sticky flag before reloading, so an explicit resume is the only
+     path that re-acquires the still-free lock. A lease lost to a take-over /
+     stale reclaim still flips to read-only via `onLeaseLost` (no sticky — it is
+     already gone).
+2. `src/back/objects/registry/lockmgt/EditLockService.py`
+   - `status(...)` now returns the loaded `folder` / `version` alongside the
+     lock block so the client can scope the sticky "expired" state to the exact
+     version (prevents a timeout on domain A from suppressing edit on domain B).
+
+### Modified files
+
+- `src/front/static/global/js/edit-lock.js`
+- `src/back/objects/registry/lockmgt/EditLockService.py`
+
+### Test result
+
+- `node --check src/front/static/global/js/edit-lock.js` → clean; JS lint clean.
+- `uv run pytest -q -m "not scenario"` → **2971 passed, 275 skipped, 5
+  deselected** in ~21s (status-shape tests use key access, unaffected by the new
+  `folder` / `version` keys).
