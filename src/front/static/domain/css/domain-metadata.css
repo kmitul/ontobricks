@@ -102,3 +102,10 @@
 .meta-cursor-pointer {
     cursor: pointer;
 }
+
+/* Chart.js sets the gauge canvas to display:block, which breaks text-center;
+   center it explicitly within the card body. */
+.dm-gauge {
+    display: block;
+    margin-inline: auto;
+}

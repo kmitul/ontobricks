@@ -844,3 +844,32 @@ defense-in-depth until the patched release is available.
 
 - `uv run pytest -q -m "not scenario"` → **2982 passed, 275 skipped, 5 deselected**.
 - `uv lock --check` → lockfile consistent (nltk resolves to 3.9.4).
+
+## Fix — center the coverage gauges inside their cards (Domain → Data Sources)
+
+### Context
+
+On Domain → Data Sources the two metadata-coverage gauges (Table Descriptions /
+Column Descriptions) rendered left-aligned inside their cards. Chart.js sets the
+`<canvas>` to `display: block`, which defeats the Bootstrap `text-center` on the
+card body (a block element with a fixed width stays left-aligned). Centered the
+canvas explicitly.
+
+### Changes
+
+1. `src/front/templates/partials/domain/_domain_metadata.html`
+   - Added a `dm-gauge` class to the `#gaugeTableDesc` and `#gaugeColumnDesc`
+     canvases.
+2. `src/front/static/domain/css/domain-metadata.css`
+   - New `.dm-gauge { display: block; margin-inline: auto; }` rule so the fixed-
+     width gauge canvas centers within the card body.
+
+### Modified files
+
+- `src/front/templates/partials/domain/_domain_metadata.html`
+- `src/front/static/domain/css/domain-metadata.css`
+
+### Test result
+
+- CSS/HTML-only change (no Python/JS logic). `uv run pytest -q -m "not scenario"`
+  re-run for the post-change routine — see below.
