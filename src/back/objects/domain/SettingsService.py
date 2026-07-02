@@ -1389,6 +1389,46 @@ class SettingsService:
             raise InfrastructureError("Failed to save registry cache TTL", detail=msg)
         return {"success": True, "registry_cache_ttl": max(10, int(ttl))}
 
+    @staticmethod
+    def get_edit_lock_ttl_result(
+        session_mgr: SessionManager,
+        settings: Settings,
+    ) -> Dict[str, Any]:
+        """Return the effective DRAFT edit-lock lease TTL (seconds).
+
+        Mirrors :meth:`EditLockService._ttl_seconds` resolution (global config
+        → ``ONTOBRICKS_EDIT_LOCK_TTL_S`` → built-in default) so the Settings UI
+        shows the value actually in force. ``0`` means the lease is disabled.
+        """
+        from back.objects.registry.lockmgt import EditLockService
+
+        ttl_s = EditLockService._ttl_seconds(session_mgr, settings)
+        return {"success": True, "edit_lock_ttl_s": ttl_s}
+
+    @staticmethod
+    def save_edit_lock_ttl_result(
+        ttl_s: int,
+        email: str,
+        user_token: str,
+        session_mgr: SessionManager,
+        settings: Settings,
+    ) -> Dict[str, Any]:
+        """Persist the DRAFT edit-lock lease TTL globally (admin only, seconds)."""
+        SettingsService.require_admin_error(email, user_token, session_mgr, settings)
+
+        _, host, token, registry_cfg = SettingsService._resolve_context(
+            session_mgr, settings
+        )
+        ttl_s = max(0, int(ttl_s))
+        ok, msg = global_config_service.set_edit_lock_ttl_s(
+            host, token, registry_cfg, ttl_s
+        )
+        if not ok:
+            raise InfrastructureError(
+                "Failed to save edit-lock lease TTL", detail=msg
+            )
+        return {"success": True, "edit_lock_ttl_s": ttl_s}
+
     # ------------------------------------------------------------------
     #  Graph DB Engine
     # ------------------------------------------------------------------

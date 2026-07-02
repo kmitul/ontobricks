@@ -87,7 +87,7 @@
                 <div class="content-section">
                     <div class="section-header d-flex justify-content-between align-items-center mb-4">
                         <div>
-                            <h4 class="mb-1"><i class="bi bi-sliders me-2"></i>Triple store — Global</h4>
+                            <h4 class="mb-1"><i class="bi bi-sliders me-2"></i>Triple store — Back End</h4>
                             <p class="text-muted mb-0 small">Select the graph database engine used across all domains</p>
                         </div>
                         <button type="button" class="btn btn-primary btn-save-settings">
@@ -612,6 +612,20 @@
                                min="10" step="10" value="300">
                         <small class="text-muted">
                             <i class="bi bi-info-circle"></i> How long the registry domain list is cached before refreshing from Databricks (minimum 10s).
+                        </small>
+                    </div>
+
+                    <div class="mb-4">
+                        <label for="editLockTtlMin" class="form-label fw-semibold">
+                            Edit Lock Lease (minutes)
+                            <span class="badge bg-warning-subtle text-warning-emphasis border ms-2 settings-badge-admin-note">
+                                <i class="bi bi-shield-lock me-1"></i>Admin only &ndash; applies to all users
+                            </span>
+                        </label>
+                        <input type="number" class="form-control settings-edit-lock-ttl-input" id="editLockTtlMin"
+                               min="0" step="1" value="10">
+                        <small class="text-muted">
+                            <i class="bi bi-info-circle"></i> How long a DRAFT single-editor lock survives with no keep-alive (a crashed / closed tab) before another user can reclaim it. The editor's browser auto-renews while open. Set to <strong>0</strong> to disable the lease (a lock is then held until the editor closes the domain or an admin force-unlocks it).
                         </small>
                     </div>
 

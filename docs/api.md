@@ -1069,6 +1069,33 @@ GET /settings/get-base-uri
 POST /settings/save-base-uri
 ```
 
+#### Get/Save Registry Cache TTL
+
+```http
+GET /settings/get-registry-cache-ttl
+POST /settings/save-registry-cache-ttl
+```
+
+How long (seconds, min 10) the registry domain list is cached before refreshing.
+Admin only; stored globally. Save body: `{ "registry_cache_ttl": 300 }`.
+
+#### Get/Save Edit-Lock Lease TTL
+
+```http
+GET /settings/edit-lock-ttl
+POST /settings/save-edit-lock-ttl
+```
+
+The DRAFT single-editor lock lease TTL in **seconds** (`0` disables the lease →
+hold-until-close). The `GET` returns the effective value (**Settings › Global**
+override → `ONTOBRICKS_EDIT_LOCK_TTL_S` env → default `600`). Save is admin-only
+and stored globally. Save body: `{ "edit_lock_ttl_s": 600 }`.
+
+**Response (GET):**
+```json
+{ "success": true, "edit_lock_ttl_s": 600 }
+```
+
 ---
 
 ### Ontology Endpoints

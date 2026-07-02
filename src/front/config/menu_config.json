@@ -521,7 +521,7 @@
                     "items": [
                         {
                             "id": "ts-global",
-                            "label": "Global",
+                            "label": "Back End",
                             "icon": "bi-sliders",
                             "default": false,
                             "requires": null

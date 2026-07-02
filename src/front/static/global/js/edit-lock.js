@@ -21,12 +21,15 @@
 //      current editor. App-admins additionally get a "Take over editing"
 //      button (``POST /domain/edit-lock/acquire`` with ``force``);
 //   3. when this browser is the EDITOR (``mode == "edit"``) and a lease TTL
-//      is set, a keep-alive timer pings ``POST /domain/edit-lock/renew``
-//      every ~TTL/3 (and on tab re-focus) to hold the lease. If a renew
-//      reports the lease was lost (reclaimed after going stale), it flips to
+//      is set, a keep-alive timer pings ``POST /domain/edit-lock/renew`` to
+//      hold the lease — but only while the user is *active* (mouse / keyboard
+//      / scroll / tab re-focus). Once the user has been idle long enough that
+//      the lease is about to lapse, a modal warns them that they are about to
+//      be disconnected from the project, with a live countdown and a "Keep
+//      editing" button that renews on the spot. If the lease is lost (they
+//      ignore the warning, or it was reclaimed after going stale), it flips to
 //      read-only and shows a "session expired" banner. Hovering the navbar
-//      domain badge (#currentDomainName) shows a live countdown of the
-//      remaining lease (the time before it would expire if the tab went idle).
+//      domain badge (#currentDomainName) shows the same countdown.
 //
 // ``window.editLockMode`` ('edit' | 'view' | 'none') is exposed so
 // ``permissions.js`` → ``canEditOntology()`` respects the lock too.
@@ -152,19 +155,56 @@
     }
 
     // ----- lease keep-alive (renew) ---------------------------------
+    //
+    // The lease is kept alive by the holder's *activity*, not merely by the
+    // tab being open: a keep-alive tick only renews when the user has done
+    // something (mouse / keyboard / scroll / tab re-focus) within the last
+    // renew interval. Once they go idle the pings stop, the lease ages, and a
+    // modal warns them before it lapses that they are about to be disconnected
+    // from the project.
 
     var renewTimer = null;
-    // Lease TTL (seconds) and the local time (ms) of the last confirmed renew,
-    // used to compute the remaining lease shown in the domain-badge tooltip.
+    var idleTimer = null;
+    // Lease TTL (seconds), the local time (ms) of the last confirmed renew
+    // (drives the countdown), the last user-activity time, the renew cadence,
+    // and how long before expiry to warn.
     var leaseTtlS = 0;
     var lastRenewAt = 0;
+    var lastActivityAt = 0;
+    var renewEveryMs = 0;
+    var warnLeadMs = 0;
+    var warnShown = false;
+
+    // Passive signals that the holder is still working. Bound on the capture
+    // phase so app handlers cannot swallow them before we see them.
+    var ACTIVITY_EVENTS = [
+        'mousemove', 'mousedown', 'keydown', 'wheel', 'touchstart', 'scroll',
+    ];
+
+    function markActivity() {
+        lastActivityAt = Date.now();
+        // Acting while the "about to be disconnected" warning is up dismisses
+        // it and immediately re-takes the lease.
+        if (warnShown) {
+            hideIdleWarning();
+            doRenew();
+        }
+    }
 
     function stopRenew() {
         if (renewTimer) {
             clearInterval(renewTimer);
             renewTimer = null;
         }
+        if (idleTimer) {
+            clearInterval(idleTimer);
+            idleTimer = null;
+        }
         document.removeEventListener('visibilitychange', onVisible);
+        ACTIVITY_EVENTS.forEach(function (ev) {
+            document.removeEventListener(ev, markActivity, true);
+        });
+        hideIdleWarning();
     }
 
     function onLeaseLost() {
@@ -173,6 +213,11 @@
         window.editLockMode = 'view';
         enterReadOnly({});
         renderExpiredBanner();
+    }
+
+    function leaseRemainingMs() {
+        if (!leaseTtlS) return 0;
+        return Math.max(0, leaseTtlS * 1000 - (Date.now() - lastRenewAt));
     }
 
     async function doRenew() {
@@ -198,8 +243,34 @@
         }
     }
 
+    // Keep-alive tick: renew only while the user has been active recently, so
+    // an idle tab lets its lease lapse for the next opener to reclaim.
+    function onRenewTick() {
+        if (Date.now() - lastActivityAt <= renewEveryMs) doRenew();
+    }
+
+    // Idle watcher (1s): drives the "about to be disconnected" warning and the
+    // final flip to read-only when the lease actually lapses.
+    function onIdleTick() {
+        var remainingMs = leaseRemainingMs();
+        if (remainingMs <= 0) {
+            onLeaseLost();
+            return;
+        }
+        if (remainingMs <= warnLeadMs) {
+            showIdleWarning();
+            updateIdleWarning(Math.ceil(remainingMs / 1000));
+        } else if (warnShown) {
+            hideIdleWarning();
+        }
+    }
+
     function onVisible() {
-        if (!document.hidden) doRenew();
+        if (document.hidden) return;
+        // Returning to the tab counts as activity.
+        lastActivityAt = Date.now();
+        hideIdleWarning();
+        doRenew();
     }
 
     function startRenew(ttlSeconds) {
@@ -207,12 +278,95 @@
         if (!ttl || ttl <= 0) return; // lease disabled
         leaseTtlS = ttl;
         lastRenewAt = Date.now();
+        lastActivityAt = Date.now();
         // Renew at ~a third of the TTL (min 30s) so a couple of missed pings
         // still land inside the lease window.
-        var everyMs = Math.max(30, Math.floor(ttl / 3)) * 1000;
-        renewTimer = setInterval(doRenew, everyMs);
+        renewEveryMs = Math.max(30, Math.floor(ttl / 3)) * 1000;
+        // Warn this long before the lease would lapse (≤60s, ≥10s, ≤TTL/3).
+        warnLeadMs = Math.max(10, Math.min(60, Math.floor(ttl / 3))) * 1000;
+        renewTimer = setInterval(onRenewTick, renewEveryMs);
+        idleTimer = setInterval(onIdleTick, 1000);
         document.addEventListener('visibilitychange', onVisible);
+        ACTIVITY_EVENTS.forEach(function (ev) {
+            document.addEventListener(ev, markActivity, true);
+        });
         setupLeaseTooltip();
+    }
+
+    // ----- idle disconnect warning modal ----------------------------
+
+    var idleModalEl = null;
+    var idleModal = null;
+
+    function buildIdleModal() {
+        if (idleModalEl) return;
+        var el = document.createElement('div');
+        el.className = 'modal fade';
+        el.id = 'editLockIdleModal';
+        el.setAttribute('tabindex', '-1');
+        el.setAttribute('aria-hidden', 'true');
+        el.setAttribute('data-bs-backdrop', 'static');
+        el.setAttribute('data-bs-keyboard', 'false');
+        el.innerHTML =
+            '<div class="modal-dialog modal-dialog-centered">' +
+              '<div class="modal-content">' +
+                '<div class="modal-header bg-warning-subtle">' +
+                  '<h5 class="modal-title">' +
+                    '<i class="bi bi-hourglass-split me-2"></i>Still editing?' +
+                  '</h5>' +
+                '</div>' +
+                '<div class="modal-body">' +
+                  '<p class="mb-2">You have been inactive for a while. To avoid ' +
+                  'locking other users out of this version, your editing session ' +
+                  'is about to be released and you will be <strong>disconnected ' +
+                  'from the project</strong> (read-only access).</p>' +
+                  '<p class="mb-0">Editing will be released in ' +
+                  '<strong id="editLockIdleCountdown">--</strong> unless you ' +
+                  'continue.</p>' +
+                '</div>' +
+                '<div class="modal-footer">' +
+                  '<button type="button" class="btn btn-warning" ' +
+                    'id="editLockIdleKeep">' +
+                    '<i class="bi bi-pencil-square me-1"></i>Keep editing' +
+                  '</button>' +
+                '</div>' +
+              '</div>' +
+            '</div>';
+        document.body.appendChild(el);
+        idleModalEl = el;
+        var keep = el.querySelector('#editLockIdleKeep');
+        if (keep) keep.addEventListener('click', markActivity);
+        if (window.bootstrap && window.bootstrap.Modal) {
+            idleModal = new window.bootstrap.Modal(el);
+        }
+    }
+
+    function showIdleWarning() {
+        if (warnShown) return;
+        warnShown = true;
+        buildIdleModal();
+        if (idleModal) {
+            idleModal.show();
+        } else {
+            // No Bootstrap modal available — degrade to a notification.
+            notify(
+                'You are about to be disconnected from editing due to ' +
+                'inactivity. Interact with the page to stay.',
+                'warning'
+            );
+        }
+    }
+
+    function updateIdleWarning(seconds) {
+        if (!idleModalEl) return;
+        var cd = idleModalEl.querySelector('#editLockIdleCountdown');
+        if (cd) cd.textContent = fmtMMSS(Math.max(0, seconds));
+    }
+
+    function hideIdleWarning() {
+        if (!warnShown) return;
+        warnShown = false;
+        if (idleModal) idleModal.hide();
     }
 
     // ----- lease countdown tooltip on the navbar domain badge -------
@@ -225,9 +379,7 @@
     var tipTimer = null;
 
     function remainingSeconds() {
-        if (!leaseTtlS) return 0;
-        var elapsed = (Date.now() - lastRenewAt) / 1000;
-        return Math.max(0, Math.round(leaseTtlS - elapsed));
+        return Math.round(leaseRemainingMs() / 1000);
     }
 
     function fmtMMSS(sec) {
@@ -237,8 +389,8 @@
     }
 
     function leaseTooltipText() {
-        return 'Editing lock — auto-renews while open. Expires in ' +
-            fmtMMSS(remainingSeconds()) + ' if this tab goes idle.';
+        return 'Editing lock — renews while you work. Released in ' +
+            fmtMMSS(remainingSeconds()) + ' if you stay inactive.';
     }
 
     function setupLeaseTooltip() {

@@ -1,10 +1,11 @@
 # OntoBricks — Release Notes V0.6.0
 
-**Release date:** 2026-06-27 (updated 2026-07-01)
+**Release date:** 2026-06-27 (updated 2026-07-02)
 **Type:** Major feature release
-**Test status:** 3131 passed, 17 skipped (unit tier). 59 pre-existing full-suite
-async-endpoint ordering failures (`Runner.run() cannot be called from a running
-event loop`) all pass in isolation — no regressions.
+**Test status:** 2967 passed, 275 skipped, 5 deselected (scenario), 0 failed
+(`uv run pytest -q -m "not scenario"`). The former full-suite async-endpoint
+ordering failures are gone: the nightly Playwright e2e browser suite now
+auto-skips in routine runs, so it no longer poisons the in-process event loop.
 
 ---
 
@@ -37,9 +38,21 @@ and a **deploy-script dependency preflight**.
 The 2026-07-01 update adds an **Ontology & Mapping Audit Trail** — a fine-grained,
 buffered-then-flushed record of every design change (who / what / when), surfaced as a
 third stream in the Domain audit-trail timeline, with AI-assistant edits tagged. It also
-**simplifies the Domain Edit-Lock to a release-based model** (no heartbeat / TTL): a DRAFT
-version stays locked until the editor explicitly **Closes** the domain (new Close button
-beside a renamed **Save** button) or an admin takes over.
+reworks the Domain Edit-Lock (release-based, then leased — see below), ships an admin
+**Settings → Locks** panel (registry-wide lock overview + force-unlock), a
+**close-before-open** switch so you never hold two DRAFT locks, and a `make
+scenario-campaign` entrypoint for the live end-to-end journey suites.
+
+The 2026-07-02 update gives the Domain Edit-Lock a **renew-only lease** so abandoned
+locks (crashed browser / closed tab) **auto-expire** instead of needing an admin
+force-unlock. The holder's browser keeps the lease alive with a background renew ping;
+the lock is *never* released on page unload (multi-page navigation can't steal it), and
+it only lapses after a full TTL with no renew — at which point the next opener silently
+reclaims it. TTL is configurable via `ONTOBRICKS_EDIT_LOCK_TTL_S` (default 600 s; `0`
+disables → prior hold-until-close). The navbar domain badge grows a **hover countdown
+tooltip** of the remaining lease, and a lost lease flips the page to read-only with a
+"session expired" banner. The edit-lock service also moved into a dedicated
+`back/objects/registry/lockmgt` subpackage.
 
 No breaking changes. All v0.5.x features are fully intact.
 
@@ -143,23 +156,38 @@ All pages using the shared sidebar nav show the connected user's email and role 
 (Admin in red, domain role in blue when it differs) pinned to the sidebar footer. The
 redundant role pill in the top-right navbar is hidden.
 
-### 10. Domain Edit-Lock (release-based single-editor + Close button)
+### 10. Domain Edit-Lock (renew-only lease single-editor + Close button)
 
 Only one browser may **edit** a given DRAFT `(domain, version)` at a time. The first
 opener acquires the lock and edits; every later opener lands **read-only** with a banner
 naming the current editor. The lock lives in Lakebase (multi-replica safe).
 
-The concurrency model is **release-based, with no timeouts** (updated 2026-07-01): the
-lock is held until the editor **explicitly closes the domain** (the new **Close** button),
-an app-admin **takes over**, or the version leaves DRAFT. There is deliberately no
-heartbeat / TTL / stale-expiry — a genuinely stuck lock (e.g. a crashed browser) is
-recovered by admin take-over rather than a timeout. This removes the fuzzy ownership and
-the release-then-reacquire churn that a heartbeat model caused in a multi-page app (where
-every navigation is a full page unload).
+The concurrency model is a **renew-only lease** (updated 2026-07-02). Once acquired, the
+holder's browser keeps the lease alive with a background renew ping (~TTL/3, and on tab
+re-focus); the lock is **never** released on page unload, so in a multi-page app — where
+every navigation is a full unload — nothing can steal it mid-session. A lease only lapses
+when **no renew arrives for a full TTL**, at which point the next opener silently reclaims
+the stale lease. TTL is configurable via `ONTOBRICKS_EDIT_LOCK_TTL_S` (seconds, default
+`600`; `0` disables the lease → the prior "held until explicit Close / take-over" model).
+The lease clock reuses the long-dormant `heartbeat_at` column, so **no migration** is
+required. This keeps ownership crisp (no release-then-reacquire churn) while ensuring a
+genuinely abandoned lock (crashed browser, closed tab) frees itself instead of needing an
+admin.
 
 - **Auto-acquire on load** — `POST /domain/load-from-uc` acquires the lock for a loaded
-  DRAFT version (releasing any lock the session held on the previously loaded version)
-  and returns a `lock` block for an immediate toast.
+  DRAFT version and returns a `lock` block for an immediate toast. Opening a *different*
+  domain closes the previous one first (releases its lock **before** the new one loads,
+  so you never hold two DRAFT locks); a same-domain version switch releases the old
+  version's lock after the new one loads.
+- **Background renew + expiry UX** — while editing, `edit-lock.js` pings
+  `POST /domain/edit-lock/renew` on a timer. If a renew reports the lease was lost
+  (`renewed === false`), the page flips to read-only and shows a **"your editing session
+  expired — read-only, saving disabled"** banner with a **Reload** button; transient
+  network blips are ignored (the next tick retries).
+- **Lease countdown tooltip** — the navbar domain badge (`#currentDomainName`) shows a
+  hover tooltip with a **live `M:SS` countdown** of the remaining lease — only while this
+  browser is the editor and a lease is configured. Frontend-only, reusing the Bootstrap
+  `Tooltip`.
 - **Explicit close** — the L2 subnav **Save** button (renamed from *Save Domain*) now sits
   beside a **Close** button. Close prompts *"Save before closing?"* (Save & Close / Close
   without saving / Cancel), then `POST /domain/close` releases the lock and resets the
@@ -173,17 +201,26 @@ every navigation is a full page unload).
 - **Admin take-over** — an app-admin viewing a locked version gets a **Take over editing**
   button (`POST /domain/edit-lock/acquire` with `force`); the evicted editor is read-only
   on its next page load.
+- **Admin Settings → Locks panel** — a registry-wide overview of every active edit-lock
+  (domain, version, lifecycle status, holder, acquired time, `is_stale`) with a
+  **force-unlock** action (`GET /settings/locks`, `POST /settings/locks/release`;
+  admin-gated).
 - **Authoritative server enforcement** — `PermissionMiddleware` blocks a non-holder's
-  mutating request on a DRAFT version with a 403 ("being edited by …"); admins are *not*
-  auto-exempt (they must take over first). Defence-in-depth re-check in
+  mutating request on a DRAFT version with a 403 ("being edited by …"); a **stale** lease
+  is treated as *not blocking*, so an abandoned lock never locks out a new editor. Admins
+  are *not* auto-exempt (they must take over first). Defence-in-depth re-check in
   `Domain.save_domain_to_uc`.
 - **UI re-uses the read-only gating** — a new `body.read-only-locked` class is folded into
   the existing read-only CSS selector group, so every write surface locks down with no
   per-control changes; `edit-lock.js` renders the read-only banner.
 - **Lakebase schema** — table `domain_edit_locks` (keyed by `(domain_id, version)`,
-  `ON DELETE CASCADE`), created by `make bootstrap-lakebase` and lazily self-healed by the
-  store (`_ensure_domain_edit_locks_table`). The legacy `heartbeat_at` column is retained
-  but no longer read, so no migration is required for the release-based model.
+  `ON DELETE CASCADE`), provisioned as schema owner by `bootstrap-lakebase-perms.sh` and
+  lazily self-healed by the store (`_ensure_domain_edit_locks_table`). `heartbeat_at` is
+  the lease clock; `acquire_edit_lock`'s `ON CONFLICT` reclaims a stale lease via
+  `make_interval`. No migration required.
+- **Code organisation** — the edit-lock service lives in the
+  `back/objects/registry/lockmgt` subpackage (`from back.objects.registry.lockmgt import
+  EditLockService`); persistence stays on `LakebaseRegistryStore`.
 
 ### 11. In-app Registry Permission Grants (no `psql` required)
 
@@ -318,10 +355,15 @@ safe to re-run. Every table is also lazily self-healed by the app on first use
 (`_ensure_collab_tables`, `_ensure_graph_analytics_table`, `_ensure_change_events_table`),
 so running the script is optional if you prefer the in-app path.
 
-The 2026-06-30 `domain_edit_locks` table requires **no manual migration**: it is created by
-`make bootstrap-lakebase` and lazily self-healed on first use by
-`_ensure_domain_edit_locks_table`. The in-app grant flow (Initialize / Repair permissions)
-covers its grants automatically.
+The `domain_edit_locks` table is now provisioned **as schema owner** by
+`scripts/bootstrap-lakebase-perms.sh` (run by `make deploy`) and is also listed in the
+consolidated `upgrade_lakebase_0.5_To_0.6.sql`. Owner-provisioning is required because the
+app service principal lacks the `REFERENCES` privilege the table's FK needs, so the app's
+lazy `_ensure_domain_edit_locks_table` self-heal cannot create it on its own. The in-app
+grant flow (Initialize / Repair permissions) covers its DML grants automatically. The
+2026-07-02 **renew-only lease** needs **no migration** — it reuses the existing
+`heartbeat_at` column as the lease clock — and is tuned purely via the
+`ONTOBRICKS_EDIT_LOCK_TTL_S` environment variable (default 600 s).
 
 No other schema changes. No data migrations required.
 
@@ -349,10 +391,14 @@ No other schema changes. No data migrations required.
 | Designer overlap fix | `ontology-map.js`, `mapping-design.js`, `ontoviz.js` | Fix |
 | Makefile test isolation | `Makefile` | Infrastructure |
 | Nightly e2e auto-skip in routine runs | `tests/e2e/conftest.py`, `.cursor/08-testing-and-deployment.mdc` | Infrastructure |
-| Domain edit-lock | `registry/EditLockService.py`, `registry/store/lakebase/store.py`, `registry/store/lakebase/schema.sql`, `api/routers/internal/domain.py`, `api/routers/internal/home.py`, `src/shared/fastapi/main.py`, `objects/domain/Domain.py`, `front/static/global/js/edit-lock.js`, `permissions.css`, `permissions.js`, `base.html` | New feature |
-| Release-based edit-lock + Close button | `registry/EditLockService.py`, `registry/store/lakebase/store.py`, `registry/store/lakebase/schema.sql`, `api/routers/internal/domain.py`, `src/shared/fastapi/main.py`, `objects/domain/Domain.py`, `front/static/global/js/edit-lock.js`, `front/static/global/js/navbar.js`, `front/static/global/js/base-ui-handlers.js`, `front/static/global/css/main.css`, `front/config/menu_config.json`, `base.html` | Enhancement |
+| Domain edit-lock | `registry/lockmgt/EditLockService.py`, `registry/store/lakebase/store.py`, `registry/store/lakebase/schema.sql`, `api/routers/internal/domain.py`, `api/routers/internal/home.py`, `src/shared/fastapi/main.py`, `objects/domain/Domain.py`, `front/static/global/js/edit-lock.js`, `permissions.css`, `permissions.js`, `base.html` | New feature |
+| Release-based edit-lock + Close/Switch button | `registry/lockmgt/EditLockService.py`, `registry/store/lakebase/store.py`, `api/routers/internal/domain.py`, `src/shared/fastapi/main.py`, `objects/domain/Domain.py`, `front/static/global/js/edit-lock.js`, `navbar.js`, `base-ui-handlers.js`, `main.css`, `menu_config.json`, `base.html` | Enhancement |
+| Renew-only edit-lock lease + countdown tooltip | `registry/lockmgt/EditLockService.py`, `registry/store/lakebase/store.py`, `api/routers/internal/domain.py`, `front/static/global/js/edit-lock.js` | Enhancement |
+| Admin Settings › Locks panel | `registry/lockmgt/EditLockService.py`, `registry/store/lakebase/store.py`, `api/routers/internal/settings.py`, `partials/settings/_settings_locks.html`, `config/js/settings-locks.js`, `menu_config.json`, `settings.html` | New feature |
+| Edit-lock service → `lockmgt` subpackage | `registry/lockmgt/__init__.py`, `registry/lockmgt/EditLockService.py` (moved), import sites (`domain.py`, `settings.py`, `home.py`, `main.py`), `docs/sphinx/api/app.objects.registry.rst` | Refactor |
 | In-app registry grants | `back/core/databricks/lakebase_grants.py`, `registry/store/lakebase/store.py`, `objects/domain/SettingsService.py`, `api/routers/internal/settings.py`, `partials/registry/_registry_configuration.html`, `registry/js/registry.js`, `graphdb/lakebase/provisioner.py` | New feature |
-| Deploy dependency preflight | `scripts/deploy.sh` | Enhancement |
+| Live scenario campaign | `Makefile`, `tests/e2e/scenarios/_harness.py`, `conftest.py`, `README.md`, `test_scenario_0{1,2,3}_*.py`, `test_scenario_validation.py`, `pyproject.toml` | Infrastructure |
+| Deploy dependency preflight + `uv.lock` public-CDN re-pin | `scripts/deploy.sh`, `uv.lock` | Enhancement / Fix |
 | Version | `pyproject.toml` | Bumped to `0.6.0` |
 
 ---

@@ -810,8 +810,10 @@ are also two manual paths:
   without opening that domain first (a confirmation dialog names the domain, version, and
   holder).
 
-> The lease TTL is configurable via the `ONTOBRICKS_EDIT_LOCK_TTL_S` environment variable
-> (seconds; default `600`). Set it to `0` to disable auto-expiry entirely and require an
+> The lease TTL is configurable from **Settings → Global → Edit Lock Lease (minutes)**
+> (admin-only; default 10 min). It can also be set via the `ONTOBRICKS_EDIT_LOCK_TTL_S`
+> environment variable (seconds; default `600`) — the Settings value takes precedence over
+> the env var when set. Set either to `0` to disable auto-expiry entirely and require an
 > explicit Close / admin take-over, as in earlier releases.
 
 A version also releases its lock automatically when it leaves DRAFT (submitted for review /

@@ -10,16 +10,20 @@ The lock is held until the holder explicitly *closes* the domain
 held lock (``force``), the version leaves DRAFT (:meth:`force_release`), or —
 when a lease TTL is configured — its lease lapses.
 
-**Lease (avoids permanent locks).** When ``ONTOBRICKS_EDIT_LOCK_TTL_S`` is a
-positive number of seconds (default 600 = 10 min; ``0`` disables the lease and
-restores hold-until-close behaviour) the lock carries a lease clock
+**Lease (avoids permanent locks).** The lease TTL is resolved by
+:meth:`EditLockService._ttl_seconds` in priority order: the admin-set
+**Settings › Global** value (``edit_lock_ttl_s`` in the global-config blob),
+then the ``ONTOBRICKS_EDIT_LOCK_TTL_S`` env var, then the built-in default
+(600 = 10 min). When it is a positive number of seconds (``0`` disables the
+lease and restores hold-until-close behaviour) the lock carries a lease clock
 (``heartbeat_at``). The holder's browser keeps it alive by renewing
-(:meth:`renew` + the per-page non-forcing acquire); if renews stop — a crashed
-browser or a closed tab that never hit "Close" — the lease goes stale after the
-TTL and the next opener silently reclaims it, so no admin intervention is
-needed. Crucially the lock is **never released on unload**, so ordinary
-multi-page navigation cannot free it mid-session; only the absence of a renew
-for a full TTL can.
+(:meth:`renew` + the per-page non-forcing acquire) **while the editor is
+active**; if renews stop — a crashed browser, a closed tab that never hit
+"Close", or an editor who has gone idle (the client stops renewing and warns
+them before the lease lapses) — the lease goes stale after the TTL and the next
+opener silently reclaims it, so no admin intervention is needed. Crucially the
+lock is **never released on unload**, so ordinary multi-page navigation cannot
+free it mid-session; only the absence of a renew for a full TTL can.
 
 Only DRAFT versions are lockable — IN-REVIEW / PUBLISHED versions are
 already read-only for everyone via the lifecycle gate.
@@ -84,12 +88,13 @@ class EditLockService:
         """
         folder, version, lifecycle = EditLockService._loaded(session_mgr)
         is_admin = EditLockService._is_admin(request)
+        ttl_s = EditLockService._ttl_seconds(session_mgr, settings)
         if not folder or not version or lifecycle != STATUS_DRAFT:
-            return EditLockService._none(is_admin)
+            return EditLockService._none(is_admin, ttl_s)
 
         store = EditLockService._store(session_mgr, settings)
         if store is None:
-            return EditLockService._none(is_admin)
+            return EditLockService._none(is_admin, ttl_s)
 
         email, name, sess = EditLockService._identity(request)
         res = store.acquire_edit_lock(
@@ -99,9 +104,14 @@ class EditLockService:
             holder_name=name,
             holder_session=sess,
             force=False,
-            ttl_seconds=EditLockService._ttl_seconds(),
+            ttl_seconds=ttl_s,
         )
-        return EditLockService._shape(res, is_admin=is_admin)
+        out = EditLockService._shape(res, is_admin=is_admin, ttl_s=ttl_s)
+        # Expose the loaded (folder, version) so the client can scope its
+        # "editing session expired" sticky state to this exact version.
+        out["folder"] = folder
+        out["version"] = version
+        return out
 
     @staticmethod
     def acquire(
@@ -114,14 +124,15 @@ class EditLockService:
         """Explicitly (re)acquire the lock. ``force`` is admin-only take-over."""
         folder, version, lifecycle = EditLockService._loaded(session_mgr)
         is_admin = EditLockService._is_admin(request)
+        ttl_s = EditLockService._ttl_seconds(session_mgr, settings)
         if not folder or not version or lifecycle != STATUS_DRAFT:
-            return EditLockService._none(is_admin)
+            return EditLockService._none(is_admin, ttl_s)
         # Defence in depth: force is only honoured for admins (the endpoint
         # also gates it, but never trust a single check for take-over).
         force = bool(force) and is_admin
         store = EditLockService._store(session_mgr, settings)
         if store is None:
-            return EditLockService._none(is_admin)
+            return EditLockService._none(is_admin, ttl_s)
         email, name, sess = EditLockService._identity(request)
         res = store.acquire_edit_lock(
             folder,
@@ -130,9 +141,9 @@ class EditLockService:
             holder_name=name,
             holder_session=sess,
             force=force,
-            ttl_seconds=EditLockService._ttl_seconds(),
+            ttl_seconds=ttl_s,
         )
-        return EditLockService._shape(res, is_admin=is_admin)
+        return EditLockService._shape(res, is_admin=is_admin, ttl_s=ttl_s)
 
     @staticmethod
     def renew(
@@ -268,7 +279,7 @@ class EditLockService:
                 holder_name=name,
                 holder_session=sess,
                 force=False,
-                ttl_seconds=EditLockService._ttl_seconds(),
+                ttl_seconds=EditLockService._ttl_seconds(session_mgr, settings),
             )
             return bool(res.get("acquired"))
         except Exception as exc:  # noqa: BLE001
@@ -308,6 +319,7 @@ class EditLockService:
                 )
             if not folder or not version or lifecycle != STATUS_DRAFT:
                 return {"mode": MODE_NONE}
+            ttl_s = EditLockService._ttl_seconds(session_mgr, settings)
             res = store.acquire_edit_lock(
                 folder,
                 version,
@@ -315,10 +327,10 @@ class EditLockService:
                 holder_name=name,
                 holder_session=sess,
                 force=False,
-                ttl_seconds=EditLockService._ttl_seconds(),
+                ttl_seconds=ttl_s,
             )
             shaped = EditLockService._shape(
-                res, is_admin=EditLockService._is_admin(request)
+                res, is_admin=EditLockService._is_admin(request), ttl_s=ttl_s
             )
             return {
                 "mode": shaped["mode"],
@@ -360,7 +372,9 @@ class EditLockService:
             if store is None:
                 return ""
             lock = store.get_edit_lock(
-                folder, version, ttl_seconds=EditLockService._ttl_seconds()
+                folder,
+                version,
+                ttl_seconds=EditLockService._ttl_seconds(session_mgr, settings),
             )
             if not lock or lock.get("is_stale"):
                 return ""
@@ -404,7 +418,7 @@ class EditLockService:
             return {"success": True, "locks": []}
         try:
             locks = store.list_all_edit_locks(
-                ttl_seconds=EditLockService._ttl_seconds()
+                ttl_seconds=EditLockService._ttl_seconds(session_mgr, settings)
             )
         except Exception as exc:  # noqa: BLE001
             logger.debug("list_all edit-locks failed: %s", exc)
@@ -490,12 +504,32 @@ class EditLockService:
         return (getattr(request.state, "user_role", "") or "") == ROLE_ADMIN
 
     @staticmethod
-    def _ttl_seconds() -> int:
-        """Lease TTL in seconds from ``ONTOBRICKS_EDIT_LOCK_TTL_S``.
+    def _ttl_seconds(session_mgr=None, settings=None) -> int:
+        """Lease TTL in seconds. ``0`` disables the lease (hold until close).
 
-        Falls back to :data:`_DEFAULT_EDIT_LOCK_TTL_S` when unset or invalid;
-        ``0`` disables the lease (lock held until explicit close / take-over).
+        Resolution order (highest priority first):
+
+        1. **Settings › Global** — the admin-set ``edit_lock_ttl_s`` in the
+           instance-wide :class:`GlobalConfigService` blob (only consulted when
+           *session_mgr* and *settings* are supplied).
+        2. ``ONTOBRICKS_EDIT_LOCK_TTL_S`` env var — deployment default.
+        3. :data:`_DEFAULT_EDIT_LOCK_TTL_S` (600s = 10 min).
         """
+        if session_mgr is not None and settings is not None:
+            try:
+                from back.objects.session import global_config_service
+
+                registry_cfg = RegistryCfg.from_session(
+                    session_mgr, settings
+                ).as_dict()
+                configured = global_config_service.get_edit_lock_ttl_s(
+                    "", "", registry_cfg
+                )
+                if configured is not None:
+                    return configured
+            except Exception as exc:  # noqa: BLE001 -- fall back to env/default
+                logger.debug("edit-lock TTL global-config lookup skipped: %s", exc)
+
         raw = (os.environ.get("ONTOBRICKS_EDIT_LOCK_TTL_S") or "").strip()
         if not raw:
             return _DEFAULT_EDIT_LOCK_TTL_S
@@ -505,7 +539,7 @@ class EditLockService:
             return _DEFAULT_EDIT_LOCK_TTL_S
 
     @staticmethod
-    def _none(is_admin: bool) -> Dict[str, Any]:
+    def _none(is_admin: bool, ttl_s: Optional[int] = None) -> Dict[str, Any]:
         return {
             "success": True,
             "mode": MODE_NONE,
@@ -515,11 +549,15 @@ class EditLockService:
             "is_self": False,
             "is_admin": is_admin,
             "can_take_over": False,
-            "lease_ttl_s": EditLockService._ttl_seconds(),
+            "lease_ttl_s": (
+                ttl_s if ttl_s is not None else EditLockService._ttl_seconds()
+            ),
         }
 
     @staticmethod
-    def _shape(res: Dict[str, Any], *, is_admin: bool) -> Dict[str, Any]:
+    def _shape(
+        res: Dict[str, Any], *, is_admin: bool, ttl_s: Optional[int] = None
+    ) -> Dict[str, Any]:
         """Map a store ``acquire_edit_lock`` result to the API lock block."""
         holder_email = res.get("holder_email") or ""
         is_self = bool(res.get("is_self") or res.get("acquired"))
@@ -548,5 +586,7 @@ class EditLockService:
             # only an admin is allowed to.
             "can_take_over": bool(is_admin and mode == MODE_VIEW),
             # Renew cadence hint for the client (0 → lease disabled, no ping).
-            "lease_ttl_s": EditLockService._ttl_seconds(),
+            "lease_ttl_s": (
+                ttl_s if ttl_s is not None else EditLockService._ttl_seconds()
+            ),
         }

@@ -618,6 +618,32 @@ async def save_registry_cache_ttl(
     )
 
 
+@router.get("/edit-lock-ttl")
+async def get_edit_lock_ttl(
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Get the effective DRAFT edit-lock lease TTL in seconds (0 = disabled)."""
+    return config_service.get_edit_lock_ttl_result(session_mgr, settings)
+
+
+@router.post("/save-edit-lock-ttl")
+async def save_edit_lock_ttl(
+    request: Request,
+    session_mgr: SessionManager = Depends(get_session_manager),
+    settings: Settings = Depends(get_settings),
+):
+    """Save the DRAFT edit-lock lease TTL in seconds (admin only, global; 0 disables)."""
+    data = await request.json()
+    ttl_s = int(data.get("edit_lock_ttl_s", 600))
+    email, _display_name, user_token, _user_role, _user_domain_role = (
+        _settings_request_identity(request)
+    )
+    return config_service.save_edit_lock_ttl_result(
+        ttl_s, email, user_token, session_mgr, settings
+    )
+
+
 # ===========================================
 # Permissions Management
 # ===========================================

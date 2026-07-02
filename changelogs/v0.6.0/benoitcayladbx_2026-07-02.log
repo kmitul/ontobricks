@@ -262,3 +262,181 @@ elsewhere (e.g. `permissions.js`).
 - Frontend-only (no Python touched). `node --check` clean; JS lint clean.
 - `uv run pytest -q -m "not scenario"` → **2967 passed, 275 skipped, 5
   deselected** (unchanged; re-run for the post-change routine).
+
+
+## Docs — fold the renew-only lease + lockmgt reorg into the release notes
+
+### Context
+
+After committing + deploying the renew-only edit-lock lease, the release notes
+and one README bullet still described the superseded **release-based (no TTL)**
+model. Refreshed `releases/ReleaseNotes_V0.6.0.md` to the shipped state and
+fixed the stale README wording (`docs/user-guide.md`, `architecture.md`,
+`features.md` were already updated in the feature commit). Docs-only.
+
+### Changes
+
+1. `releases/ReleaseNotes_V0.6.0.md`
+   - Header: bumped "updated" date to 2026-07-02; refreshed the test-status
+     line to the current `-m "not scenario"` result (2967 passed / 275 skipped
+     / 5 deselected, 0 failed) and noted the nightly-e2e auto-skip removed the
+     old event-loop pollution failures.
+   - Summary: reworked the 2026-07-01 paragraph (Settings › Locks,
+     close-before-open, scenario campaign) and added a 2026-07-02 paragraph for
+     the renew-only lease (auto-expiry, background renew, `ONTOBRICKS_EDIT_LOCK_TTL_S`,
+     countdown tooltip, expired banner, `lockmgt` subpackage).
+   - §10 rewritten from "release-based, no timeout" to the renew-only lease:
+     TTL/`heartbeat_at` reclaim, background renew + expiry UX, countdown tooltip,
+     admin Settings › Locks panel, stale-lease-is-free in `PermissionMiddleware`,
+     `lockmgt` code-organisation note.
+   - Upgrade Notes: corrected the `domain_edit_locks` note (owner-provisioned by
+     `bootstrap-lakebase-perms.sh` — the app SP lacks `REFERENCES` for the lazy
+     self-heal) and noted the lease needs no migration (reuses `heartbeat_at`).
+   - Changes-summary table: repointed `EditLockService.py` →
+     `registry/lockmgt/EditLockService.py`; added rows for the renew-only lease
+     + tooltip, the admin Locks panel, the `lockmgt` refactor, the live scenario
+     campaign, and the `uv.lock` public-CDN re-pin.
+2. `README.md`
+   - Single-editor concurrency bullet: "release-based (no timeout)" → renew-only
+     lease (background renew, countdown tooltip, `ONTOBRICKS_EDIT_LOCK_TTL_S`
+     auto-release), and noted the Settings › Locks panel now shows staleness.
+
+### Modified files
+
+- `releases/ReleaseNotes_V0.6.0.md`
+- `README.md`
+
+### Test result
+
+- Docs-only (no code touched). `uv run pytest -q -m "not scenario"` →
+  **2967 passed, 275 skipped, 5 deselected, 0 failed** in ~27s.
+
+
+## Feature — configurable edit-lock lease TTL in Settings › Global
+
+### Context
+
+The DRAFT single-editor lease TTL was only settable via the
+`ONTOBRICKS_EDIT_LOCK_TTL_S` env var (default 600s = 10 min), which requires a
+redeploy to change. Requested: expose it as a runtime, admin-editable setting in
+**Settings › Global**, defaulting to 10 min. Reuses the existing global-config
+(`GlobalConfigService`) + `registry_cache_ttl` UI pattern. Precedence is now
+**Settings › Global** value → `ONTOBRICKS_EDIT_LOCK_TTL_S` env → built-in
+default (600s). `0` still disables the lease (hold-until-close).
+
+### Changes
+
+1. `src/back/objects/session/GlobalConfigService.py`
+   - Added `get_edit_lock_ttl_s(...)` (returns the stored seconds or `None` when
+     unset — deliberately **absent from `_empty()`** so an unconfigured / failed
+     load yields the sentinel and the caller falls through to env/default) and
+     `set_edit_lock_ttl_s(...)` (persists `edit_lock_ttl_s`, clamps `>= 0`).
+2. `src/back/objects/registry/lockmgt/EditLockService.py`
+   - `_ttl_seconds(session_mgr=None, settings=None)` now consults
+     `GlobalConfigService.get_edit_lock_ttl_s` first (when session context is
+     supplied), then env, then default. Global-config lookup is wrapped in
+     try/except → falls back on any error.
+   - Threaded the resolved `ttl_s` through `status` / `acquire` /
+     `on_domain_loaded` / `reacquire` / `blocking_holder` / `list_all` and into
+     `_shape` / `_none` (new optional `ttl_s` param) so the store calls and the
+     client `lease_ttl_s` hint use one resolved value. Refreshed the module
+     docstring's lease paragraph.
+3. `src/back/objects/domain/SettingsService.py`
+   - Added `get_edit_lock_ttl_result` (returns the effective TTL via
+     `EditLockService._ttl_seconds`) and `save_edit_lock_ttl_result`
+     (admin-gated, persists globally).
+4. `src/api/routers/internal/settings.py`
+   - Added `GET /settings/edit-lock-ttl` and `POST /settings/save-edit-lock-ttl`
+     (mirrors the registry-cache-TTL pair).
+5. `src/front/templates/settings.html`
+   - New **Edit Lock Lease (minutes)** field in the Global section (admin-only
+     badge, `min=0`, default 10) with help text explaining auto-renew + the
+     `0 = disable` semantics.
+6. `src/front/static/config/js/settings.js`
+   - `loadEditLockTtl()` (seconds → minutes on load) wired into init; a save
+     block (minutes → seconds, `mins * 60`) added to the global Save handler.
+7. `src/front/templates/partials/settings/_settings_locks.html`
+   - Replaced the stale "There is no timeout" copy with the lease description
+     pointing at the new Settings › Global control.
+
+### Tests
+
+- `tests/units/registry/test_edit_lock_service.py`: added `_ttl_seconds`
+  resolution tests — global-config wins over env, env fallback when unset, `0`
+  from global disables, and built-in default when no session context.
+
+### Modified files
+
+- `src/back/objects/session/GlobalConfigService.py`
+- `src/back/objects/registry/lockmgt/EditLockService.py`
+- `src/back/objects/domain/SettingsService.py`
+- `src/api/routers/internal/settings.py`
+- `src/front/templates/settings.html`
+- `src/front/static/config/js/settings.js`
+- `src/front/templates/partials/settings/_settings_locks.html`
+- `tests/units/registry/test_edit_lock_service.py`
+
+### Test result
+
+- `uv run pytest -q -m "not scenario"` → **2971 passed, 275 skipped, 5
+  deselected** in ~22s. Lint clean on all changed files. No schema migration
+  (setting lives in the existing global-config blob).
+
+
+## Feature — activity-based lease renew + "about to be disconnected" warning modal
+
+### Context
+
+The DRAFT edit lease auto-renewed as long as the tab stayed **open**, regardless
+of whether the user was actually doing anything: the client fired a blind
+`setInterval` renew every ~TTL/3. So an editor who walked away (but left the tab
+open) held the lock indefinitely and kept every other user read-only — the lease
+only ever lapsed on a crashed/closed tab, never on a genuinely idle-but-open one.
+Requested: tie renewal to real **activity** so an idle editor's lease lapses and
+the next opener can reclaim it, and — before that happens — pop a **warning**
+telling the user they are about to be disconnected from the project, with a
+chance to stay. Frontend-only (plus doc/help-text touch-ups); no API or store
+change.
+
+### Changes
+
+1. `src/front/static/global/js/edit-lock.js`
+   - Renewal is now **activity-gated**: `mousemove` / `mousedown` / `keydown` /
+     `wheel` / `touchstart` / `scroll` (capture phase) and tab re-focus stamp
+     `lastActivityAt`. The keep-alive tick (`onRenewTick`, every ~TTL/3) only
+     pings `/domain/edit-lock/renew` when the user has been active within the
+     last renew interval — otherwise the lease ages and lapses for the next
+     opener (matching the server-side reclaim).
+   - New 1s **idle watcher** (`onIdleTick`) drives a warning **modal** built on
+     the fly (`buildIdleModal`, static backdrop, Bootstrap `Modal` with a
+     `notify()` fallback): when the remaining lease drops below `warnLeadMs`
+     (≤60s, ≥10s, ≤TTL/3) it shows *"Still editing? …you will be disconnected
+     from the project (read-only)"* with a live `M:SS` countdown and a **Keep
+     editing** button. Acting (or clicking Keep editing) dismisses it and renews
+     immediately; ignoring it until the countdown hits 0 flips to read-only and
+     shows the existing "session expired" banner.
+   - `remainingSeconds()` now derives from a shared `leaseRemainingMs()`; the
+     navbar-badge tooltip copy updated to "renews while you work / released if
+     you stay inactive". `stopRenew()` tears down the new timers, activity
+     listeners, and the modal.
+2. `src/back/objects/registry/lockmgt/EditLockService.py`
+   - Module docstring lease paragraph updated: renews **while the editor is
+     active**, and an idle editor (client stops renewing, warns first) is now an
+     explicit cause of lease lapse alongside crash / closed tab.
+3. `src/front/templates/partials/settings/_settings_locks.html`
+   - Admin Locks help text notes a lock left by an **inactive** editor (warned
+     first) is auto-reclaimed on lease lapse, alongside crashed/closed tabs.
+
+### Modified files
+
+- `src/front/static/global/js/edit-lock.js`
+- `src/back/objects/registry/lockmgt/EditLockService.py`
+- `src/front/templates/partials/settings/_settings_locks.html`
+
+### Test result
+
+- Frontend-behaviour change (no test-covered Python logic touched — only a
+  docstring). `node --check src/front/static/global/js/edit-lock.js` → clean; JS
+  lint clean.
+- `uv run pytest -q -m "not scenario"` → **2971 passed, 275 skipped, 5
+  deselected** in ~27s (unchanged; re-run for the post-change routine).

@@ -10,9 +10,13 @@
     <div>
         DRAFT versions use a <strong>single-editor lock</strong>: only one user
         may edit a given <code>(domain, version)</code> at a time; others land
-        read-only until the holder <strong>closes</strong> the domain. There is
-        no timeout — a lock left by a crashed browser is cleared here by
-        <strong>force-unlock</strong>. Unlocking a version someone is actively
+        read-only until the holder <strong>closes</strong> the domain. A lock
+        left by a crashed / closed tab &mdash; or by an editor who goes
+        <strong>inactive</strong> (they are warned first) &mdash; is
+        auto-reclaimed once its <strong>lease</strong> lapses (configurable in
+        <strong>Settings &rarr; Global &rarr; Edit Lock Lease</strong>; set to
+        <code>0</code> to disable the lease). You can also clear one here with
+        <strong>force-unlock</strong> — unlocking a version someone is actively
         editing will drop their edit rights on their next action.
     </div>
 </div>

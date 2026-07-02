@@ -221,6 +221,57 @@ def test_status_exposes_lease_ttl():
 
 
 # ----------------------------------------------------------------------
+# _ttl_seconds — global-config > env > default resolution
+# ----------------------------------------------------------------------
+
+
+def _patch_global_ttl(configured):
+    """Patch the global-config lookup used by ``_ttl_seconds``.
+
+    ``configured`` is the value ``get_edit_lock_ttl_s`` returns (``None``
+    meaning "not set in Settings › Global").
+    """
+    gcs = MagicMock()
+    gcs.get_edit_lock_ttl_s.return_value = configured
+    reg_cfg = MagicMock()
+    reg_cfg.as_dict.return_value = {"catalog": "c", "schema": "s"}
+    return (
+        patch("back.objects.session.global_config_service", gcs),
+        patch.object(_mod.RegistryCfg, "from_session", MagicMock(return_value=reg_cfg)),
+    )
+
+
+def test_ttl_seconds_global_config_wins_over_env():
+    g1, g2 = _patch_global_ttl(1800)
+    with g1, g2, patch.dict(
+        _mod.os.environ, {"ONTOBRICKS_EDIT_LOCK_TTL_S": "300"}
+    ):
+        assert EditLockService._ttl_seconds(MagicMock(), MagicMock()) == 1800
+
+
+def test_ttl_seconds_falls_back_to_env_when_global_unset():
+    g1, g2 = _patch_global_ttl(None)
+    with g1, g2, patch.dict(
+        _mod.os.environ, {"ONTOBRICKS_EDIT_LOCK_TTL_S": "300"}
+    ):
+        assert EditLockService._ttl_seconds(MagicMock(), MagicMock()) == 300
+
+
+def test_ttl_seconds_zero_from_global_disables_lease():
+    g1, g2 = _patch_global_ttl(0)
+    with g1, g2, patch.dict(
+        _mod.os.environ, {"ONTOBRICKS_EDIT_LOCK_TTL_S": "600"}
+    ):
+        assert EditLockService._ttl_seconds(MagicMock(), MagicMock()) == 0
+
+
+def test_ttl_seconds_default_when_no_session_context():
+    with patch.dict(_mod.os.environ, {}, clear=False) as _env:
+        _mod.os.environ.pop("ONTOBRICKS_EDIT_LOCK_TTL_S", None)
+        assert EditLockService._ttl_seconds() == _mod._DEFAULT_EDIT_LOCK_TTL_S
+
+
+# ----------------------------------------------------------------------
 # release_prev / release_prev_on_switch — close-before-open plumbing
 # ----------------------------------------------------------------------
 

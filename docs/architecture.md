@@ -1349,8 +1349,9 @@ OntoBricks provides a stateless REST API at `/api/v1/` for external applications
 > closes the domain (`POST /domain/close` releases the lock then resets the
 > session), an admin **takes over** (`POST /domain/edit-lock/acquire` with
 > `force`), the version leaves DRAFT (`force_release`), or — when a lease TTL
-> is configured (`ONTOBRICKS_EDIT_LOCK_TTL_S`, seconds; default `600`, `0`
-> disables) — its lease lapses. The lease clock is the `heartbeat_at` column:
+> is configured (**Settings → Global → Edit Lock Lease**, or the
+> `ONTOBRICKS_EDIT_LOCK_TTL_S` env var; the Settings value wins, seconds,
+> default `600`, `0` disables) — its lease lapses. The lease clock is the `heartbeat_at` column:
 > `acquire_edit_lock`'s `ON CONFLICT` reclaims a lock only when the current
 > holder has not renewed within the TTL, and the holder keeps it alive via
 > `POST /domain/edit-lock/renew` (a client timer pinging every ~TTL/3) plus the
